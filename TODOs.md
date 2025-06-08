@@ -1,3 +1,0 @@
-- P0: fix cross-project goto definition
-- P1: currently the goto definition jumps to the start of the line instead of start of the name identifier
-- P2: name clash with stdlib methods e.g. String replaceAll will prefer local declaration which is wrong in context
