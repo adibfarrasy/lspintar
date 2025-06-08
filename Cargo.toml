@@ -1,0 +1,14 @@
+[package]
+name = "lspintar"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.98"
+dashmap = "6.1.0"
+env_logger = "0.11.8"
+log = "0.4.27"
+tokio = { version = "1.45.1", features = ["full"] }
+tower-lsp = "0.20.0"
+tree-sitter = "0.25.6"
+tree-sitter-groovy = { git = "https://github.com/adibfarrasy/tree-sitter-groovy" }
