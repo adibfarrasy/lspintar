@@ -1,7 +1,10 @@
-use std::path::{Path, PathBuf};
+use std::{
+    fs::read_to_string,
+    path::{Path, PathBuf},
+};
 
 use tower_lsp::lsp_types::Url;
-use tree_sitter::Parser;
+use tree_sitter::{Parser, Tree};
 
 pub fn path_to_file_uri(file_path: &PathBuf) -> Option<String> {
     let url = Url::from_file_path(file_path).ok()?;
@@ -53,4 +56,16 @@ pub fn detect_language_from_path(file_path: &PathBuf) -> Option<&'static str> {
         "kt" | "kts" => Some("kotlin"),
         _ => None,
     }
+}
+
+pub fn uri_to_tree(uri: &str) -> Option<Tree> {
+    let file_path = uri_to_path(uri)?;
+
+    let file_content = read_to_string(&file_path).ok()?;
+
+    let language = detect_language_from_path(&file_path)?;
+
+    let mut parser = create_parser_for_language(language)?;
+
+    parser.parse(&file_content, None)
 }

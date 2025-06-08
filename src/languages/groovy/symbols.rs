@@ -16,10 +16,3 @@ pub enum SymbolType {
     Parameter,
     LocalVariable,
 }
-
-#[derive(Debug)]
-pub struct SymbolInfo {
-    pub name: String,
-    pub symbol_type: SymbolType,
-    pub scope_path: Vec<String>,
-}

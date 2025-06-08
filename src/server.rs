@@ -43,31 +43,7 @@ impl LanguageServer for LspServer {
             .log_message(MessageType::INFO, "LSP server initialized")
             .await;
 
-        // let cache = self.dependency_cache.clone();
-        // let client = self.client.clone();
-
-        // tokio::spawn(async move {
-        //     let resolver = BuiltinResolver::new();
-        //
-        //     match resolver.initialize_builtins(&cache).await {
-        //         Ok(_) => {
-        //             client
-        //                 .log_message(
-        //                     MessageType::INFO,
-        //                     "Builtin types cache initialized successfully",
-        //                 )
-        //                 .await;
-        //         }
-        //         Err(e) => {
-        //             client
-        //                 .log_message(
-        //                     MessageType::WARNING,
-        //                     &format!("Failed to initialize builtin cache: {}", e),
-        //                 )
-        //                 .await;
-        //         }
-        //     }
-        // });
+        let _ = self.dependency_cache.index_workspace().await;
     }
 
     async fn shutdown(&self) -> Result<()> {
@@ -111,7 +87,6 @@ impl LanguageServer for LspServer {
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
         let uri = params.text_document.uri.to_string();
 
-        // Update document content
         let (content, version) = {
             let mut documents = self.documents.write().await;
             if let Some(doc) = documents.update_content(
@@ -125,7 +100,6 @@ impl LanguageServer for LspServer {
             }
         };
 
-        // Debounced diagnostic refresh
         self.diagnostics
             .entry(uri.clone())
             .or_insert_with(|| {
@@ -137,7 +111,6 @@ impl LanguageServer for LspServer {
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
         let uri = params.text_document.uri.to_string();
 
-        // Remove from document manager
         {
             let mut document = self.documents.write().await;
             document.remove(&uri);
@@ -148,7 +121,6 @@ impl LanguageServer for LspServer {
             .publish_diagnostics(params.text_document.uri, vec![], None)
             .await;
 
-        // Clean up language-specific state
         self.diagnostics.remove(&uri);
     }
 
@@ -237,18 +209,6 @@ impl LspServer {
             client,
             dependency_cache: Arc::new(DependencyCache::new()),
         }
-    }
-
-    // Helper: Get language support for document
-    async fn get_language_support(&self, uri: &str) -> Option<Arc<dyn LanguageSupport>> {
-        self.language_registry.detect_language(uri)
-    }
-
-    // Helper: Publish diagnostics
-    async fn publish_diagnostics(&self, uri: String, diagnostics: Vec<Diagnostic>) {
-        self.client
-            .publish_diagnostics(uri.parse().unwrap(), diagnostics, None)
-            .await;
     }
 
     // Optimization strategy: Call this only when build files change

@@ -16,7 +16,6 @@ use crate::{
 };
 
 pub fn find_in_workspace(
-    tree: &Tree,
     source: &str,
     file_uri: &str,
     usage_node: &Node,

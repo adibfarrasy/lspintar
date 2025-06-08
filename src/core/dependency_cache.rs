@@ -9,8 +9,8 @@ use super::utils::create_parser_for_language;
 pub struct DependencyCache {
     // Maps project root -> resolved classpath entries
     pub classpaths: Arc<DashMap<PathBuf, Vec<PathBuf>>>,
-    // Maps (project_root, symbol_name) -> file locations
-    pub symbol_index: Arc<DashMap<(PathBuf, String), Vec<PathBuf>>>,
+    // Maps (project_root, fully_qualified_name) -> file locations
+    pub symbol_index: Arc<DashMap<(PathBuf, String), PathBuf>>,
 
     // Maps builtin class name -> (source_file_path, parsed_tree, source_content)
     pub builtin_trees: Arc<DashMap<String, BuiltinTypeInfo>>,
@@ -278,5 +278,33 @@ impl DependencyCache {
             builtin_trees: Arc::new(DashMap::new()),
             builtin_packages: Arc::new(DashMap::new()),
         }
+    }
+
+    pub async fn index_workspace(&self) -> Result<()> {
+        // 1. Index classpath (read build.gradle, pom.xml, etc.)
+        self.index_classpaths().await?;
+
+        // 2. Index all source files in the project
+        self.index_project_symbols().await?;
+
+        // 3. Index builtin types (java.lang.*, groovy.lang.*)
+        self.index_builtin_types().await?;
+
+        Ok(())
+    }
+
+    async fn index_classpaths(&self) -> Result<()> {
+        // TODO: implement
+        Ok(())
+    }
+
+    async fn index_project_symbols(&self) -> Result<()> {
+        // TODO: implement
+        Ok(())
+    }
+
+    async fn index_builtin_types(&self) -> Result<()> {
+        // TODO: implement
+        Ok(())
     }
 }

@@ -16,7 +16,6 @@ use crate::{
 };
 
 pub fn find_builtin(
-    tree: &Tree,
     source: &str,
     file_uri: &str,
     usage_node: &Node,
