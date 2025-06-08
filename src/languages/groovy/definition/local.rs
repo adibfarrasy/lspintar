@@ -15,57 +15,6 @@ use crate::{
     languages::groovy::symbols::SymbolType,
 };
 
-pub fn find_identifier_at_position<'a>(
-    tree: &'a Tree,
-    source: &str,
-    position: Position,
-) -> Result<Node<'a>> {
-    let query_text = r#"
-    (identifier) @identifier
-    (type_identifier) @identifier
-    "#;
-    let query = Query::new(&tree.language(), query_text).context(format!(
-        "[find_identifier_at_position] failed to create a new query"
-    ))?;
-
-    let mut result: Result<Node> = Err(anyhow!(format!(
-        "[find_identifier_at_position] invalid data. position: {:#?}",
-        position
-    )));
-    let mut found = false;
-
-    let mut cursor = QueryCursor::new();
-    cursor
-        .matches(&query, tree.root_node(), source.as_bytes())
-        .for_each(|match_| {
-            if found {
-                return;
-            };
-
-            for capture in match_.captures.iter() {
-                let node = capture.node;
-                if node_contains_position(&node, position) {
-                    result = Ok(node);
-                    found = true;
-                    return;
-                }
-            }
-        });
-
-    result
-}
-
-fn node_contains_position(node: &Node, position: Position) -> bool {
-    let start = node.start_position();
-    let end = node.end_position();
-
-    let pos_line = position.line as usize;
-    let pos_char = position.character as usize;
-
-    (start.row < pos_line || (start.row == pos_line && start.column <= pos_char))
-        && (pos_line < end.row || (pos_line == end.row && pos_char <= end.column))
-}
-
 fn determine_symbol_type_from_context(
     tree: &Tree,
     node: &Node,
@@ -194,7 +143,7 @@ fn is_inside_package_declaration(node: &Node) -> bool {
     false
 }
 
-pub fn find_definition_location(
+pub fn find_definition_location_backup(
     tree: &Tree,
     source: &str,
     dependency_cache: Arc<DependencyCache>,
@@ -202,9 +151,7 @@ pub fn find_definition_location(
     usage_node: &Node,
 ) -> Result<Location> {
     // First search locally in current file
-    if let Some(local_location) =
-        search_local_definitions_for_location(tree, source, file_uri, usage_node)
-    {
+    if let Some(local_location) = find_local(tree, source, file_uri, usage_node) {
         return Ok(local_location);
     }
 
@@ -252,7 +199,7 @@ pub fn find_definition_location(
     Err(anyhow!("[find_definition_location] invalid data"))
 }
 
-fn search_local_definitions_for_location(
+pub fn find_local(
     tree: &Tree,
     source: &str,
     file_uri: &str,
