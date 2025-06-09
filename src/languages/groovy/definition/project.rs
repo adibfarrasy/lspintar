@@ -52,10 +52,7 @@ fn resolve_through_imports(
 ) -> Option<(PathBuf, String)> {
     let query_text = r#"
         (import_declaration
-          (fully_qualified_name) @import_name) 
-
-        (import_declaration
-          (wildcard_import) @import_name) 
+          (scoped_identifier) @import_name) 
     "#;
 
     let language = tree_sitter_groovy::language();
@@ -82,9 +79,8 @@ fn resolve_through_imports(
                         return;
                     }
 
-                    // Check for wildcard import - do actual classpath lookup
-                    if import_text.ends_with(".*") {
-                        todo!()
+                    if import_text.ends_with("*") {
+                        // TODO: handle wildcard import
                     }
                 };
             }

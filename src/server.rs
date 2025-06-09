@@ -1,5 +1,6 @@
 use anyhow::anyhow;
 use dashmap::DashMap;
+use log::debug;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -7,12 +8,11 @@ use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::LanguageServer;
 
-use crate::core::dependency_cache::BuiltinResolver;
 use crate::core::dependency_cache::DependencyCache;
 use crate::core::DiagnosticManager;
 use crate::core::Document;
 use crate::core::DocumentManager;
-use crate::languages::{LanguageRegistry, LanguageSupport};
+use crate::languages::LanguageRegistry;
 
 pub struct LspServer {
     documents: Arc<RwLock<DocumentManager>>,
@@ -43,7 +43,14 @@ impl LanguageServer for LspServer {
             .log_message(MessageType::INFO, "LSP server initialized")
             .await;
 
-        let _ = self.dependency_cache.index_workspace().await;
+        if let Err(error) = self.dependency_cache.index_workspace().await {
+            self.client
+                .log_message(
+                    MessageType::ERROR,
+                    format!("An error occurred: {}", error.to_string()),
+                )
+                .await;
+        }
     }
 
     async fn shutdown(&self) -> Result<()> {

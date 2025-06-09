@@ -6,6 +6,8 @@ use std::{
 use tower_lsp::lsp_types::Url;
 use tree_sitter::{Parser, Tree};
 
+use super::constants::PROJECT_ROOT_MARKER;
+
 pub fn path_to_file_uri(file_path: &PathBuf) -> Option<String> {
     let url = Url::from_file_path(file_path).ok()?;
     Some(url.to_string())
@@ -20,15 +22,10 @@ pub fn find_project_root(file_path: &Path) -> Option<PathBuf> {
     let mut current = file_path.parent()?;
 
     loop {
-        if current.join("pom.xml").exists() {
-            return Some(current.to_path_buf());
-        }
-
-        if current.join("build.gradle").exists() || current.join("build.gradle.kts").exists() {
-            return Some(current.to_path_buf());
-        }
-
-        if current.join(".git").exists() {
+        if PROJECT_ROOT_MARKER
+            .iter()
+            .any(|marker| current.join(marker).exists())
+        {
             return Some(current.to_path_buf());
         }
 

@@ -1,6 +1,8 @@
+pub mod constants;
 pub mod dependency_cache;
 pub mod diagnostic_manager;
 pub mod document_manager;
+pub mod symbols;
 pub mod utils;
 
 pub use diagnostic_manager::DiagnosticManager;

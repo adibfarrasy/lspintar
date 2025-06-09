@@ -3,7 +3,7 @@ use std::usize;
 use tower_lsp::lsp_types::Location;
 use tree_sitter::{Node, Query, QueryCursor, StreamingIterator, Tree};
 
-use crate::languages::groovy::symbols::SymbolType;
+use crate::core::symbols::SymbolType;
 
 use super::utils::{
     determine_symbol_type_from_context, find_definition_candidates, get_query_for_symbol_type,
@@ -469,59 +469,3 @@ fn find_best_method_match<'a>(
 
     best_match
 }
-
-// pub fn find_definition_location_backup(
-//     tree: &Tree,
-//     source: &str,
-//     dependency_cache: Arc<DependencyCache>,
-//     file_uri: &str,
-//     usage_node: &Node,
-// ) -> Result<Location> {
-//     // First search locally in current file
-//     if let Some(local_location) = find_local(tree, source, file_uri, usage_node) {
-//         return Ok(local_location);
-//     }
-//
-//     // TODO: implement and test
-//     // Check if it's a builtin type
-//     // if let Some(builtin_location) = search_builtin_types(symbol, &dependency_cache) {
-//     //     return Some(builtin_location);
-//     // }
-//
-//     // Search in project dependencies
-//     // Convert URI to file path to determine project root
-//     let current_file_path = uri_to_path(file_uri).context(format!(
-//         "[find_definition_location] failed to convert uri {} to path",
-//         &file_uri
-//     ))?;
-//     let project_root = find_project_root(&current_file_path).context(format!(
-//         "[find_definition_location] cannot find the project root. file_uri: {}",
-//         &file_uri,
-//     ))?;
-//
-//     // Look up symbol in the dependency cache
-//     // The symbol_index maps (project_root, symbol_name) -> Vec<file_locations>
-//     let symbol_name = usage_node.utf8_text(source.as_bytes()).context(format!(
-//         "[find_definition_location] cannot get the symbol name for node {:#?}",
-//         usage_node
-//     ))?;
-//     let symbol_key = (project_root.clone(), symbol_name.to_string());
-//     let symbol_locations = dependency_cache
-//         .symbol_index
-//         .get(&symbol_key)
-//         .context(format!(
-//             "[find_definition_location] cannot get location for symbol key: {:#?}",
-//             symbol_key
-//         ))?;
-//
-//     // Search through each potential location
-//     // There might be multiple files containing the same symbol name
-//     for file_path in symbol_locations.iter() {
-//         if let Some(external_location) = search_in_external_file_for_location(file_path, usage_node)
-//         {
-//             return Ok(external_location);
-//         }
-//     }
-//
-//     Err(anyhow!("[find_definition_location] invalid data"))
-// }

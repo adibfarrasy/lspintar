@@ -1,7 +1,7 @@
 mod definition;
 mod diagnostics;
-mod symbols;
 
 pub mod support;
+pub mod symbols;
 
 pub use support::GroovySupport;

@@ -1,11 +1,9 @@
-use std::{path::PathBuf, sync::Arc};
-
 use anyhow::{anyhow, Context, Result};
 use log::debug;
 use tower_lsp::lsp_types::{Location, Position, Range, Url};
 use tree_sitter::{Node, Query, QueryCursor, StreamingIterator, Tree};
 
-use crate::languages::groovy::symbols::SymbolType;
+use crate::core::symbols::SymbolType;
 
 pub fn find_identifier_at_position<'a>(
     tree: &'a Tree,
@@ -122,7 +120,6 @@ pub fn find_definition_candidates<'a>(
             for capture in query_match.captures {
                 let node_text = capture.node.utf8_text(source.as_bytes()).unwrap();
 
-                debug!("node_text: {}", node_text);
                 if node_text == symbol_name {
                     candidates.push(capture.node.parent().unwrap());
                 }
@@ -183,14 +180,12 @@ pub fn determine_symbol_type_from_context(
 
         ; Imports
         (import_declaration
-          (fully_qualified_name) @import_name) 
-
-        (import_declaration
-          (wildcard_import) @import_name) 
+          (scoped_identifier) @import_name) 
     "#;
 
-    let query = Query::new(&tree.language(), query_text)
+    let query = Query::new(&tree_sitter_groovy::language(), query_text)
         .context("[determine_symbol_type_from_context] failed to create query")?;
+
     let mut cursor = QueryCursor::new();
 
     let mut found = false;
