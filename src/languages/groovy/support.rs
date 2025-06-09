@@ -3,10 +3,11 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use tower_lsp::lsp_types::{Diagnostic, Hover, Location};
-use tree_sitter::{Parser, Tree};
+use tree_sitter::{Parser, Query, Tree};
 
 use crate::constants::LSP_NAME;
 use crate::core::dependency_cache::DependencyCache;
+use crate::core::symbols::SymbolType;
 use crate::languages::traits::LanguageSupport;
 
 use super::definition::{find_definition_location, find_identifier_at_position};

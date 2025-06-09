@@ -8,8 +8,8 @@ use crate::{
     },
     languages::groovy::symbols::extract_groovy_symbols,
 };
-use anyhow::{anyhow, Context, Result};
-use futures::stream::{self, StreamExt};
+use anyhow::{Context, Result};
+use tokio::{fs, task::spawn_blocking};
 use tree_sitter::Tree;
 use walkdir::WalkDir;
 
@@ -94,54 +94,53 @@ pub async fn scan_directory_for_sources(
 pub async fn parse_source_files_parallel(
     source_files: Vec<PathBuf>,
 ) -> Result<Vec<ParsedSourceFile>> {
-    let max_concurrent: usize = num_cpus::get();
+    let tasks: Vec<_> = source_files.into_iter().map(parse_single_file).collect();
 
-    let parsed_files = stream::iter(source_files)
-        .map(|file_path| async move {
-            tokio::task::spawn_blocking(move || parse_single_file(file_path))
-                .await
-                .unwrap_or_else(|_| Err(anyhow!("Task panicked during file parsing")))
-        })
-        .buffer_unordered(max_concurrent)
-        .filter_map(|result| async move { result.ok() })
-        .collect::<Vec<_>>()
-        .await;
-
-    Ok(parsed_files)
+    let results = futures::future::join_all(tasks).await;
+    Ok(results.into_iter().filter_map(|r| r.ok()).collect())
 }
 
-fn parse_single_file(file_path: PathBuf) -> Result<ParsedSourceFile> {
-    let content = std::fs::read_to_string(&file_path)
+async fn parse_single_file(file_path: PathBuf) -> Result<ParsedSourceFile> {
+    let content = fs::read_to_string(&file_path)
+        .await
         .context(format!("Failed to read file: {:?}", file_path))?;
 
-    let language = detect_language_from_path(&file_path).context("Unsupported file type")?;
+    spawn_blocking(move || {
+        let language = detect_language_from_path(&file_path).context("Unsupported file type")?;
 
-    let mut parser = create_parser_for_language(language).context("Failed to create parser")?;
+        let mut parser = create_parser_for_language(language).context("Failed to create parser")?;
 
-    let tree = parser
-        .parse(&content, None)
-        .context("Failed to parse source file")?;
+        let tree = parser
+            .parse(&content, None)
+            .context("Failed to parse source file")?;
 
-    Ok(ParsedSourceFile {
-        file_path,
-        content,
-        tree,
-        language: language.to_string(),
+        Ok(ParsedSourceFile {
+            file_path,
+            content,
+            tree,
+            language: language.to_string(),
+        })
     })
+    .await?
 }
 
 pub async fn extract_symbol_definitions(
     parsed_files: Vec<ParsedSourceFile>,
 ) -> Result<Vec<SymbolDefinition>> {
-    let mut all_symbols = Vec::new();
-
-    for parsed_file in parsed_files {
-        let symbols = tokio::task::spawn_blocking(move || {
-            extract_symbols_from_tree_by_language(&parsed_file)
+    let tasks: Vec<_> = parsed_files
+        .into_iter()
+        .map(|parsed_file| {
+            tokio::task::spawn_blocking(move || extract_symbols_from_tree_by_language(&parsed_file))
         })
-        .await??;
+        .collect();
 
-        all_symbols.extend(symbols);
+    let results = futures::future::join_all(tasks).await;
+
+    let mut all_symbols = Vec::new();
+    for result in results {
+        if let Ok(Ok(symbols)) = result {
+            all_symbols.extend(symbols);
+        }
     }
 
     Ok(all_symbols)

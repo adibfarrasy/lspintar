@@ -1,7 +1,7 @@
 mod builtin;
 pub mod symbol_index;
 
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Instant};
 
 use anyhow::{Context, Result};
 use builtin::BuiltinTypeInfo;
@@ -36,14 +36,26 @@ impl DependencyCache {
     }
 
     pub async fn index_workspace(&self) -> Result<()> {
+        let start = Instant::now();
+        debug!("Starting workspace indexing...");
+
         // Index classpath (read build.gradle, pom.xml, etc.)
+        let classpath_start = Instant::now();
         self.index_classpaths().await?;
+        debug!("Classpath indexing took: {:?}", classpath_start.elapsed());
 
         // Index all source files in the project
+        let symbols_start = Instant::now();
         self.index_project_symbols().await?;
+        debug!("Symbol indexing took: {:?}", symbols_start.elapsed());
 
         // Index builtin types (java.lang.*, groovy.lang.*)
+        let builtin_start = Instant::now();
         self.index_builtin_types().await?;
+        debug!("Builtin indexing took: {:?}", builtin_start.elapsed());
+
+        let total_time = start.elapsed();
+        debug!("Total workspace indexing completed in: {:?}", total_time);
 
         Ok(())
     }

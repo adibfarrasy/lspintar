@@ -1,5 +1,6 @@
+use std::sync::OnceLock;
+
 use anyhow::{Context, Result};
-use log::debug;
 use tree_sitter::{Node, Query, QueryCursor, StreamingIterator, Tree};
 
 use crate::core::{
@@ -7,38 +8,49 @@ use crate::core::{
     symbols::SymbolType,
 };
 
+static EXTRACT_SYMBOL_QUERIES: OnceLock<Vec<(Query, SymbolType)>> = OnceLock::new();
+
 // TODO: currently only handles non-nested declarations
 // enhance with recursion to create proper fully-qualified names for inner classes, methods, and
 // properties.
+fn get_groovy_queries() -> &'static [(Query, SymbolType)] {
+    EXTRACT_SYMBOL_QUERIES.get_or_init(|| {
+        let language = tree_sitter_groovy::language();
+        [
+            (
+                r#"(class_declaration name: (identifier) @name)"#,
+                SymbolType::Class,
+            ),
+            (
+                r#"(interface_declaration name: (identifier) @name)"#,
+                SymbolType::Interface,
+            ),
+            (
+                r#"(enum_declaration name: (identifier) @name)"#,
+                SymbolType::Enum,
+            ),
+            (
+                r#"(annotation_type_declaration name: (identifier) @name)"#,
+                SymbolType::Annotation,
+            ),
+        ]
+        .iter()
+        .filter_map(|(text, sym_type)| {
+            Query::new(&language, text)
+                .ok()
+                .map(|q| (q, sym_type.clone()))
+        })
+        .collect()
+    })
+}
+
 pub fn extract_groovy_symbols(parsed_file: &ParsedSourceFile) -> Result<Vec<SymbolDefinition>> {
     let mut symbols = Vec::new();
 
     let package = extract_groovy_package(&parsed_file.tree, &parsed_file.content);
+    let queries = get_groovy_queries();
 
-    let symbol_queries = [
-        (
-            r#"(class_declaration name: (identifier) @name)"#,
-            SymbolType::Class,
-        ),
-        (
-            r#"(interface_declaration name: (identifier) @name)"#,
-            SymbolType::Interface,
-        ),
-        (
-            r#"(enum_declaration name: (identifier) @name)"#,
-            SymbolType::Enum,
-        ),
-        (
-            r#"(annotation_type_declaration name: (identifier) @name)"#,
-            SymbolType::Annotation,
-        ),
-    ];
-
-    let language = tree_sitter_groovy::language();
-
-    for (query_text, symbol_type) in &symbol_queries {
-        let query = Query::new(&language, query_text)
-            .context(format!("Failed to create query: {}", query_text))?;
+    for (query, symbol_type) in queries {
         let mut cursor = QueryCursor::new();
 
         let matches = cursor.matches(
