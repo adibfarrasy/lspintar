@@ -8,11 +8,11 @@ use tree_sitter::{Query, QueryCursor, StreamingIterator, Tree};
 use crate::core::{
     dependency_cache::DependencyCache,
     symbols::SymbolType,
-    utils::{create_parser_for_language, path_to_file_uri, uri_to_path},
+    utils::{create_parser_for_language, node_to_lsp_location, path_to_file_uri, uri_to_path},
 };
 
-use crate::languages::groovy::utils::{
-    determine_symbol_type_from_context, find_identifier_at_position, node_to_lsp_location,
+use super::{
+    definition::utils::determine_symbol_type_from_context, utils::find_identifier_at_position,
 };
 
 static IMPLEMENTATION_QUERY: OnceLock<Option<Query>> = OnceLock::new();

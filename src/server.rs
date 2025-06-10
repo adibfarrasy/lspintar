@@ -1,17 +1,14 @@
-use anyhow::anyhow;
 use dashmap::DashMap;
-use log::debug;
 use request::GotoImplementationParams;
 use request::GotoImplementationResponse;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::LanguageServer;
-use tree_sitter::Tree;
 
 use crate::core::dependency_cache::DependencyCache;
+use crate::core::utils::location_to_hover;
 use crate::core::DiagnosticManager;
 use crate::core::Document;
 use crate::core::DocumentManager;
@@ -65,13 +62,11 @@ impl LanguageServer for LspServer {
         let text_document = params.text_document;
         let uri = text_document.uri.to_string();
 
-        // Detect language (verify it's supported)
         let language_support = self.language_registry.detect_language(&uri);
         if language_support.is_none() {
             return;
         }
 
-        // Store document content
         let document = Document::new(
             uri.clone(),
             text_document.text.clone(),
@@ -147,35 +142,7 @@ impl LanguageServer for LspServer {
 
         let position = params.text_document_position_params.position;
 
-        let language_support = self
-            .language_registry
-            .detect_language(&uri)
-            .ok_or(tower_lsp::jsonrpc::Error::internal_error())?;
-
-        let (content, tree) = {
-            let document_manager = self.documents.read().await;
-            let document =
-                document_manager
-                    .get(&uri)
-                    .ok_or(tower_lsp::jsonrpc::Error::invalid_params(format!(
-                        "cannot find document with uri {}",
-                        uri
-                    )))?;
-
-            let tree = document_manager
-                .get_tree(&uri)
-                .ok_or(tower_lsp::jsonrpc::Error::internal_error())?;
-
-            (document.content.clone(), tree.clone())
-        };
-
-        let cache = self.dependency_cache.clone();
-
-        let result = tokio::task::spawn_blocking(move || {
-            language_support.find_definition(&tree, &content, position, &uri, cache)
-        })
-        .await
-        .map_err(|_| tower_lsp::jsonrpc::Error::internal_error())?;
+        let result = self.find_definition(uri, position).await;
 
         match result {
             Ok(location) => Ok(Some(GotoDefinitionResponse::Scalar(location))),
@@ -197,7 +164,7 @@ impl LanguageServer for LspServer {
         let language_support = self
             .language_registry
             .detect_language(&uri)
-            .ok_or(tower_lsp::jsonrpc::Error::internal_error())?;
+            .ok_or(tower_lsp::jsonrpc::Error::invalid_request())?;
 
         let (content, tree) = {
             let document_manager = self.documents.read().await;
@@ -234,11 +201,22 @@ impl LanguageServer for LspServer {
     }
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
-        // Language-specific hover info
-        todo!()
+        let uri = params
+            .text_document_position_params
+            .text_document
+            .uri
+            .to_string();
+        let position = params.text_document_position_params.position;
+
+        let result = self.find_definition(uri, position).await;
+
+        match result {
+            Ok(location) => Ok(Some(location_to_hover(location))),
+            Err(error) => Err(tower_lsp::jsonrpc::Error::invalid_params(error.to_string())),
+        }
     }
 
-    // Future features ===
+    // Future features
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         // Language-specific completion
         todo!()
@@ -271,27 +249,36 @@ impl LspServer {
         }
     }
 
-    // Optimization strategy: Call this only when build files change
-    // TODO: implement the caller
-    pub fn should_refresh_dependencies(
-        project_root: &PathBuf,
-        last_refresh: std::time::SystemTime,
-    ) -> bool {
-        let build_files = [
-            "pom.xml",
-            "build.gradle",
-            "build.gradle.kts",
-            "gradle.properties",
-        ];
+    async fn find_definition(&self, uri: String, position: Position) -> Result<Location> {
+        let language_support = self
+            .language_registry
+            .detect_language(&uri)
+            .ok_or(tower_lsp::jsonrpc::Error::internal_error())?;
 
-        build_files.iter().any(|file| {
-            let path = project_root.join(file);
-            path.exists()
-                && path
-                    .metadata()
-                    .and_then(|m| m.modified())
-                    .map(|modified| modified > last_refresh)
-                    .unwrap_or(false)
+        let (content, tree) = {
+            let document_manager = self.documents.read().await;
+            let document =
+                document_manager
+                    .get(&uri)
+                    .ok_or(tower_lsp::jsonrpc::Error::invalid_params(format!(
+                        "cannot find document with uri {}",
+                        uri
+                    )))?;
+
+            let tree = document_manager
+                .get_tree(&uri)
+                .ok_or(tower_lsp::jsonrpc::Error::internal_error())?;
+
+            (document.content.clone(), tree.clone())
+        };
+
+        let cache = self.dependency_cache.clone();
+
+        tokio::task::spawn_blocking(move || {
+            language_support.find_definition(&tree, &content, position, &uri, cache)
         })
+        .await
+        .map_err(|_| tower_lsp::jsonrpc::Error::internal_error())?
+        .map_err(|_| tower_lsp::jsonrpc::Error::internal_error())
     }
 }

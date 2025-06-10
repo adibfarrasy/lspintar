@@ -3,8 +3,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use tower_lsp::lsp_types::Url;
-use tree_sitter::{Parser, Tree};
+use tower_lsp::lsp_types::{Hover, Location, Position, Range, Url};
+use tree_sitter::{Node, Parser, Tree};
 
 use super::constants::PROJECT_ROOT_MARKER;
 
@@ -65,4 +65,38 @@ pub fn uri_to_tree(uri: &str) -> Option<Tree> {
     let mut parser = create_parser_for_language(language)?;
 
     parser.parse(&file_content, None)
+}
+
+pub fn location_to_hover(location: Location) -> Hover {
+    todo!()
+}
+
+pub fn node_contains_position(node: &Node, position: Position) -> bool {
+    let start = node.start_position();
+    let end = node.end_position();
+
+    let pos_line = position.line as usize;
+    let pos_char = position.character as usize;
+
+    (start.row < pos_line || (start.row == pos_line && start.column <= pos_char))
+        && (pos_line < end.row || (pos_line == end.row && pos_char <= end.column))
+}
+
+pub fn node_to_lsp_location(node: &Node, file_uri: &str) -> Option<Location> {
+    let start_pos = node.start_position();
+    let end_pos = node.end_position();
+
+    let range = Range {
+        start: Position {
+            line: start_pos.row as u32,
+            character: start_pos.column as u32,
+        },
+        end: Position {
+            line: end_pos.row as u32,
+            character: end_pos.column as u32,
+        },
+    };
+
+    let uri = Url::parse(file_uri).ok()?;
+    Some(Location { uri, range })
 }
