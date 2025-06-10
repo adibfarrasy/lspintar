@@ -162,7 +162,6 @@ impl LanguageServer for LspServer {
                 .get_tree(&uri)
                 .ok_or(tower_lsp::jsonrpc::Error::internal_error())?;
 
-            // Clone the data you need
             (document.content.clone(), tree.clone())
         };
 

@@ -1,4 +1,7 @@
-use std::{fs::read_to_string, path::PathBuf};
+use std::{
+    fs::{self, read_to_string},
+    path::PathBuf,
+};
 
 use anyhow::{anyhow, Context, Result};
 use log::debug;
@@ -317,6 +320,45 @@ fn resolve_through_imports(
 
                     if import_text.ends_with("*") {
                         // TODO: handle wildcard import
+                    }
+                };
+            }
+        });
+
+    result
+}
+
+pub fn set_start_position(source: &str, usage_node: &Node, file_uri: &str) -> Option<Location> {
+    let symbol_name = usage_node.utf8_text(source.as_bytes()).ok()?;
+
+    let other_source = fs::read_to_string(uri_to_path(file_uri)?).ok()?;
+
+    let query_text = r#"
+      (identifier) @name 
+    "#;
+
+    let language = tree_sitter_groovy::language();
+    let query = Query::new(&language, query_text).ok()?;
+
+    let mut parser = Parser::new();
+    parser.set_language(&language).ok()?;
+    let tree = parser.parse(&other_source, None)?;
+
+    let mut cursor = QueryCursor::new();
+    let mut result = None;
+
+    cursor
+        .matches(&query, tree.root_node(), other_source.as_bytes())
+        .for_each(|query_match| {
+            if result.is_some() {
+                return; // Already found a match
+            }
+
+            for capture in query_match.captures {
+                if let Ok(name) = capture.node.utf8_text(other_source.as_bytes()) {
+                    debug!("name: {}, capture: {:#?}", name, capture);
+                    if name == symbol_name {
+                        result = node_to_lsp_location(&capture.node, file_uri)
                     }
                 };
             }
