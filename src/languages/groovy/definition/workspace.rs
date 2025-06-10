@@ -8,7 +8,7 @@ use crate::core::{
     utils::{path_to_file_uri, uri_to_path},
 };
 
-use super::utils::{prepare_symbol_lookup_key, search_definition_in_project};
+use crate::languages::groovy::utils::{prepare_symbol_lookup_key, search_definition_in_project};
 
 pub fn find_in_workspace(
     source: &str,

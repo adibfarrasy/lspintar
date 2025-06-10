@@ -3,15 +3,16 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use tower_lsp::lsp_types::{Diagnostic, Hover, Location};
-use tree_sitter::{Parser, Query, Tree};
+use tree_sitter::{Parser, Tree};
 
 use crate::constants::LSP_NAME;
 use crate::core::dependency_cache::DependencyCache;
-use crate::core::symbols::SymbolType;
 use crate::languages::traits::LanguageSupport;
 
-use super::definition::{find_definition_location, find_identifier_at_position};
+use super::definition::find_definition_location;
 use super::diagnostics::collect_syntax_errors;
+use super::implementation::find_implementations;
+use super::utils::find_identifier_at_position;
 
 pub struct GroovySupport;
 
@@ -55,6 +56,16 @@ impl LanguageSupport for GroovySupport {
         let identifier_node = find_identifier_at_position(tree, source, position)?;
 
         find_definition_location(tree, source, dependency_cache, file_uri, &identifier_node)
+    }
+
+    fn find_implementation(
+        &self,
+        tree: &Tree,
+        source: &str,
+        position: tower_lsp::lsp_types::Position,
+        dependency_cache: Arc<DependencyCache>,
+    ) -> Result<Vec<Location>> {
+        find_implementations(tree, source, position, dependency_cache)
     }
 
     fn provide_hover(

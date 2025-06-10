@@ -5,7 +5,7 @@ use tree_sitter::Node;
 
 use crate::core::{dependency_cache::DependencyCache, utils::path_to_file_uri};
 
-use super::utils::{prepare_symbol_lookup_key, search_definition_in_project};
+use crate::languages::groovy::utils::{prepare_symbol_lookup_key, search_definition_in_project};
 
 pub fn find_in_project(
     source: &str,

@@ -1,12 +1,15 @@
 use anyhow::anyhow;
 use dashmap::DashMap;
 use log::debug;
+use request::GotoImplementationParams;
+use request::GotoImplementationResponse;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::LanguageServer;
+use tree_sitter::Tree;
 
 use crate::core::dependency_cache::DependencyCache;
 use crate::core::DiagnosticManager;
@@ -32,6 +35,7 @@ impl LanguageServer for LspServer {
                 )),
                 definition_provider: Some(OneOf::Left(true)),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
+                implementation_provider: Some(ImplementationProviderCapability::Simple(true)),
                 ..Default::default()
             },
             ..Default::default()
@@ -175,6 +179,56 @@ impl LanguageServer for LspServer {
 
         match result {
             Ok(location) => Ok(Some(GotoDefinitionResponse::Scalar(location))),
+            Err(error) => Err(tower_lsp::jsonrpc::Error::invalid_params(error.to_string())),
+        }
+    }
+
+    async fn goto_implementation(
+        &self,
+        params: GotoImplementationParams,
+    ) -> Result<Option<GotoImplementationResponse>> {
+        let uri = params
+            .text_document_position_params
+            .text_document
+            .uri
+            .to_string();
+        let position = params.text_document_position_params.position;
+
+        let language_support = self
+            .language_registry
+            .detect_language(&uri)
+            .ok_or(tower_lsp::jsonrpc::Error::internal_error())?;
+
+        let (content, tree) = {
+            let document_manager = self.documents.read().await;
+            let document =
+                document_manager
+                    .get(&uri)
+                    .ok_or(tower_lsp::jsonrpc::Error::invalid_params(format!(
+                        "cannot find document with uri {}",
+                        uri
+                    )))?;
+
+            let tree = document_manager
+                .get_tree(&uri)
+                .ok_or(tower_lsp::jsonrpc::Error::internal_error())?;
+
+            (document.content.clone(), tree.clone())
+        };
+
+        let cache = self.dependency_cache.clone();
+
+        let result = tokio::task::spawn_blocking(move || {
+            language_support.find_implementation(&tree, &content, position, cache)
+        })
+        .await
+        .map_err(|_| tower_lsp::jsonrpc::Error::internal_error())?;
+
+        match result {
+            Ok(locations) if !locations.is_empty() => {
+                Ok(Some(GotoImplementationResponse::Array(locations)))
+            }
+            Ok(_) => Ok(None),
             Err(error) => Err(tower_lsp::jsonrpc::Error::invalid_params(error.to_string())),
         }
     }

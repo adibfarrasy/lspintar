@@ -5,7 +5,7 @@ use tree_sitter::{Node, Query, QueryCursor, StreamingIterator, Tree};
 
 use crate::core::symbols::SymbolType;
 
-use super::utils::{
+use crate::languages::groovy::utils::{
     determine_symbol_type_from_context, find_definition_candidates, get_query_for_symbol_type,
     node_to_lsp_location,
 };

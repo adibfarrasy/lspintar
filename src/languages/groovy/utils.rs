@@ -4,7 +4,6 @@ use std::{
 };
 
 use anyhow::{anyhow, Context, Result};
-use log::debug;
 use tower_lsp::lsp_types::{Location, Position, Range, Url};
 use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator, Tree};
 
@@ -284,7 +283,7 @@ pub fn prepare_symbol_lookup_key(
     resolve_through_imports(&symbol_name, source, &project_root)
 }
 
-fn resolve_through_imports(
+pub fn resolve_through_imports(
     symbol_name: &str,
     source: &str,
     project_root: &PathBuf,
@@ -356,7 +355,6 @@ pub fn set_start_position(source: &str, usage_node: &Node, file_uri: &str) -> Op
 
             for capture in query_match.captures {
                 if let Ok(name) = capture.node.utf8_text(other_source.as_bytes()) {
-                    debug!("name: {}, capture: {:#?}", name, capture);
                     if name == symbol_name {
                         result = node_to_lsp_location(&capture.node, file_uri)
                     }

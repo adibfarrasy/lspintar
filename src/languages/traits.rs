@@ -24,5 +24,13 @@ pub trait LanguageSupport: Send + Sync {
         dependency_cache: Arc<DependencyCache>,
     ) -> Result<Location>;
 
+    fn find_implementation(
+        &self,
+        tree: &Tree,
+        source: &str,
+        position: Position,
+        dependency_cache: Arc<DependencyCache>,
+    ) -> Result<Vec<Location>>;
+
     fn provide_hover(&self, tree: &Tree, source: &str, position: Position) -> Option<Hover>;
 }

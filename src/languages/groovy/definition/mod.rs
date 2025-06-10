@@ -7,19 +7,17 @@ use local::find_local;
 use project::find_in_project;
 use tower_lsp::lsp_types::Location;
 use tree_sitter::{Node, Tree};
-use utils::set_start_position;
 use workspace::find_in_workspace;
 
 use crate::core::dependency_cache::DependencyCache;
+
+use super::utils::set_start_position;
 
 mod builtin;
 mod external;
 mod local;
 mod project;
-mod utils;
 mod workspace;
-
-pub use utils::find_identifier_at_position;
 
 pub fn find_definition_location(
     tree: &Tree,
