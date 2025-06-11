@@ -10,6 +10,8 @@ use crate::core::{
 
 static EXTRACT_SYMBOL_QUERIES: OnceLock<Vec<(Query, SymbolType)>> = OnceLock::new();
 
+static HOVER_QUERIES: OnceLock<Vec<(Query, SymbolType)>> = OnceLock::new();
+
 // TODO: currently only handles non-nested declarations
 // enhance with recursion to create proper fully-qualified names for inner classes, methods, and
 // properties.
@@ -152,4 +154,24 @@ fn is_groovy_symbol_accessible(node: &Node, content: &str) -> bool {
         "property_declaration" => true,
         _ => false,
     }
+}
+
+fn get_hover_queries() -> &'static [(Query, SymbolType)] {
+    HOVER_QUERIES.get_or_init(|| {
+        let language = tree_sitter_groovy::language();
+        [
+            (r#"todo"#, SymbolType::Class),
+            (r#"todo"#, SymbolType::Interface),
+            (r#"todo"#, SymbolType::Enum),
+            (r#"todo"#, SymbolType::Method),
+            (r#"todo"#, SymbolType::Field),
+        ]
+        .iter()
+        .filter_map(|(text, sym_type)| {
+            Query::new(&language, text)
+                .ok()
+                .map(|q| (q, sym_type.clone()))
+        })
+        .collect()
+    })
 }

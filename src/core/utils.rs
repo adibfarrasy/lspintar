@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use tower_lsp::lsp_types::{Hover, Location, Position, Range, Url};
+use tower_lsp::lsp_types::{Location, Position, Range, Url};
 use tree_sitter::{Node, Parser, Tree};
 
 use super::constants::PROJECT_ROOT_MARKER;
@@ -67,10 +67,6 @@ pub fn uri_to_tree(uri: &str) -> Option<Tree> {
     parser.parse(&file_content, None)
 }
 
-pub fn location_to_hover(location: Location) -> Hover {
-    todo!()
-}
-
 pub fn node_contains_position(node: &Node, position: Position) -> bool {
     let start = node.start_position();
     let end = node.end_position();
@@ -99,4 +95,41 @@ pub fn node_to_lsp_location(node: &Node, file_uri: &str) -> Option<Location> {
 
     let uri = Url::parse(file_uri).ok()?;
     Some(Location { uri, range })
+}
+
+// only get the closest node to root
+pub fn location_to_node<'a>(location: &Location, tree: &'a Tree) -> Option<Node<'a>> {
+    let position = location.range.start;
+    find_node_at_position(tree, position)
+}
+
+fn find_node_at_position<'a>(tree: &'a Tree, position: Position) -> Option<Node<'a>> {
+    let mut current = tree.root_node();
+
+    loop {
+        let mut found_child = None;
+        let mut cursor = current.walk();
+
+        for child in current.children(&mut cursor) {
+            if node_contains_position(&child, position) {
+                found_child = Some(child);
+                break;
+            }
+        }
+
+        match found_child {
+            Some(child) => {
+                current = child;
+            }
+            None => {
+                break;
+            }
+        }
+    }
+
+    if node_contains_position(&current, position) {
+        Some(current)
+    } else {
+        None
+    }
 }

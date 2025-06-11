@@ -6,9 +6,9 @@ use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::LanguageServer;
+use tree_sitter::Tree;
 
 use crate::core::dependency_cache::DependencyCache;
-use crate::core::utils::location_to_hover;
 use crate::core::DiagnosticManager;
 use crate::core::Document;
 use crate::core::DocumentManager;
@@ -208,12 +208,19 @@ impl LanguageServer for LspServer {
             .to_string();
         let position = params.text_document_position_params.position;
 
-        let result = self.find_definition(uri, position).await;
+        let location = self.find_definition(uri.clone(), position).await?;
 
-        match result {
-            Ok(location) => Ok(Some(location_to_hover(location))),
-            Err(error) => Err(tower_lsp::jsonrpc::Error::invalid_params(error.to_string())),
-        }
+        let (content, tree) = self.get_content_and_tree(&uri).await?;
+
+        let language_support = self
+            .language_registry
+            .detect_language(&uri)
+            .ok_or(tower_lsp::jsonrpc::Error::internal_error())?;
+
+        language_support
+            .provide_hover(&tree, &content, location)
+            .ok_or(tower_lsp::jsonrpc::Error::invalid_request())
+            .map(Some)
     }
 
     // Future features
@@ -250,29 +257,13 @@ impl LspServer {
     }
 
     async fn find_definition(&self, uri: String, position: Position) -> Result<Location> {
+        let (content, tree) = self.get_content_and_tree(&uri).await?;
+        let cache = self.dependency_cache.clone();
+
         let language_support = self
             .language_registry
             .detect_language(&uri)
             .ok_or(tower_lsp::jsonrpc::Error::internal_error())?;
-
-        let (content, tree) = {
-            let document_manager = self.documents.read().await;
-            let document =
-                document_manager
-                    .get(&uri)
-                    .ok_or(tower_lsp::jsonrpc::Error::invalid_params(format!(
-                        "cannot find document with uri {}",
-                        uri
-                    )))?;
-
-            let tree = document_manager
-                .get_tree(&uri)
-                .ok_or(tower_lsp::jsonrpc::Error::internal_error())?;
-
-            (document.content.clone(), tree.clone())
-        };
-
-        let cache = self.dependency_cache.clone();
 
         tokio::task::spawn_blocking(move || {
             language_support.find_definition(&tree, &content, position, &uri, cache)
@@ -280,5 +271,22 @@ impl LspServer {
         .await
         .map_err(|_| tower_lsp::jsonrpc::Error::internal_error())?
         .map_err(|_| tower_lsp::jsonrpc::Error::internal_error())
+    }
+
+    async fn get_content_and_tree(&self, uri: &str) -> Result<(String, Tree)> {
+        let document_manager = self.documents.read().await;
+        let document =
+            document_manager
+                .get(&uri)
+                .ok_or(tower_lsp::jsonrpc::Error::invalid_params(format!(
+                    "cannot find document with uri {}",
+                    uri
+                )))?;
+
+        let tree = document_manager
+            .get_tree(&uri)
+            .ok_or(tower_lsp::jsonrpc::Error::internal_error())?;
+
+        Ok((document.content.clone(), tree.clone()))
     }
 }

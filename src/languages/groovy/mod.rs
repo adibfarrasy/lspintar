@@ -1,5 +1,6 @@
 mod definition;
 mod diagnostics;
+mod hover;
 mod implementation;
 mod utils;
 

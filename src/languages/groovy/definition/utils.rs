@@ -4,6 +4,7 @@ use std::{
 };
 
 use anyhow::{anyhow, Context, Result};
+use log::debug;
 use tower_lsp::lsp_types::Location;
 use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator, Tree};
 
@@ -72,6 +73,8 @@ pub fn determine_symbol_type_from_context(
     source: &str,
 ) -> Result<SymbolType> {
     let node_text = node.utf8_text(source.as_bytes())?;
+
+    debug!("node_text: {node_text}");
 
     let query_text = r#"
         ; DECLARATIONS
@@ -161,6 +164,7 @@ pub fn determine_symbol_type_from_context(
             }
         });
 
+    debug!("result: {:#?}", result);
     result
 }
 
