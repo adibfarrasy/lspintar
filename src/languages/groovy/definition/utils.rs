@@ -74,8 +74,6 @@ pub fn determine_symbol_type_from_context(
 ) -> Result<SymbolType> {
     let node_text = node.utf8_text(source.as_bytes())?;
 
-    debug!("node_text: {node_text}");
-
     let query_text = r#"
         ; DECLARATIONS
         ; Variable declarations
@@ -110,10 +108,27 @@ pub fn determine_symbol_type_from_context(
 
         ; USAGES
         (field_access field: (identifier) @field_usage)
+
         (method_invocation name: (identifier) @method_usage)
+
         (argument_list (identifier) @arg_usage)
+
         (assignment_expression left: (identifier) @var_usage)
+
         (assignment_expression right: (identifier) @var_usage)
+
+        ; Interface
+        (class_declaration
+          interfaces: (super_interfaces
+            (type_list (type_identifier) @interface_name)))
+        (interface_declaration
+          (extends_interfaces
+            (type_list (type_identifier) @interface_name)))
+
+        ; Superclass
+        (class_declaration
+          superclass: (superclass
+            (type_identifier) @class_name))
 
         ; Type identifiers
         (type_identifier) @type_name
@@ -164,7 +179,7 @@ pub fn determine_symbol_type_from_context(
             }
         });
 
-    debug!("result: {:#?}", result);
+    debug!("node_text: {node_text}, result: {:#?}", result);
     result
 }
 

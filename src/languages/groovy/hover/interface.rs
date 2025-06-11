@@ -3,15 +3,14 @@ use tree_sitter::{Query, QueryCursor, StreamingIterator, Tree};
 
 use super::utils::partition_modifiers;
 
-pub fn extract_class_signature(tree: &Tree, source: &str) -> Option<String> {
+pub fn extract_interface_signature(tree: &Tree, source: &str) -> Option<String> {
     let query_text = r#"
     (package_declaration
       (scoped_identifier) @package_name)
-    (class_declaration
+    (interface_declaration
       (modifiers)? @modifiers
-      name: (identifier) @class_name
-      interfaces: (super_interfaces)? @interface_line
-      superclass: (superclass)? @superclass_line
+      name: (identifier) @interface_name
+      interfaces: (super_interfaces)? @extends_line
     )
     "#;
 
@@ -21,9 +20,8 @@ pub fn extract_class_signature(tree: &Tree, source: &str) -> Option<String> {
     let mut cursor = QueryCursor::new();
 
     let mut package_name = String::new();
-    let mut class_name = String::new();
-    let mut interface_line = String::new();
-    let mut superclass_line = String::new();
+    let mut interface_name = String::new();
+    let mut extends_line = String::new();
     let mut modifiers = String::new();
 
     cursor
@@ -36,37 +34,29 @@ pub fn extract_class_signature(tree: &Tree, source: &str) -> Option<String> {
                 match capture_name {
                     "package_name" => package_name.push_str(text),
                     "modifiers" => modifiers.push_str(text),
-                    "class_name" => {
-                        if !class_name.is_empty() {
-                            class_name.push_str(" ");
+                    "interface_name" => {
+                        if !interface_name.is_empty() {
+                            interface_name.push(' ');
                         }
-                        class_name.push_str("class");
-                        class_name.push_str(text);
+                        interface_name.push_str("interface ");
+                        interface_name.push_str(text);
                     }
-                    "interface_line" => interface_line = text.to_string(),
-                    "superclass_line" => superclass_line = text.to_string(),
+                    "extends_line" => extends_line = text.to_string(),
                     _ => {}
                 }
             }
         });
 
-    format_class_signature(
-        package_name,
-        modifiers,
-        class_name,
-        interface_line,
-        superclass_line,
-    )
+    format_interface_signature(package_name, modifiers, interface_name, extends_line)
 }
 
-fn format_class_signature(
+fn format_interface_signature(
     package_name: String,
     modifiers: String,
-    class_name: String,
-    interface_line: String,
-    superclass_line: String,
+    interface_name: String,
+    extends_line: String,
 ) -> Option<String> {
-    if class_name.is_empty() {
+    if interface_name.is_empty() {
         return None;
     }
 
@@ -85,16 +75,11 @@ fn format_class_signature(
         parts.push(modifier_line);
     }
 
-    parts.push(class_name);
+    parts.push(interface_name);
 
-    if !interface_line.is_empty() {
-        parts.push(interface_line);
-        parts.push("\n".to_string());
-    }
-
-    if !superclass_line.is_empty() {
-        parts.push(superclass_line);
-        parts.push("\n".to_string());
+    if !extends_line.is_empty() {
+        parts.push(" ".to_string());
+        parts.push(extends_line);
     }
 
     parts.push("```".to_string());

@@ -20,7 +20,7 @@ mod workspace;
 
 pub mod utils;
 
-pub fn find_definition_location(
+pub fn handle(
     tree: &Tree,
     source: &str,
     dependency_cache: Arc<DependencyCache>,

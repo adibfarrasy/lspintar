@@ -21,7 +21,7 @@ static IMPLEMENTATION_WITH_METHOD_QUERY: OnceLock<Option<Query>> = OnceLock::new
 
 static INTERFACE_DECLARATION_QUERY: OnceLock<Option<Query>> = OnceLock::new();
 
-pub fn find_implementations(
+pub fn handle(
     tree: &Tree,
     source: &str,
     position: Position,
@@ -55,6 +55,9 @@ async fn find_interface_implementations(
     interface_name: &str,
     dependency_cache: &DependencyCache,
 ) -> Result<Vec<Location>> {
+    // TODO: because it's always looping this has performance issue
+    // implement caching import sites next
+
     let tasks: Vec<_> = dependency_cache
         .symbol_index
         .iter()

@@ -1,6 +1,8 @@
 use dashmap::DashMap;
+use log::debug;
 use request::GotoImplementationParams;
 use request::GotoImplementationResponse;
+use serde_json::de;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::Result;
@@ -9,6 +11,7 @@ use tower_lsp::LanguageServer;
 use tree_sitter::Tree;
 
 use crate::core::dependency_cache::DependencyCache;
+use crate::core::utils::path_to_file_uri;
 use crate::core::DiagnosticManager;
 use crate::core::Document;
 use crate::core::DocumentManager;
@@ -210,11 +213,12 @@ impl LanguageServer for LspServer {
 
         let location = self.find_definition(uri.clone(), position).await?;
 
-        let (content, tree) = self.get_content_and_tree(&uri).await?;
+        let other_uri = location.uri.to_string();
+        let (content, tree) = self.get_content_and_tree(&other_uri).await?;
 
         let language_support = self
             .language_registry
-            .detect_language(&uri)
+            .detect_language(&other_uri)
             .ok_or(tower_lsp::jsonrpc::Error::internal_error())?;
 
         language_support
@@ -274,17 +278,52 @@ impl LspServer {
     }
 
     async fn get_content_and_tree(&self, uri: &str) -> Result<(String, Tree)> {
-        let document_manager = self.documents.read().await;
-        let document =
-            document_manager
-                .get(&uri)
-                .ok_or(tower_lsp::jsonrpc::Error::invalid_params(format!(
-                    "cannot find document with uri {}",
-                    uri
-                )))?;
+        {
+            let document_manager = self.documents.read().await;
+            if let Some(document) = document_manager.get(uri) {
+                if let Some(tree) = document_manager.get_tree(uri) {
+                    return Ok((document.content.clone(), tree.clone()));
+                }
+            }
+        }
 
+        let mut document_manager = self.documents.write().await;
+
+        // Double-check in case another thread inserted it
+        if let Some(document) = document_manager.get(uri) {
+            if let Some(tree) = document_manager.get_tree(uri) {
+                return Ok((document.content.clone(), tree.clone()));
+            }
+        }
+
+        let file_path = crate::core::utils::uri_to_path(uri).ok_or(
+            tower_lsp::jsonrpc::Error::invalid_params("Invalid URI".to_string()),
+        )?;
+
+        let content = tokio::fs::read_to_string(&file_path).await.map_err(|_| {
+            tower_lsp::jsonrpc::Error::invalid_params(format!("Failed to read file: {}", uri))
+        })?;
+
+        let language_support = self.language_registry.detect_language(uri).ok_or(
+            tower_lsp::jsonrpc::Error::invalid_params("Unsupported language".to_string()),
+        )?;
+
+        let document = Document::new(
+            uri.to_string(),
+            content.clone(),
+            0, // Version 0 for disk-loaded files
+            language_support.language_id().to_string(),
+        );
+
+        document_manager.insert(document);
+
+        document_manager.reparse_and_cache_tree(uri, &content, &self.language_registry);
+
+        let document = document_manager
+            .get(uri)
+            .ok_or(tower_lsp::jsonrpc::Error::internal_error())?;
         let tree = document_manager
-            .get_tree(&uri)
+            .get_tree(uri)
             .ok_or(tower_lsp::jsonrpc::Error::internal_error())?;
 
         Ok((document.content.clone(), tree.clone()))

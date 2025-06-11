@@ -26,6 +26,7 @@ pub fn search_local_definitions<'a>(
     usage_node: &Node<'a>,
 ) -> Option<Node<'a>> {
     let symbol_name = usage_node.utf8_text(source.as_bytes()).ok()?;
+
     let symbol_type = determine_symbol_type_from_context(tree, usage_node, source).ok()?;
 
     let query_text = get_query_for_symbol_type(&symbol_type)?;
@@ -145,16 +146,13 @@ pub struct MethodSignature {
 }
 
 fn extract_call_signature(usage_node: &Node, source: &str) -> Option<CallSignature> {
-    // Navigate up to find method_invocation parent
     let method_invocation = find_parent_method_invocation(usage_node)?;
 
-    // Get the arguments node
     let arguments = method_invocation.child_by_field_name("arguments")?;
 
     let mut arg_types = Vec::new();
     let mut cursor = arguments.walk();
 
-    // Iterate through argument children
     for child in arguments.named_children(&mut cursor) {
         let arg_type = infer_argument_type(&child, source);
         arg_types.push(arg_type);
@@ -167,12 +165,10 @@ fn extract_call_signature(usage_node: &Node, source: &str) -> Option<CallSignatu
 }
 
 fn extract_method_signature(method_node: &Node, source: &str) -> Option<MethodSignature> {
-    // method_node should be a method_declaration
     if method_node.kind() != "method_declaration" {
         return None;
     }
 
-    // Find parameters
     let parameters = method_node.child_by_field_name("parameters")?;
 
     let mut param_types = Vec::new();
@@ -183,7 +179,6 @@ fn extract_method_signature(method_node: &Node, source: &str) -> Option<MethodSi
 
     for child in parameters.named_children(&mut cursor) {
         if vec!["formal_parameter", "spread_parameter"].contains(&child.kind()) {
-            // Extract type and name from formal_parameter
             if let Some(param_type) = child.child_by_field_name("type") {
                 param_types.push(
                     param_type
@@ -222,7 +217,6 @@ fn extract_method_signature(method_node: &Node, source: &str) -> Option<MethodSi
 }
 
 fn signatures_match(call_sig: &CallSignature, method_sig: &MethodSignature) -> bool {
-    // If we have type information, try to match types
     for (i, call_arg_type) in call_sig.arg_types.iter().enumerate() {
         if let Some(method_param_type) = method_sig.param_types.get(i) {
             if let Some(call_type) = call_arg_type {
@@ -435,10 +429,8 @@ fn find_best_method_match<'a>(
     usage_node: &Node<'a>,
     symbol_name: &str,
 ) -> Option<Node<'a>> {
-    // Extract call signature
     let call_signature = extract_call_signature(usage_node, source)?;
 
-    // Find all method candidates with matching name
     let query_text = r#"(method_declaration name: (identifier) @name)"#;
     let query = Query::new(&tree.language(), query_text).ok()?;
     let mut cursor = QueryCursor::new();
@@ -453,12 +445,11 @@ fn find_best_method_match<'a>(
                 let name_text = name_node.utf8_text(source.as_bytes()).unwrap_or("");
 
                 if name_text == symbol_name {
-                    // Found a method with matching name
                     if let Some(method_decl) = name_node.parent() {
                         if let Some(method_sig) = extract_method_signature(&method_decl, source) {
                             if signatures_match(&call_signature, &method_sig) {
                                 best_match = Some(method_decl);
-                                return; // Take first match for now
+                                return;
                             }
                         }
                     }
