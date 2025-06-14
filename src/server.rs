@@ -1,8 +1,6 @@
 use dashmap::DashMap;
-use log::debug;
 use request::GotoImplementationParams;
 use request::GotoImplementationResponse;
-use serde_json::de;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::Result;
@@ -11,7 +9,6 @@ use tower_lsp::LanguageServer;
 use tree_sitter::Tree;
 
 use crate::core::dependency_cache::DependencyCache;
-use crate::core::utils::path_to_file_uri;
 use crate::core::DiagnosticManager;
 use crate::core::Document;
 use crate::core::DocumentManager;
@@ -273,8 +270,8 @@ impl LspServer {
             language_support.find_definition(&tree, &content, position, &uri, cache)
         })
         .await
-        .map_err(|_| tower_lsp::jsonrpc::Error::internal_error())?
-        .map_err(|_| tower_lsp::jsonrpc::Error::internal_error())
+        .map_err(|error| tower_lsp::jsonrpc::Error::invalid_params(format!("{error}")))?
+        .map_err(|error| tower_lsp::jsonrpc::Error::invalid_params(format!("{error}")))
     }
 
     async fn get_content_and_tree(&self, uri: &str) -> Result<(String, Tree)> {

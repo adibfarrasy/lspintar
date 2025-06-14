@@ -32,11 +32,10 @@ pub fn handle(
     let symbol_type = determine_symbol_type_from_context(tree, &identifier_node, source)?;
 
     match symbol_type {
-        SymbolType::Interface => futures::executor::block_on(find_interface_implementations(
-            symbol_name,
-            &dependency_cache,
-        )),
-        SymbolType::Method => futures::executor::block_on(async {
+        SymbolType::InterfaceDeclaration => futures::executor::block_on(
+            find_interface_implementations(symbol_name, &dependency_cache),
+        ),
+        SymbolType::MethodDeclaration => futures::executor::block_on(async {
             // TODO: currently only handle interfaces.
             // implement abstract class handling next.
 
@@ -72,6 +71,7 @@ async fn find_interface_implementations(
 
     let results = futures::future::join_all(tasks).await;
 
+    debug!("I'm here");
     let mut implementations = Vec::new();
     for result in results {
         if let Ok(Ok(impls)) = result {
@@ -131,6 +131,7 @@ async fn find_implementations_in_file(file_uri: &str, target_name: &str) -> Resu
                 }
             });
 
+        debug!("interface implementation locations: {:#?}", locations);
         Ok(locations)
     })
     .await

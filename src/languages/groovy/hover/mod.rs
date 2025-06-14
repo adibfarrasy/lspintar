@@ -1,7 +1,6 @@
 use class::extract_class_signature;
 use field::extract_field_signature;
 use interface::extract_interface_signature;
-use log::debug;
 use method::extract_method_signature;
 use tower_lsp::lsp_types::{Hover, HoverContents, Location, MarkupContent, MarkupKind};
 use tree_sitter::Tree;
@@ -23,10 +22,10 @@ pub fn handle(tree: &Tree, source: &str, location: Location) -> Option<Hover> {
     let symbol_type = determine_symbol_type_from_context(tree, &node, source).ok()?;
 
     let content = match symbol_type {
-        SymbolType::Class => extract_class_signature(tree, source),
-        SymbolType::Interface => extract_interface_signature(tree, source),
-        SymbolType::Method => extract_method_signature(tree, &node, source),
-        SymbolType::Field => extract_field_signature(tree, &node, source),
+        SymbolType::SuperClass => extract_class_signature(tree, source),
+        SymbolType::SuperInterface => extract_interface_signature(tree, source),
+        SymbolType::MethodCall => extract_method_signature(tree, &node, source),
+        SymbolType::FieldUsage => extract_field_signature(tree, &node, source),
         _ => None,
     };
 

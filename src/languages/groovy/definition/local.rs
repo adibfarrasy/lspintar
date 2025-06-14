@@ -1,12 +1,14 @@
 use std::usize;
 
+use log::debug;
 use tower_lsp::lsp_types::Location;
 use tree_sitter::{Node, Query, QueryCursor, StreamingIterator, Tree};
 
 use crate::core::{symbols::SymbolType, utils::node_to_lsp_location};
 
 use super::utils::{
-    determine_symbol_type_from_context, find_definition_candidates, get_query_for_symbol_type,
+    determine_symbol_type_from_context, find_definition_candidates,
+    get_declaration_query_for_symbol_type,
 };
 
 pub fn find_local(
@@ -15,6 +17,7 @@ pub fn find_local(
     file_uri: &str,
     usage_node: &Node,
 ) -> Option<Location> {
+    debug!("find_local scope");
     let definition_node = search_local_definitions(tree, source, usage_node)?;
 
     node_to_lsp_location(&definition_node, file_uri)
@@ -29,15 +32,17 @@ pub fn search_local_definitions<'a>(
 
     let symbol_type = determine_symbol_type_from_context(tree, usage_node, source).ok()?;
 
-    let query_text = get_query_for_symbol_type(&symbol_type)?;
+    let query_text = get_declaration_query_for_symbol_type(&symbol_type)?;
     let candidates = find_definition_candidates(tree, source, &symbol_name, query_text)?;
 
-    match symbol_type {
-        SymbolType::Variable | SymbolType::Parameter => {
-            find_closest_declaration(usage_node, &candidates)
-        }
+    if symbol_type.is_declaration() {
+        return None;
+    }
 
-        SymbolType::Method | SymbolType::Function => {
+    match symbol_type {
+        SymbolType::VariableUsage => find_closest_declaration(usage_node, &candidates),
+
+        SymbolType::MethodCall | SymbolType::FunctionCall => {
             find_best_method_match(tree, source, usage_node, symbol_name)
         }
         _ => candidates.into_iter().next(),

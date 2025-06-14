@@ -3,9 +3,6 @@ use tree_sitter::{Node, Query, QueryCursor, StreamingIterator, Tree};
 
 use super::utils::partition_modifiers;
 
-// FIXME: currently doesn't work
-// 1. declaration in local file => cannot get the correct one due to early return in find_parent_method_invocation
-// 2. declaration in another file =>
 pub fn extract_method_signature(tree: &Tree, node: &Node, source: &str) -> Option<String> {
     let query_text = r#"
     (package_declaration

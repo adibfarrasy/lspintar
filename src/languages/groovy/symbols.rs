@@ -21,19 +21,19 @@ fn get_extact_symbol_queries() -> &'static [(Query, SymbolType)] {
         [
             (
                 r#"(class_declaration name: (identifier) @name)"#,
-                SymbolType::Class,
+                SymbolType::ClassDeclaration,
             ),
             (
                 r#"(interface_declaration name: (identifier) @name)"#,
-                SymbolType::Interface,
+                SymbolType::InterfaceDeclaration,
             ),
             (
                 r#"(enum_declaration name: (identifier) @name)"#,
-                SymbolType::Enum,
+                SymbolType::EnumDeclaration,
             ),
             (
                 r#"(annotation_type_declaration name: (identifier) @name)"#,
-                SymbolType::Annotation,
+                SymbolType::AnnotationDeclaration,
             ),
         ]
         .iter()
@@ -154,24 +154,4 @@ fn is_groovy_symbol_accessible(node: &Node, content: &str) -> bool {
         "property_declaration" => true,
         _ => false,
     }
-}
-
-fn get_hover_queries() -> &'static [(Query, SymbolType)] {
-    HOVER_QUERIES.get_or_init(|| {
-        let language = tree_sitter_groovy::language();
-        [
-            (r#"todo"#, SymbolType::Class),
-            (r#"todo"#, SymbolType::Interface),
-            (r#"todo"#, SymbolType::Enum),
-            (r#"todo"#, SymbolType::Method),
-            (r#"todo"#, SymbolType::Field),
-        ]
-        .iter()
-        .filter_map(|(text, sym_type)| {
-            Query::new(&language, text)
-                .ok()
-                .map(|q| (q, sym_type.clone()))
-        })
-        .collect()
-    })
 }

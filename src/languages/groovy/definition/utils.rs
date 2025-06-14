@@ -13,7 +13,7 @@ use crate::core::{
     utils::{find_project_root, node_to_lsp_location, uri_to_path, uri_to_tree},
 };
 
-pub fn get_query_for_symbol_type(symbol_type: &SymbolType) -> Option<&'static str> {
+pub fn get_declaration_query_for_symbol_type(symbol_type: &SymbolType) -> Option<&'static str> {
     match symbol_type {
         SymbolType::Type => Some(
             r#"
@@ -22,22 +22,18 @@ pub fn get_query_for_symbol_type(symbol_type: &SymbolType) -> Option<&'static st
             (enum_declaration name: (identifier) @name)
         "#,
         ),
-        SymbolType::Class => Some(r#"(class_declaration name: (identifier) @name)"#),
-        SymbolType::Interface => Some(r#"(interface_declaration name: (identifier) @name)"#),
-        SymbolType::Enum => Some(r#"(enum_declaration name: (identifier) @name)"#),
-        SymbolType::Function | SymbolType::Method => {
-            Some(r#"(method_declaration name: (identifier) @name)"#)
-        }
-        SymbolType::Field => Some(
+        SymbolType::SuperClass => Some(r#"(class_declaration name: (identifier) @name)"#),
+        SymbolType::SuperInterface => Some(r#"(interface_declaration name: (identifier) @name)"#),
+        SymbolType::MethodCall => Some(r#"(method_declaration name: (identifier) @name)"#),
+        SymbolType::FieldUsage => Some(
             r#"(field_declaration declarator: (variable_declarator name: (identifier) @name))"#,
         ),
-        SymbolType::Variable => Some(
+        SymbolType::VariableUsage => Some(
             r#"
             (variable_declaration declarator: (variable_declarator name: (identifier) @name))
             (formal_parameter name: (identifier) @name)
         "#,
         ),
-        SymbolType::Parameter => Some(r#"(formal_parameter name: (identifier) @name)"#),
         _ => None,
     }
 }
@@ -79,39 +75,39 @@ pub fn determine_symbol_type_from_context(
         ; Variable declarations
         (variable_declaration
           declarator: (variable_declarator
-            name: (identifier) @variable_name))
+            name: (identifier) @var_decl))
 
         ; Field declarations  
         (field_declaration
           declarator: (variable_declarator
-            name: (identifier) @field_name))
+            name: (identifier) @field_decl))
 
         ; Class declarations
         (class_declaration
-          name: (identifier) @class_name)
+          name: (identifier) @class_decl)
 
         ; Interface declarations
         (interface_declaration
-          name: (identifier) @interface_name)
+          name: (identifier) @interface_decl)
 
         ; Method declarations
         (method_declaration
-          name: (identifier) @method_name)
+          name: (identifier) @method_decl)
 
         ; Enum declarations
         (enum_declaration
-          name: (identifier) @enum_name)
+          name: (identifier) @enum_decl)
 
         ; Parameters
         (formal_parameter
-          name: (identifier) @param_name)
+          name: (identifier) @param_decl)
 
         ; USAGES
         (field_access field: (identifier) @field_usage)
 
         (method_invocation name: (identifier) @method_usage)
 
-        (argument_list (identifier) @arg_usage)
+        (argument_list (identifier) @var_usage)
 
         (assignment_expression left: (identifier) @var_usage)
 
@@ -120,15 +116,15 @@ pub fn determine_symbol_type_from_context(
         ; Interface
         (class_declaration
           interfaces: (super_interfaces
-            (type_list (type_identifier) @interface_name)))
+            (type_list (type_identifier) @super_interface)))
         (interface_declaration
           (extends_interfaces
-            (type_list (type_identifier) @interface_name)))
+            (type_list (type_identifier) @super_interface)))
 
         ; Superclass
         (class_declaration
           superclass: (superclass
-            (type_identifier) @class_name))
+            (type_identifier) @super_class))
 
         ; Type identifiers
         (type_identifier) @type_name
@@ -136,6 +132,9 @@ pub fn determine_symbol_type_from_context(
         ; Imports
         (import_declaration
           (scoped_identifier) @import_name) 
+
+        ; Method usage
+        (scoped_identifier) @method_usage
     "#;
 
     let query = Query::new(&tree_sitter_groovy::language(), query_text)
@@ -156,21 +155,30 @@ pub fn determine_symbol_type_from_context(
 
             for capture in query_match.captures {
                 let capture_text = capture.node.utf8_text(source.as_bytes()).unwrap();
-                if capture_text == node_text {
+
+                let capture_range = capture.node.range();
+                let node_range = node.range();
+
+                if capture_text == node_text && capture_range == node_range {
                     let capture_name = query.capture_names()[capture.index as usize];
                     let symbol = match capture_name {
-                        "variable_name" => SymbolType::Variable,
-                        "field_name" => SymbolType::Field,
-                        "class_name" => SymbolType::Class,
-                        "interface_name" => SymbolType::Interface,
-                        "method_name" => SymbolType::Method,
-                        "enum_name" => SymbolType::Enum,
-                        "param_name" => SymbolType::Parameter,
-                        "method_usage" => SymbolType::Function,
+                        "import_name" => SymbolType::PackageDeclaration,
+                        "var_decl" => SymbolType::VariableDeclaration,
+                        "field_decl" => SymbolType::FieldDeclaration,
+                        "class_decl" => SymbolType::ClassDeclaration,
+                        "interface_decl" => SymbolType::InterfaceDeclaration,
+                        "method_decl" => SymbolType::MethodDeclaration,
+                        "enum_decl" => SymbolType::EnumDeclaration,
+                        "param_decl" => SymbolType::ParameterDeclaration,
+
+                        "method_usage" => SymbolType::MethodCall,
                         "type_name" => SymbolType::Type,
-                        "field_usage" => SymbolType::Field,
-                        "import_name" => SymbolType::Package,
-                        _ => SymbolType::Variable,
+                        "super_interface" => SymbolType::SuperInterface,
+                        "super_class" => SymbolType::SuperClass,
+                        "field_usage" => SymbolType::FieldUsage,
+                        "var_usage" => SymbolType::VariableUsage,
+
+                        _ => SymbolType::VariableUsage,
                     };
 
                     result = Ok(symbol);
@@ -189,7 +197,7 @@ pub fn search_definition<'a>(
     symbol_name: &str,
     symbol_type: SymbolType,
 ) -> Option<Node<'a>> {
-    let query_text = get_query_for_symbol_type(&symbol_type)?;
+    let query_text = get_declaration_query_for_symbol_type(&symbol_type)?;
 
     let candidates = find_definition_candidates(tree, source, symbol_name, query_text)?;
 
@@ -207,6 +215,7 @@ pub fn search_definition_in_project(
     let symbol_type =
         determine_symbol_type_from_context(&current_tree, usage_node, current_source).ok()?;
 
+    debug!("other_file_uri: {other_file_uri}");
     let other_tree = uri_to_tree(other_file_uri)?;
     let other_path = uri_to_path(other_file_uri)?;
     let other_source = read_to_string(other_path).ok()?;
@@ -261,6 +270,8 @@ pub fn resolve_through_imports(
 
             for capture in query_match.captures {
                 if let Ok(import_text) = capture.node.utf8_text(source.as_bytes()) {
+                    debug!("import_text: {import_text}, symbol_name: {symbol_name}");
+
                     if import_text.ends_with(&format!(".{}", symbol_name)) {
                         result = Some((project_root.clone(), import_text.to_string()));
                         return;

@@ -1,5 +1,6 @@
 use std::{collections::HashSet, path::PathBuf, sync::Arc};
 
+use log::debug;
 use tower_lsp::lsp_types::Location;
 use tree_sitter::Node;
 
@@ -16,6 +17,8 @@ pub fn find_in_workspace(
     usage_node: &Node,
     dependency_cache: Arc<DependencyCache>,
 ) -> Option<Location> {
+    debug!("find_in_workspace scope");
+
     // NOTE: Naive implementation, does not consider whether dependency is
     // valid, only checking if the symbol is in the cache.
     let workspace_projects: Vec<PathBuf> = dependency_cache
