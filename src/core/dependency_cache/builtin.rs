@@ -224,7 +224,6 @@ impl BuiltinResolver {
     fn find_package_source_directory(&self, package: &str) -> Result<PathBuf> {
         let package_path = package.replace('.', "/");
 
-        // Try JAVA_HOME for java.* packages
         if package.starts_with("java.") {
             if let Some(java_home) = &self.java_home {
                 let candidates = [
@@ -253,16 +252,12 @@ impl BuiltinResolver {
             }
         }
 
-        // Try GROOVY_HOME for groovy.* packages
         if package.starts_with("groovy.") {
             if let Some(groovy_home) = &self.groovy_home {
-                let candidates = [groovy_home
-                    .join("src")
-                    .join("main")
-                    .join("java")
-                    .join(&package_path)];
-
-                tracing::debug!("candidates: {:#?}", candidates);
+                let candidates = [
+                    groovy_home.join("src/main/java").join(&package_path),
+                    groovy_home.join("src/src/main/java").join(&package_path),
+                ];
 
                 for candidate in &candidates {
                     if candidate.exists() {
