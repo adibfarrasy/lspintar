@@ -13,6 +13,7 @@ use tokio::{fs, task::spawn_blocking};
 use tree_sitter::Tree;
 use walkdir::WalkDir;
 
+#[tracing::instrument(skip_all)]
 pub async fn find_project_roots() -> Result<Vec<PathBuf>> {
     let current_dir = std::env::current_dir().context("Failed to get current directory")?;
 

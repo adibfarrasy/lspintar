@@ -19,13 +19,15 @@ mod utils;
 pub fn handle(tree: &Tree, source: &str, location: Location) -> Option<Hover> {
     let node = location_to_node(&location, tree)?;
 
+    tracing::debug!("location: {:#?}", location);
+
     let symbol_type = determine_symbol_type_from_context(tree, &node, source).ok()?;
 
     let content = match symbol_type {
-        SymbolType::SuperClass => extract_class_signature(tree, source),
-        SymbolType::SuperInterface => extract_interface_signature(tree, source),
-        SymbolType::MethodCall => extract_method_signature(tree, &node, source),
-        SymbolType::FieldUsage => extract_field_signature(tree, &node, source),
+        SymbolType::ClassDeclaration => extract_class_signature(tree, source),
+        SymbolType::InterfaceDeclaration => extract_interface_signature(tree, source),
+        SymbolType::MethodDeclaration => extract_method_signature(tree, &node, source),
+        SymbolType::FieldDeclaration => extract_field_signature(tree, &node, source),
         _ => None,
     };
 

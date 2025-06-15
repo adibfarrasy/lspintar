@@ -1,9 +1,9 @@
-mod builtin;
+pub mod builtin;
 pub mod symbol_index;
 
 use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Instant};
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use builtin::BuiltinTypeInfo;
 use dashmap::DashMap;
 use log::debug;
@@ -16,11 +16,13 @@ use tokio::fs;
 pub struct DependencyCache {
     // Maps project root -> resolved classpath entries
     pub classpaths: Arc<DashMap<PathBuf, Vec<PathBuf>>>,
+    //
     // Maps (project_root, fully_qualified_name) -> file locations
     pub symbol_index: Arc<DashMap<(PathBuf, String), PathBuf>>,
 
     // Maps builtin class name -> (source_file_path, parsed_tree, source_content)
-    pub builtin_trees: Arc<DashMap<String, BuiltinTypeInfo>>,
+    pub builtin_infos: Arc<DashMap<String, BuiltinTypeInfo>>,
+
     // Maps package pattern -> source directory (java.lang.* -> /path/to/java/lang/)
     pub builtin_packages: Arc<DashMap<String, PathBuf>>,
 }
@@ -30,32 +32,39 @@ impl DependencyCache {
         Self {
             classpaths: Arc::new(DashMap::new()),
             symbol_index: Arc::new(DashMap::new()),
-            builtin_trees: Arc::new(DashMap::new()),
+            builtin_infos: Arc::new(DashMap::new()),
             builtin_packages: Arc::new(DashMap::new()),
         }
     }
 
+    #[tracing::instrument(skip_all)]
     pub async fn index_workspace(&self) -> Result<()> {
         let start = Instant::now();
-        debug!("Starting workspace indexing...");
+        tracing::debug!("Starting workspace indexing...");
 
         // Index classpath (read build.gradle, pom.xml, etc.)
         let classpath_start = Instant::now();
-        self.index_classpaths().await?;
-        debug!("Classpath indexing took: {:?}", classpath_start.elapsed());
+        self.index_classpaths()
+            .await
+            .inspect_err(|e| tracing::debug!("Failed to index classpath: {e}"))?;
+        tracing::debug!("Classpath indexing took: {:?}", classpath_start.elapsed());
 
         // Index all source files in the project
         let symbols_start = Instant::now();
-        self.index_project_symbols().await?;
-        debug!("Symbol indexing took: {:?}", symbols_start.elapsed());
+        self.index_project_symbols()
+            .await
+            .inspect_err(|e| tracing::debug!("Failed to index project symbols: {e}"))?;
+        tracing::debug!("Symbol indexing took: {:?}", symbols_start.elapsed());
 
         // Index builtin types (java.lang.*, groovy.lang.*)
         let builtin_start = Instant::now();
-        self.index_builtin_types().await?;
-        debug!("Builtin indexing took: {:?}", builtin_start.elapsed());
+        self.index_builtin_types()
+            .await
+            .inspect_err(|e| tracing::debug!("Failed to index builtin types: {e}"))?;
+        tracing::debug!("Builtin indexing took: {:?}", builtin_start.elapsed());
 
         let total_time = start.elapsed();
-        debug!("Total workspace indexing completed in: {:?}", total_time);
+        tracing::debug!("Total workspace indexing completed in: {:?}", total_time);
 
         Ok(())
     }
@@ -65,21 +74,24 @@ impl DependencyCache {
         Ok(())
     }
 
+    #[tracing::instrument(skip_all)]
     async fn index_project_symbols(&self) -> Result<()> {
-        let project_roots = find_project_roots().await?;
+        let project_roots = find_project_roots()
+            .await
+            .inspect_err(|e| tracing::debug!("Failed to get project roots: {e}"))?;
 
         for project_root in project_roots {
             let source_files = collect_source_files(&project_root)
                 .await
-                .context("failed to collect source_files")?;
+                .inspect_err(|e| tracing::debug!("Failed to collect source_files: {e}"))?;
 
             let parsed_files = parse_source_files_parallel(source_files)
                 .await
-                .context("failed to parse files")?;
+                .inspect_err(|e| tracing::debug!("Failed to parse files: {e}"))?;
 
             let symbol_definitions = extract_symbol_definitions(parsed_files)
                 .await
-                .context("failed to extract symbol definitions")?;
+                .inspect_err(|e| tracing::debug!("Failed to extract symbol definitions: {e}"))?;
 
             for symbol in symbol_definitions {
                 let key = (project_root.clone(), symbol.fully_qualified_name);
@@ -92,15 +104,21 @@ impl DependencyCache {
         Ok(())
     }
 
+    #[tracing::instrument(skip_all)]
     async fn dump_to_file(&self) -> Result<()> {
-        let home_dir = dirs::home_dir().context("Failed to get home directory")?;
+        let home_dir = dirs::home_dir().with_context(|| {
+            tracing::debug!("Failed to get home directory");
+            anyhow!("Failed to get home directory")
+        })?;
 
         let dump_file = home_dir.join("lsp_symbol_index.json");
 
         let serializable_data = self.convert_symbol_index_to_json_format();
 
-        let json_content = serde_json::to_string_pretty(&serializable_data)
-            .context("Failed to serialize symbol index")?;
+        let json_content = serde_json::to_string_pretty(&serializable_data).with_context(|| {
+            tracing::debug!("Failed to get JSON content");
+            anyhow!("Failed to serialize symbol index")
+        })?;
 
         fs::write(&dump_file, json_content)
             .await
@@ -133,7 +151,7 @@ impl DependencyCache {
     }
 
     async fn index_builtin_types(&self) -> Result<()> {
-        // TODO: implement
-        Ok(())
+        let resolver = builtin::BuiltinResolver::new();
+        resolver.initialize_builtins(self).await
     }
 }

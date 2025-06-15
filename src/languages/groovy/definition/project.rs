@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use log::debug;
 use tower_lsp::lsp_types::Location;
 use tree_sitter::Node;
 
@@ -8,14 +7,13 @@ use crate::core::{dependency_cache::DependencyCache, utils::path_to_file_uri};
 
 use super::utils::{prepare_symbol_lookup_key, search_definition_in_project};
 
+#[tracing::instrument(skip_all)]
 pub fn find_in_project(
     source: &str,
     file_uri: &str,
     usage_node: &Node,
     dependency_cache: Arc<DependencyCache>,
 ) -> Option<Location> {
-    debug!("find_in_project scope");
-
     let symbol_key = prepare_symbol_lookup_key(usage_node, source, file_uri, None)?;
 
     let file_location = dependency_cache.symbol_index.get(&symbol_key)?;

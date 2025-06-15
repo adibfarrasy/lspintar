@@ -11,18 +11,19 @@ use super::utils::{
     get_declaration_query_for_symbol_type,
 };
 
+#[tracing::instrument(skip_all)]
 pub fn find_local(
     tree: &Tree,
     source: &str,
     file_uri: &str,
     usage_node: &Node,
 ) -> Option<Location> {
-    debug!("find_local scope");
     let definition_node = search_local_definitions(tree, source, usage_node)?;
 
     node_to_lsp_location(&definition_node, file_uri)
 }
 
+#[tracing::instrument(skip_all)]
 pub fn search_local_definitions<'a>(
     tree: &'a Tree,
     source: &str,
@@ -49,6 +50,7 @@ pub fn search_local_definitions<'a>(
     }
 }
 
+#[tracing::instrument(skip_all)]
 fn find_closest_declaration<'a>(usage_node: &Node, candidates: &[Node<'a>]) -> Option<Node<'a>> {
     let mut best_candidate = None;
     let mut best_scope_distance = usize::MAX;
@@ -65,6 +67,7 @@ fn find_closest_declaration<'a>(usage_node: &Node, candidates: &[Node<'a>]) -> O
     best_candidate
 }
 
+#[tracing::instrument(skip_all)]
 fn calculate_scope_distance(usage_node: &Node, declaration_node: &Node) -> Option<usize> {
     // Check if declaration is in scope of usage
     if !is_in_scope(usage_node, declaration_node) {
@@ -150,6 +153,7 @@ pub struct MethodSignature {
     pub param_names: Vec<String>,
 }
 
+#[tracing::instrument(skip_all)]
 fn extract_call_signature(usage_node: &Node, source: &str) -> Option<CallSignature> {
     let method_invocation = find_parent_method_invocation(usage_node)?;
 
@@ -169,6 +173,7 @@ fn extract_call_signature(usage_node: &Node, source: &str) -> Option<CallSignatu
     })
 }
 
+#[tracing::instrument(skip_all)]
 fn extract_method_signature(method_node: &Node, source: &str) -> Option<MethodSignature> {
     if method_node.kind() != "method_declaration" {
         return None;
@@ -369,7 +374,7 @@ fn contains_floating_point_operand(binary_expr: &Node, source: &str) -> bool {
         match child.kind() {
             "decimal_floating_point_literal" | "hex_floating_point_literal" => return true,
             "identifier" => {
-                // Could enhance with variable type lookup
+                // TODO: Could enhance with variable type lookup
                 // For now, conservatively assume it might be floating point
                 continue;
             }
@@ -387,6 +392,11 @@ fn types_compatible(call_type: &str, param_type: &str) -> bool {
         // Groovy's def accepts anything
         (_, "def") => true,
         ("def", _) => true,
+
+        // Collection interface compatibility
+        ("List", "Collection") => true,
+        ("Map", "Object") => true,
+        ("List", "Object") => true,
 
         // Object accepts anything (boxing)
         (_, "Object") => true,
@@ -409,11 +419,6 @@ fn types_compatible(call_type: &str, param_type: &str) -> bool {
         ("String", "GString") => true,
         ("GString", "String") => true,
 
-        // Collection interface compatibility
-        ("List", "Collection") => true,
-        ("Map", "Object") => true,
-        ("List", "Object") => true,
-
         // Null compatibility with reference types
         ("null", param_type) if !is_primitive_type(param_type) => true,
 
@@ -428,6 +433,7 @@ fn is_primitive_type(type_name: &str) -> bool {
     )
 }
 
+#[tracing::instrument(skip_all)]
 fn find_best_method_match<'a>(
     tree: &'a Tree,
     source: &str,

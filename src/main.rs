@@ -12,8 +12,12 @@ mod server;
 
 #[tokio::main]
 async fn main() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug"))
-        .target(env_logger::Target::Stderr)
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .with_writer(std::io::stderr)
+        .with_ansi(false)
+        .without_time()
+        .with_target(false)
         .init();
 
     let mut registry = LanguageRegistry::new();

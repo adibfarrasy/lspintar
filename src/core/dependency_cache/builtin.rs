@@ -1,7 +1,8 @@
-use std::path::PathBuf;
+use std::{io::Read, path::PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use tree_sitter::Tree;
+use zip::ZipArchive;
 
 use crate::core::{constants::GROOVY_DEFAULT_IMPORTS, utils::create_parser_for_language};
 
@@ -10,6 +11,7 @@ use super::DependencyCache;
 #[derive(Debug, Clone)]
 pub struct BuiltinTypeInfo {
     pub source_path: PathBuf,
+    pub zip_internal_path: Option<String>, // "java/lang/String.java"
     pub tree: Tree,
     pub content: String,
     pub package: String,
@@ -18,7 +20,7 @@ pub struct BuiltinTypeInfo {
 pub struct BuiltinResolver {
     java_home: Option<PathBuf>,
     groovy_home: Option<PathBuf>,
-    gradle_home: Option<PathBuf>,
+    build_tool_home: Option<PathBuf>,
 }
 
 impl BuiltinResolver {
@@ -26,18 +28,27 @@ impl BuiltinResolver {
         Self {
             java_home: std::env::var("JAVA_HOME").ok().map(PathBuf::from),
             groovy_home: std::env::var("GROOVY_HOME").ok().map(PathBuf::from),
-            gradle_home: std::env::var("GRADLE_HOME").ok().map(PathBuf::from),
+
+            // TODO: must detect build tool first, then handle accordingly.
+            build_tool_home: std::env::var("GRADLE_HOME").ok().map(PathBuf::from),
         }
     }
 
+    #[tracing::instrument(skip_all)]
     pub async fn initialize_builtins(&self, cache: &DependencyCache) -> Result<()> {
-        for import_pattern in GROOVY_DEFAULT_IMPORTS {
-            self.resolve_import_pattern(import_pattern, cache).await?;
-        }
+        let futures: Vec<_> = GROOVY_DEFAULT_IMPORTS
+            .iter()
+            .map(|import_pattern| self.resolve_import_pattern(import_pattern, cache))
+            .collect();
+
+        futures::future::try_join_all(futures).await?;
+
+        tracing::debug!("builtins initialized.");
 
         Ok(())
     }
 
+    #[tracing::instrument(skip_all)]
     async fn resolve_import_pattern(
         &self,
         import_pattern: &str,
@@ -47,50 +58,14 @@ impl BuiltinResolver {
             let package = &import_pattern[..import_pattern.len() - 2]; // Remove ".*"
             self.load_package_classes(package, cache).await?;
         } else {
-            // Handle specific class imports (e.g., "java.math.BigDecimal")
             self.load_specific_class(import_pattern, cache).await?;
         }
         Ok(())
     }
 
+    #[tracing::instrument(skip_all)]
     async fn load_package_classes(&self, package: &str, cache: &DependencyCache) -> Result<()> {
-        // Step 1: Find source directory for package
-        let source_dir = self
-            .find_package_source_directory(package)
-            .context(format!(
-                "Failed to find source directory for package: {}",
-                package
-            ))?;
-
-        // Step 2: Scan directory for .java/.groovy files
-        let source_files = std::fs::read_dir(&source_dir)?
-            .filter_map(|entry| entry.ok())
-            .filter(|entry| {
-                entry
-                    .path()
-                    .extension()
-                    .and_then(|ext| ext.to_str())
-                    .map(|ext| ext == "java" || ext == "groovy")
-                    .unwrap_or(false)
-            })
-            .collect::<Vec<_>>();
-
-        // Step 3: Parse each source file
-        for entry in source_files {
-            let file_path = entry.path();
-            if let Some(class_name) = file_path.file_stem().and_then(|s| s.to_str()) {
-                self.parse_and_cache_builtin(class_name, &file_path, package, cache)
-                    .await
-                    .context(format!("Failed to parse builtin class: {}", class_name))?;
-            }
-        }
-
-        // Step 4: Cache the package directory mapping
-        cache
-            .builtin_packages
-            .insert(format!("{}.*", package), source_dir);
-
-        Ok(())
+        self.load_classes_filtered(package, None, cache).await
     }
 
     async fn load_specific_class(
@@ -98,7 +73,6 @@ impl BuiltinResolver {
         full_class_name: &str,
         cache: &DependencyCache,
     ) -> Result<()> {
-        // Step 1: Split package and class name
         let parts: Vec<&str> = full_class_name.rsplitn(2, '.').collect();
         if parts.len() != 2 {
             return Err(anyhow::anyhow!("Invalid class name: {}", full_class_name));
@@ -107,17 +81,142 @@ impl BuiltinResolver {
         let class_name = parts[0];
         let package = parts[1];
 
-        // Step 2: Find source file
-        let source_file = self
-            .find_class_source_file(package, class_name)
-            .context(format!(
-                "Failed to find source file for: {}",
-                full_class_name
-            ))?;
+        self.load_classes_filtered(package, Some(class_name), cache)
+            .await
+    }
 
-        // Step 3: Parse and cache
-        self.parse_and_cache_builtin(class_name, &source_file, package, cache)
-            .await?;
+    async fn load_classes_filtered(
+        &self,
+        package: &str,
+        specific_class: Option<&str>, // None = all classes, Some = specific class only
+        cache: &DependencyCache,
+    ) -> Result<()> {
+        let source_path = self
+            .find_package_source_directory(package)
+            .with_context(|| {
+                let err_text = format!("Failed to find source directory for package: {}", package);
+                tracing::debug!(err_text);
+                anyhow!(err_text)
+            })?;
+
+        if source_path.extension().and_then(|s| s.to_str()) == Some("zip") {
+            self.load_from_zip(&source_path, package, specific_class, cache)
+                .await?
+        } else {
+            self.load_from_directory(&source_path, package, specific_class, cache)
+                .await?
+        }
+
+        // Only cache package mapping for wildcard imports
+        if specific_class.is_none() {
+            cache
+                .builtin_packages
+                .insert(format!("{}.*", package), source_path);
+        }
+
+        Ok(())
+    }
+
+    async fn load_from_directory(
+        &self,
+        source_dir: &PathBuf,
+        package: &str,
+        specific_class: Option<&str>,
+        cache: &DependencyCache,
+    ) -> Result<()> {
+        let source_files = std::fs::read_dir(source_dir)?
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| {
+                let path = entry.path();
+                let is_source = path
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .map(|ext| ext == "java" || ext == "groovy")
+                    .unwrap_or(false);
+
+                if let Some(target_class) = specific_class {
+                    // Filter to specific class
+                    let class_name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                    is_source && class_name == target_class
+                } else {
+                    // All source files
+                    is_source
+                }
+            })
+            .collect::<Vec<_>>();
+
+        for entry in source_files {
+            let file_path = entry.path();
+            let content = tokio::fs::read_to_string(&file_path).await?;
+
+            if let Some(class_name) = file_path.file_stem().and_then(|s| s.to_str()) {
+                self.parse_and_cache_builtin(
+                    class_name,
+                    file_path.clone(),
+                    None,
+                    content,
+                    package,
+                    cache,
+                )
+                .await
+                .with_context(|| {
+                    let err_text = format!("Failed to parse builtin class: {}", class_name);
+                    tracing::debug!(err_text);
+                    anyhow!(err_text)
+                })?;
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn load_from_zip(
+        &self,
+        zip_path: &PathBuf,
+        package: &str,
+        specific_class: Option<&str>,
+        cache: &DependencyCache,
+    ) -> Result<()> {
+        let file = std::fs::File::open(zip_path)?;
+        let mut archive = ZipArchive::new(file)?;
+
+        let package_prefix = format!("{}/", package.replace('.', "/"));
+
+        for i in 0..archive.len() {
+            let mut zip_file = archive.by_index(i)?;
+            let file_name = zip_file.name().to_string();
+
+            if file_name.starts_with(&package_prefix)
+                && (file_name.ends_with(".java") || file_name.ends_with(".groovy"))
+            {
+                let class_name = file_name
+                    .split('/')
+                    .last()
+                    .unwrap()
+                    .trim_end_matches(".java")
+                    .trim_end_matches(".groovy");
+
+                // Filter to specific class if requested
+                if let Some(target_class) = specific_class {
+                    if class_name != target_class {
+                        continue;
+                    }
+                }
+
+                let mut content = String::new();
+                zip_file.read_to_string(&mut content)?;
+
+                self.parse_and_cache_builtin(
+                    class_name,
+                    zip_path.clone(),
+                    Some(file_name.clone()),
+                    content,
+                    package,
+                    cache,
+                )
+                .await?;
+            }
+        }
 
         Ok(())
     }
@@ -125,13 +224,12 @@ impl BuiltinResolver {
     fn find_package_source_directory(&self, package: &str) -> Result<PathBuf> {
         let package_path = package.replace('.', "/");
 
-        // Step 1: Try JAVA_HOME for java.* packages
+        // Try JAVA_HOME for java.* packages
         if package.starts_with("java.") {
             if let Some(java_home) = &self.java_home {
                 let candidates = [
                     java_home.join("src").join(&package_path), // OpenJDK layout
                     java_home.join("lib").join("src").join(&package_path), // Some distributions
-                    java_home.join("src.zip").join(&package_path), // If extracted
                 ];
 
                 for candidate in &candidates {
@@ -139,25 +237,32 @@ impl BuiltinResolver {
                         return Ok(candidate.clone());
                     }
                 }
+
+                let src_zip = java_home.join("src.zip");
+                if src_zip.exists() {
+                    let classes = self.find_classes_in_zip(&src_zip, package)?;
+                    if !classes.is_empty() {
+                        tracing::debug!(
+                            "Found {} classes in src.zip for package {}",
+                            classes.len(),
+                            package
+                        );
+                        return Ok(src_zip);
+                    }
+                }
             }
         }
 
-        // Step 2: Try GROOVY_HOME for groovy.* packages
+        // Try GROOVY_HOME for groovy.* packages
         if package.starts_with("groovy.") {
             if let Some(groovy_home) = &self.groovy_home {
-                let candidates = [
-                    groovy_home
-                        .join("src")
-                        .join("main")
-                        .join("java")
-                        .join(&package_path),
-                    groovy_home
-                        .join("src")
-                        .join("main")
-                        .join("groovy")
-                        .join(&package_path),
-                    groovy_home.join("src").join(&package_path),
-                ];
+                let candidates = [groovy_home
+                    .join("src")
+                    .join("main")
+                    .join("java")
+                    .join(&package_path)];
+
+                tracing::debug!("candidates: {:#?}", candidates);
 
                 for candidate in &candidates {
                     if candidate.exists() {
@@ -167,16 +272,8 @@ impl BuiltinResolver {
             }
         }
 
-        // Step 3: Try Gradle cache for any package
-        if let Some(gradle_home) = &self.gradle_home {
-            let cache_dir = gradle_home
-                .join("caches")
-                .join("modules-2")
-                .join("files-2.1");
-            // This would require more complex logic to find the right JAR and extract source
-            // For now, skip this implementation
-            // TODO: fix this
-        }
+        // FIXME: integrate with build tool to resolve imports
+        if let Some(_) = &self.build_tool_home {}
 
         Err(anyhow::anyhow!(
             "Could not find source directory for package: {}",
@@ -184,63 +281,69 @@ impl BuiltinResolver {
         ))
     }
 
-    fn find_class_source_file(&self, package: &str, class_name: &str) -> Result<PathBuf> {
-        let package_dir = self.find_package_source_directory(package)?;
+    fn find_classes_in_zip(&self, zip_path: &PathBuf, package: &str) -> Result<Vec<String>> {
+        let file = std::fs::File::open(zip_path)?;
+        let archive = ZipArchive::new(file)?;
 
-        let candidates = [
-            package_dir.join(format!("{}.java", class_name)),
-            package_dir.join(format!("{}.groovy", class_name)),
-        ];
+        let package_prefix = format!("{}/", package.replace('.', "/"));
 
-        for candidate in &candidates {
-            if candidate.exists() {
-                return Ok(candidate.clone());
-            }
-        }
+        let classes: Vec<String> = archive
+            .file_names()
+            .filter(|name| {
+                // Same level only
+                name.starts_with(&package_prefix)
+                    && (name.ends_with(".java") || name.ends_with(".groovy"))
+                    && name.matches('/').count() == package_prefix.matches('/').count()
+            })
+            .map(|name| {
+                name.split('/')
+                    .last()
+                    .unwrap()
+                    .trim_end_matches(".java")
+                    .trim_end_matches(".groovy")
+                    .to_string()
+            })
+            .collect();
 
-        Err(anyhow::anyhow!(
-            "Could not find source file for class: {}.{}",
-            package,
-            class_name
-        ))
+        Ok(classes)
     }
 
+    #[tracing::instrument(skip_all)]
     async fn parse_and_cache_builtin(
         &self,
         class_name: &str,
-        source_path: &PathBuf,
+        source_path: PathBuf,
+        zip_internal_path: Option<String>,
+        content: String,
         package: &str,
         cache: &DependencyCache,
     ) -> Result<()> {
-        // Step 1: Read source file
-        let content = tokio::fs::read_to_string(source_path)
-            .await
-            .context("Failed to read source file")?;
-
-        // Step 2: Create appropriate parser
         let language = if source_path.extension().and_then(|s| s.to_str()) == Some("groovy") {
             "groovy"
         } else {
             "java"
         };
 
-        let mut parser = create_parser_for_language(language).context("Failed to create parser")?;
+        let mut parser = create_parser_for_language(language).with_context(|| {
+            tracing::debug!("Failed to create parser for {language}");
+            "Failed to create parser"
+        })?;
 
-        // Step 3: Parse source
-        let tree = parser
-            .parse(&content, None)
-            .context("Failed to parse source file")?;
+        let tree = parser.parse(&content, None).with_context(|| {
+            tracing::debug!("Failed to parse source file {:#?}", source_path);
+            "Failed to parse source file"
+        })?;
 
-        // Step 4: Cache the parsed result
         let builtin_info = BuiltinTypeInfo {
-            source_path: source_path.clone(),
+            source_path,
+            zip_internal_path,
             tree,
             content,
             package: package.to_string(),
         };
 
         cache
-            .builtin_trees
+            .builtin_infos
             .insert(class_name.to_string(), builtin_info);
 
         Ok(())

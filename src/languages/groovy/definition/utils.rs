@@ -4,8 +4,8 @@ use std::{
 };
 
 use anyhow::{anyhow, Context, Result};
-use log::debug;
 use tower_lsp::lsp_types::Location;
+use tracing::debug;
 use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator, Tree};
 
 use crate::core::{
@@ -13,6 +13,7 @@ use crate::core::{
     utils::{find_project_root, node_to_lsp_location, uri_to_path, uri_to_tree},
 };
 
+#[tracing::instrument(skip_all)]
 pub fn get_declaration_query_for_symbol_type(symbol_type: &SymbolType) -> Option<&'static str> {
     match symbol_type {
         SymbolType::Type => Some(
@@ -38,6 +39,7 @@ pub fn get_declaration_query_for_symbol_type(symbol_type: &SymbolType) -> Option
     }
 }
 
+#[tracing::instrument(skip_all)]
 pub fn find_definition_candidates<'a>(
     tree: &'a Tree,
     source: &str,
@@ -63,6 +65,7 @@ pub fn find_definition_candidates<'a>(
     Some(candidates)
 }
 
+#[tracing::instrument(skip_all)]
 pub fn determine_symbol_type_from_context(
     tree: &Tree,
     node: &Node,
@@ -191,6 +194,7 @@ pub fn determine_symbol_type_from_context(
     result
 }
 
+#[tracing::instrument(skip_all)]
 pub fn search_definition<'a>(
     tree: &'a Tree,
     source: &str,
@@ -204,6 +208,7 @@ pub fn search_definition<'a>(
     candidates.into_iter().next()
 }
 
+#[tracing::instrument(skip_all)]
 pub fn search_definition_in_project(
     current_file_uri: &str,
     current_source: &str,
@@ -225,6 +230,7 @@ pub fn search_definition_in_project(
     return node_to_lsp_location(&definition_node, &other_file_uri);
 }
 
+#[tracing::instrument(skip_all)]
 pub fn prepare_symbol_lookup_key(
     usage_node: &Node,
     source: &str,

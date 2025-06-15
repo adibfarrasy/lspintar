@@ -2,7 +2,6 @@ use core::panic;
 use std::sync::Arc;
 
 use anyhow::Result;
-use log::debug;
 use tower_lsp::lsp_types::{Diagnostic, Hover, Location, Position};
 use tree_sitter::{Parser, Tree};
 

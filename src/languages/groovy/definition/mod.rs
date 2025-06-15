@@ -4,7 +4,6 @@ use anyhow::{anyhow, Result};
 use builtin::find_builtin;
 use external::find_external;
 use local::find_local;
-use log::debug;
 use project::find_in_project;
 use tower_lsp::lsp_types::Location;
 use tree_sitter::{Node, Tree};
@@ -29,15 +28,10 @@ pub fn handle(
     usage_node: &Node,
 ) -> Result<Location> {
     find_local(tree, source, file_uri, usage_node)
-        .inspect(|_| debug!("matched find_local"))
         .or_else(|| find_in_project(source, file_uri, usage_node, dependency_cache.clone()))
-        .inspect(|_| debug!("matched find_in_project"))
-        .or_else(|| find_builtin(source, file_uri, usage_node, dependency_cache.clone()))
-        .inspect(|_| debug!("matched find_builtin"))
+        .or_else(|| find_builtin(source, usage_node, dependency_cache.clone()))
         .or_else(|| find_in_workspace(source, file_uri, usage_node, dependency_cache.clone()))
-        .inspect(|_| debug!("matched find_in_workspace"))
         .or_else(|| find_external(source, file_uri, usage_node, dependency_cache.clone()))
-        .inspect(|_| debug!("matched find_external"))
         .and_then(|location| set_start_position(source, usage_node, &location.uri.to_string()))
         .ok_or_else(|| anyhow!("Definition not found"))
 }

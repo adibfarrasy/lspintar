@@ -59,7 +59,6 @@ impl DiagnosticManager {
             pending.insert(uri, request.clone());
         }
 
-        // Send for processing
         let _ = self.request_sender.send(request);
     }
 
@@ -75,7 +74,6 @@ impl DiagnosticManager {
             // Debouncing: wait a bit to see if more changes come
             sleep(Duration::from_millis(DEBOUNCE_MS)).await;
 
-            // Check if this request is still the latest for this URI
             let is_latest = {
                 let pending = pending_requests.read().await;
                 pending
@@ -85,10 +83,9 @@ impl DiagnosticManager {
             };
 
             if !is_latest {
-                continue; // Skip outdated request
+                continue;
             }
 
-            // Process the request
             if let Some(diagnostics) =
                 Self::generate_diagnostics(&language_registry, &request).await
             {
@@ -99,7 +96,6 @@ impl DiagnosticManager {
                 }
             }
 
-            // Remove from pending
             {
                 let mut pending = pending_requests.write().await;
                 pending.remove(&request.uri);
@@ -113,7 +109,6 @@ impl DiagnosticManager {
     ) -> Option<Vec<Diagnostic>> {
         let language_support = language_registry.detect_language(&request.uri)?;
 
-        // Spawn blocking task for parsing (CPU-intensive)
         let content = request.content.clone();
         let language_support_clone = language_support.clone();
 

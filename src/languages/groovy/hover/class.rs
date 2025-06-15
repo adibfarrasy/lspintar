@@ -3,6 +3,7 @@ use tree_sitter::{Query, QueryCursor, StreamingIterator, Tree};
 
 use super::utils::partition_modifiers;
 
+#[tracing::instrument(skip_all)]
 pub fn extract_class_signature(tree: &Tree, source: &str) -> Option<String> {
     let query_text = r#"
     (package_declaration

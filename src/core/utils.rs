@@ -8,13 +8,19 @@ use tree_sitter::{Node, Parser, Tree};
 
 use super::constants::PROJECT_ROOT_MARKER;
 
+#[tracing::instrument(skip_all)]
 pub fn path_to_file_uri(file_path: &PathBuf) -> Option<String> {
-    let url = Url::from_file_path(file_path).ok()?;
+    let url = Url::from_file_path(file_path)
+        .inspect_err(|_| tracing::debug!("Cannot convert file_path {:#?} to Url", file_path))
+        .ok()?;
+
     Some(url.to_string())
 }
 
 pub fn uri_to_path(uri: &str) -> Option<PathBuf> {
-    let url = Url::parse(uri).ok()?;
+    let url = Url::parse(uri)
+        .inspect_err(|_| tracing::debug!("Cannot convert uri {uri} to Url"))
+        .ok()?;
     url.to_file_path().ok()
 }
 
@@ -36,13 +42,22 @@ pub fn find_project_root(file_path: &Path) -> Option<PathBuf> {
 pub fn create_parser_for_language(language: &str) -> Option<Parser> {
     let mut parser = Parser::new();
 
-    let tree_sitter_language = match language {
-        "groovy" => tree_sitter_groovy::language(),
-        // "java" => tree_sitter_java::language(),
+    match language {
+        "groovy" => {
+            parser
+                .set_language(&tree_sitter_groovy::language())
+                .inspect_err(|e| tracing::debug!("Cannot set groovy parser: {e}"))
+                .ok()?;
+        }
+        "java" => {
+            parser
+                .set_language(&tree_sitter_java::LANGUAGE.into())
+                .inspect_err(|e| tracing::debug!("Cannot set java parser: {e}"))
+                .ok()?;
+        }
         _ => return None,
     };
 
-    parser.set_language(&tree_sitter_language).ok()?;
     Some(parser)
 }
 
@@ -55,10 +70,13 @@ pub fn detect_language_from_path(file_path: &PathBuf) -> Option<&'static str> {
     }
 }
 
+#[tracing::instrument(skip_all)]
 pub fn uri_to_tree(uri: &str) -> Option<Tree> {
     let file_path = uri_to_path(uri)?;
 
-    let file_content = read_to_string(&file_path).ok()?;
+    let file_content = read_to_string(&file_path)
+        .inspect_err(|_| tracing::debug!("Cannot get file content from file_path {:#?}", file_path))
+        .ok()?;
 
     let language = detect_language_from_path(&file_path)?;
 
@@ -78,6 +96,7 @@ pub fn node_contains_position(node: &Node, position: Position) -> bool {
         && (pos_line < end.row || (pos_line == end.row && pos_char <= end.column))
 }
 
+#[tracing::instrument(skip_all)]
 pub fn node_to_lsp_location(node: &Node, file_uri: &str) -> Option<Location> {
     let start_pos = node.start_position();
     let end_pos = node.end_position();
@@ -93,11 +112,14 @@ pub fn node_to_lsp_location(node: &Node, file_uri: &str) -> Option<Location> {
         },
     };
 
-    let uri = Url::parse(file_uri).ok()?;
+    let uri = Url::parse(file_uri)
+        .inspect_err(|e| tracing::debug!("Failed to parse URI: {e}"))
+        .ok()?;
     Some(Location { uri, range })
 }
 
 // only get the closest node to root
+#[tracing::instrument(skip_all)]
 pub fn location_to_node<'a>(location: &Location, tree: &'a Tree) -> Option<Node<'a>> {
     let position = location.range.start;
     find_node_at_position(tree, position)

@@ -3,6 +3,7 @@ use anyhow::{anyhow, Context, Result};
 use tower_lsp::lsp_types::Position;
 use tree_sitter::{Node, Query, QueryCursor, StreamingIterator, Tree};
 
+#[tracing::instrument(skip_all)]
 pub fn find_identifier_at_position<'a>(
     tree: &'a Tree,
     source: &str,

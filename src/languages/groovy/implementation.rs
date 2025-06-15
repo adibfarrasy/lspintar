@@ -50,6 +50,7 @@ pub fn handle(
     }
 }
 
+#[tracing::instrument(skip_all)]
 async fn find_interface_implementations(
     interface_name: &str,
     dependency_cache: &DependencyCache,
@@ -71,7 +72,6 @@ async fn find_interface_implementations(
 
     let results = futures::future::join_all(tasks).await;
 
-    debug!("I'm here");
     let mut implementations = Vec::new();
     for result in results {
         if let Ok(Ok(impls)) = result {
@@ -82,6 +82,7 @@ async fn find_interface_implementations(
     Ok(implementations)
 }
 
+#[tracing::instrument(skip_all)]
 async fn find_implementations_in_file(file_uri: &str, target_name: &str) -> Result<Vec<Location>> {
     let file_path = uri_to_path(file_uri).context("Invalid file URI")?;
     let content = fs::read_to_string(&file_path)
@@ -131,13 +132,13 @@ async fn find_implementations_in_file(file_uri: &str, target_name: &str) -> Resu
                 }
             });
 
-        debug!("interface implementation locations: {:#?}", locations);
         Ok(locations)
     })
     .await
     .map_err(|e| anyhow::anyhow!("Task join error: {}", e))?
 }
 
+#[tracing::instrument(skip_all)]
 fn get_parent_name(tree: &Tree, source: &str, symbol_name: &str) -> Option<String> {
     let mut cursor = tree_sitter::QueryCursor::new();
 
@@ -178,6 +179,7 @@ fn get_parent_name(tree: &Tree, source: &str, symbol_name: &str) -> Option<Strin
     interface_name
 }
 
+#[tracing::instrument(skip_all)]
 async fn find_method_implementations(
     symbol_name: &str,
     locations: Vec<Location>,
@@ -219,6 +221,7 @@ async fn find_method_implementations(
     Ok(results)
 }
 
+#[tracing::instrument(skip_all)]
 fn get_implementation_query() -> &'static Option<Query> {
     IMPLEMENTATION_QUERY.get_or_init(|| {
         let language = tree_sitter_groovy::language();
@@ -234,6 +237,7 @@ fn get_implementation_query() -> &'static Option<Query> {
     })
 }
 
+#[tracing::instrument(skip_all)]
 fn get_implementation_with_method_query() -> &'static Option<Query> {
     IMPLEMENTATION_WITH_METHOD_QUERY.get_or_init(|| {
         let language = tree_sitter_groovy::language();
@@ -251,6 +255,7 @@ fn get_implementation_with_method_query() -> &'static Option<Query> {
     })
 }
 
+#[tracing::instrument(skip_all)]
 fn get_interface_declaration_query() -> &'static Option<Query> {
     INTERFACE_DECLARATION_QUERY.get_or_init(|| {
         let language = tree_sitter_groovy::language();

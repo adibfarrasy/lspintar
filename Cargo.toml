@@ -6,7 +6,6 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.98"
 dashmap = "6.1.0"
-env_logger = "0.11.8"
 log = "0.4.27"
 tokio = { version = "1.45.1", features = ["full"] }
 tower-lsp = "0.20.0"
@@ -19,3 +18,7 @@ dirs = "6.0.0"
 serde_json = "1.0.140"
 chrono = "0.4.41"
 just = "1.40.0"
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+zip = "4.1.0"
+tree-sitter-java = "0.23.5"

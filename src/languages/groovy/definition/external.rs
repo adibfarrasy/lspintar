@@ -13,9 +13,7 @@ pub fn find_external(
     usage_node: &Node,
     dependency_cache: Arc<DependencyCache>,
 ) -> Option<Location> {
-    debug!("find_external scope");
-
-    // TODO: implement
+    // FIXME: implement
     // Step 1: Read the external file
 
     // Step 2: Determine language and create parser
