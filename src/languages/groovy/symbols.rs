@@ -10,8 +10,6 @@ use crate::core::{
 
 static EXTRACT_SYMBOL_QUERIES: OnceLock<Vec<(Query, SymbolType)>> = OnceLock::new();
 
-static HOVER_QUERIES: OnceLock<Vec<(Query, SymbolType)>> = OnceLock::new();
-
 // TODO: currently only handles non-nested declarations
 // enhance with recursion to create proper fully-qualified names for inner classes, methods, and
 // properties.

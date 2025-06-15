@@ -1,6 +1,9 @@
 use anyhow::{Context, Result};
 use log::debug;
-use std::sync::{Arc, OnceLock};
+use std::{
+    path::PathBuf,
+    sync::{Arc, OnceLock},
+};
 use tokio::{fs, spawn, task};
 use tower_lsp::lsp_types::{Location, Position};
 use tree_sitter::{Query, QueryCursor, StreamingIterator, Tree};
@@ -57,12 +60,15 @@ async fn find_interface_implementations(
 ) -> Result<Vec<Location>> {
     // TODO: because it's always looping this has performance issue
     // implement caching import sites next
-
-    let tasks: Vec<_> = dependency_cache
+    let unique_files: std::collections::HashSet<PathBuf> = dependency_cache
         .symbol_index
         .iter()
-        .filter_map(|entry| {
-            let (_, file_path) = (entry.key(), entry.value());
+        .map(|entry| entry.value().clone())
+        .collect();
+
+    let tasks: Vec<_> = unique_files
+        .iter()
+        .filter_map(|file_path| {
             path_to_file_uri(file_path).map(|file_uri| {
                 let interface_name = interface_name.to_string();
                 spawn(async move { find_implementations_in_file(&file_uri, &interface_name).await })
@@ -124,6 +130,7 @@ async fn find_implementations_in_file(file_uri: &str, target_name: &str) -> Resu
                 }
 
                 if target_found {
+                    tracing::debug!("found implementation node: {:#?}", class_name_node);
                     if let Some(node) = class_name_node {
                         if let Some(location) = node_to_lsp_location(&node, &file_uri) {
                             locations.push(location);

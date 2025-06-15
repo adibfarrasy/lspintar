@@ -41,11 +41,13 @@ impl LanguageSupport for GroovySupport {
         parser
     }
 
+    #[tracing::instrument(skip_all)]
     fn collect_diagnostics(&self, tree: &Tree, source: &str) -> Vec<Diagnostic> {
         // TODO: replace this with more sophisticated handling
         collect_syntax_errors(tree, source, LSP_NAME)
     }
 
+    #[tracing::instrument(skip_all)]
     fn find_definition(
         &self,
         tree: &Tree,
@@ -59,6 +61,7 @@ impl LanguageSupport for GroovySupport {
         definition::handle(tree, source, dependency_cache, uri, &identifier_node)
     }
 
+    #[tracing::instrument(skip_all)]
     fn find_implementation(
         &self,
         tree: &Tree,
@@ -69,6 +72,7 @@ impl LanguageSupport for GroovySupport {
         implementation::handle(tree, source, position, dependency_cache)
     }
 
+    #[tracing::instrument(skip_all)]
     fn provide_hover(&self, tree: &Tree, source: &str, location: Location) -> Option<Hover> {
         hover::handle(tree, source, location)
     }
