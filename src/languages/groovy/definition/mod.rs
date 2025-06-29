@@ -28,8 +28,8 @@ pub fn handle(
     usage_node: &Node,
 ) -> Result<Location> {
     find_local(tree, source, file_uri, usage_node)
-        .or_else(|| find_in_project(source, file_uri, usage_node, dependency_cache.clone()))
         .or_else(|| find_builtin(source, usage_node, dependency_cache.clone()))
+        .or_else(|| find_in_project(source, file_uri, usage_node, dependency_cache.clone()))
         .or_else(|| find_in_workspace(source, file_uri, usage_node, dependency_cache.clone()))
         .or_else(|| find_external(source, file_uri, usage_node, dependency_cache.clone()))
         .and_then(|location| set_start_position(source, usage_node, &location.uri.to_string()))

@@ -10,20 +10,32 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use tokio::{fs, task::spawn_blocking};
+use tracing::debug;
 use tree_sitter::Tree;
 use walkdir::WalkDir;
 
 #[tracing::instrument(skip_all)]
 pub async fn find_project_roots() -> Result<Vec<PathBuf>> {
-    let current_dir = std::env::current_dir().context("Failed to get current directory")?;
+    let mut current_dir = std::env::current_dir().context("Failed to get current directory")?;
+
+    loop {
+        match find_project_root(&current_dir) {
+            Some(project_dir) => {
+                if let Some(parent) = project_dir.parent() {
+                    current_dir = parent.to_path_buf();
+                } else {
+                    break; // Reached filesystem root
+                }
+            }
+            None => break,
+        }
+    }
 
     let mut project_roots = HashSet::new();
 
-    let root_dir = try_find_workspace_root(&current_dir);
-
     // For multi-project workspaces, also check subdirectories
     // (e.g., Gradle multi-module projects, monorepos)
-    for entry in WalkDir::new(&root_dir)
+    for entry in WalkDir::new(&current_dir)
         .max_depth(3) // or any reasonable depth
         .into_iter()
         .filter_map(|e| e.ok())
@@ -54,8 +66,12 @@ fn try_find_workspace_root(starting_path: &PathBuf) -> PathBuf {
     let mut current_root = starting_path.clone();
     loop {
         match find_project_root(&current_root) {
-            Some(parent_dir) => {
-                current_root = parent_dir;
+            Some(project_dir) => {
+                if let Some(maybe_ws_dir) = project_dir.parent() {
+                    current_root = maybe_ws_dir.to_path_buf();
+                } else {
+                    break; // Reached filesystem root
+                }
             }
             None => break,
         }
@@ -92,13 +108,17 @@ pub async fn scan_directory_for_sources(
     Ok(())
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn parse_source_files_parallel(
     source_files: Vec<PathBuf>,
 ) -> Result<Vec<ParsedSourceFile>> {
     let tasks: Vec<_> = source_files.into_iter().map(parse_single_file).collect();
 
     let results = futures::future::join_all(tasks).await;
-    Ok(results.into_iter().filter_map(|r| r.ok()).collect())
+    Ok(results
+        .into_iter()
+        .filter_map(|r| r.inspect_err(|r| debug!("error: {:#?}", r)).ok())
+        .collect())
 }
 
 async fn parse_single_file(file_path: PathBuf) -> Result<ParsedSourceFile> {
@@ -125,6 +145,7 @@ async fn parse_single_file(file_path: PathBuf) -> Result<ParsedSourceFile> {
     .await?
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn extract_symbol_definitions(
     parsed_files: Vec<ParsedSourceFile>,
 ) -> Result<Vec<SymbolDefinition>> {
@@ -141,6 +162,8 @@ pub async fn extract_symbol_definitions(
     for result in results {
         if let Ok(Ok(symbols)) = result {
             all_symbols.extend(symbols);
+        } else {
+            debug!("error: {:#?}", result);
         }
     }
 

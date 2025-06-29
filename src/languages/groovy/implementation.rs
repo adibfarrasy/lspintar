@@ -35,7 +35,7 @@ pub fn handle(
     let symbol_type = determine_symbol_type_from_context(tree, &identifier_node, source)?;
 
     match symbol_type {
-        SymbolType::InterfaceDeclaration => futures::executor::block_on(
+        SymbolType::InterfaceDeclaration | SymbolType::Type => futures::executor::block_on(
             find_interface_implementations(symbol_name, &dependency_cache),
         ),
         SymbolType::MethodDeclaration => futures::executor::block_on(async {

@@ -12,6 +12,8 @@ pub fn find_identifier_at_position<'a>(
     let query_text = r#"
     (identifier) @identifier
     (type_identifier) @identifier
+    (marker_annotation
+      name: (identifier) @annotation)
     "#;
     let query = Query::new(&tree.language(), query_text).context(format!(
         "[find_identifier_at_position] failed to create a new query"

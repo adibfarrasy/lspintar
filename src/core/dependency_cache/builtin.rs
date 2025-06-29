@@ -1,10 +1,14 @@
 use std::{io::Read, path::PathBuf};
 
 use anyhow::{anyhow, Context, Result};
+use tracing::debug;
 use tree_sitter::Tree;
+use walkdir::WalkDir;
 use zip::ZipArchive;
 
-use crate::core::{constants::GROOVY_DEFAULT_IMPORTS, utils::create_parser_for_language};
+use crate::core::{
+    build_tools::BuildTool, constants::GROOVY_DEFAULT_IMPORTS, utils::create_parser_for_language,
+};
 
 use super::DependencyCache;
 
@@ -24,13 +28,16 @@ pub struct BuiltinResolver {
 }
 
 impl BuiltinResolver {
-    pub fn new() -> Self {
+    pub fn new(build_tool: &BuildTool) -> Self {
+        let build_tool_home = match build_tool {
+            BuildTool::Gradle => std::env::var("GRADLE_HOME").ok().map(PathBuf::from),
+            BuildTool::Maven => std::env::var("M2_HOME").ok().map(PathBuf::from),
+        };
+
         Self {
             java_home: std::env::var("JAVA_HOME").ok().map(PathBuf::from),
             groovy_home: std::env::var("GROOVY_HOME").ok().map(PathBuf::from),
-
-            // TODO: must detect build tool first, then handle accordingly.
-            build_tool_home: std::env::var("GRADLE_HOME").ok().map(PathBuf::from),
+            build_tool_home,
         }
     }
 
@@ -43,7 +50,7 @@ impl BuiltinResolver {
 
         futures::future::try_join_all(futures).await?;
 
-        tracing::debug!("builtins initialized.");
+        debug!("builtins initialized.");
 
         Ok(())
     }
@@ -75,7 +82,7 @@ impl BuiltinResolver {
     ) -> Result<()> {
         let parts: Vec<&str> = full_class_name.rsplitn(2, '.').collect();
         if parts.len() != 2 {
-            return Err(anyhow::anyhow!("Invalid class name: {}", full_class_name));
+            return Err(anyhow!("Invalid class name: {}", full_class_name));
         }
 
         let class_name = parts[0];
@@ -95,7 +102,7 @@ impl BuiltinResolver {
             .find_package_source_directory(package)
             .with_context(|| {
                 let err_text = format!("Failed to find source directory for package: {}", package);
-                tracing::debug!(err_text);
+                debug!(err_text);
                 anyhow!(err_text)
             })?;
 
@@ -124,7 +131,8 @@ impl BuiltinResolver {
         specific_class: Option<&str>,
         cache: &DependencyCache,
     ) -> Result<()> {
-        let source_files = std::fs::read_dir(source_dir)?
+        let source_files = WalkDir::new(source_dir)
+            .into_iter()
             .filter_map(|entry| entry.ok())
             .filter(|entry| {
                 let path = entry.path();
@@ -135,11 +143,9 @@ impl BuiltinResolver {
                     .unwrap_or(false);
 
                 if let Some(target_class) = specific_class {
-                    // Filter to specific class
                     let class_name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
                     is_source && class_name == target_class
                 } else {
-                    // All source files
                     is_source
                 }
             })
@@ -152,7 +158,7 @@ impl BuiltinResolver {
             if let Some(class_name) = file_path.file_stem().and_then(|s| s.to_str()) {
                 self.parse_and_cache_builtin(
                     class_name,
-                    file_path.clone(),
+                    file_path.to_path_buf(),
                     None,
                     content,
                     package,
@@ -161,7 +167,7 @@ impl BuiltinResolver {
                 .await
                 .with_context(|| {
                     let err_text = format!("Failed to parse builtin class: {}", class_name);
-                    tracing::debug!(err_text);
+                    debug!(err_text);
                     anyhow!(err_text)
                 })?;
             }
@@ -241,7 +247,7 @@ impl BuiltinResolver {
                 if src_zip.exists() {
                     let classes = self.find_classes_in_zip(&src_zip, package)?;
                     if !classes.is_empty() {
-                        tracing::debug!(
+                        debug!(
                             "Found {} classes in src.zip for package {}",
                             classes.len(),
                             package
@@ -270,7 +276,7 @@ impl BuiltinResolver {
         // FIXME: integrate with build tool to resolve imports
         if let Some(_) = &self.build_tool_home {}
 
-        Err(anyhow::anyhow!(
+        Err(anyhow!(
             "Could not find source directory for package: {}",
             package
         ))
@@ -320,12 +326,12 @@ impl BuiltinResolver {
         };
 
         let mut parser = create_parser_for_language(language).with_context(|| {
-            tracing::debug!("Failed to create parser for {language}");
+            debug!("Failed to create parser for {language}");
             "Failed to create parser"
         })?;
 
         let tree = parser.parse(&content, None).with_context(|| {
-            tracing::debug!("Failed to parse source file {:#?}", source_path);
+            debug!("Failed to parse source file {:#?}", source_path);
             "Failed to parse source file"
         })?;
 

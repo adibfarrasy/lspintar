@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
+use anyhow::Context;
 use tower_lsp::lsp_types::Location;
+use tracing::{debug, error};
 use tree_sitter::Node;
 
 use crate::core::{
@@ -11,6 +13,8 @@ use crate::core::{
 
 use super::utils::search_definition;
 
+// FIXME: currently accidentally work because the tree-sitter node names overlap
+// betweeen java and groovy.
 #[tracing::instrument(skip_all)]
 pub fn find_builtin(
     source: &str,
@@ -48,16 +52,25 @@ fn search_builtin_definition_and_convert(
     symbol_name: &str,
     builtin_info: BuiltinTypeInfo,
 ) -> Option<Location> {
-    let symbol_type = SymbolType::Type;
-
     let definition_node = search_definition(
         &builtin_info.tree,
         &builtin_info.content,
         symbol_name,
-        symbol_type,
-    )?;
+        SymbolType::Type,
+    )
+    .context(format!(
+        "[search_builtin_definition_and_convert] definition for {symbol_name} not found"
+    ))
+    .ok()?;
 
-    let builtin_file_uri = get_builtin_uri(&builtin_info)?;
+    let builtin_file_uri = get_builtin_uri(&builtin_info)
+        .context(format!(
+            "[search_builtin_definition_and_convert] builtin_file_uri for {symbol_name} not found"
+        ))
+        .ok()?;
+
+    debug!("builtin_file_uri: {:#?}", builtin_file_uri);
+
     node_to_lsp_location(&definition_node, &builtin_file_uri)
 }
 
@@ -75,7 +88,7 @@ fn extract_zip_file_to_temp(
 ) -> Option<String> {
     let temp_dir = std::env::temp_dir().join("lspintar_builtin_sources");
     if let Err(_) = std::fs::create_dir_all(&temp_dir) {
-        tracing::error!("Failed to create temp directory for builtin sources");
+        error!("Failed to create temp directory for builtin sources");
         return None;
     }
 
@@ -85,10 +98,10 @@ fn extract_zip_file_to_temp(
 
     if !temp_file.exists() {
         if let Err(e) = std::fs::write(&temp_file, &builtin_info.content) {
-            tracing::error!("Failed to write temp file for builtin: {}", e);
+            error!("Failed to write temp file for builtin: {}", e);
             return None;
         }
-        tracing::debug!("Extracted builtin to temp file: {:?}", temp_file);
+        debug!("Extracted builtin to temp file: {:?}", temp_file);
     }
 
     path_to_file_uri(&temp_file)

@@ -13,7 +13,7 @@ static EXTRACT_SYMBOL_QUERIES: OnceLock<Vec<(Query, SymbolType)>> = OnceLock::ne
 // TODO: currently only handles non-nested declarations
 // enhance with recursion to create proper fully-qualified names for inner classes, methods, and
 // properties.
-fn get_extact_symbol_queries() -> &'static [(Query, SymbolType)] {
+fn get_extract_symbol_queries() -> &'static [(Query, SymbolType)] {
     EXTRACT_SYMBOL_QUERIES.get_or_init(|| {
         let language = tree_sitter_groovy::language();
         [
@@ -48,7 +48,7 @@ pub fn extract_groovy_symbols(parsed_file: &ParsedSourceFile) -> Result<Vec<Symb
     let mut symbols = Vec::new();
 
     let package = extract_groovy_package(&parsed_file.tree, &parsed_file.content);
-    let queries = get_extact_symbol_queries();
+    let queries = get_extract_symbol_queries();
 
     for (query, symbol_type) in queries {
         let mut cursor = QueryCursor::new();

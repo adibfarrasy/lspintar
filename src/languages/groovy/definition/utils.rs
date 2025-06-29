@@ -5,7 +5,7 @@ use std::{
 
 use anyhow::{anyhow, Context, Result};
 use tower_lsp::lsp_types::Location;
-use tracing::debug;
+use tracing::{debug, field::debug};
 use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator, Tree};
 
 use crate::core::{
@@ -21,6 +21,7 @@ pub fn get_declaration_query_for_symbol_type(symbol_type: &SymbolType) -> Option
             (class_declaration name: (identifier) @name)
             (interface_declaration name: (identifier) @name)
             (enum_declaration name: (identifier) @name)
+            (annotation_type_declaration name: (identifier) @name)
         "#,
         ),
         SymbolType::SuperClass => Some(r#"(class_declaration name: (identifier) @name)"#),
@@ -245,9 +246,10 @@ pub fn prepare_symbol_lookup_key(
     let project_root = project_root.or_else(|| find_project_root(&current_file_path))?;
 
     resolve_through_imports(&symbol_name, source, &project_root)
+        .or_else(|| resolve_same_package(&symbol_name, source, &project_root))
 }
 
-pub fn resolve_through_imports(
+fn resolve_through_imports(
     symbol_name: &str,
     source: &str,
     project_root: &PathBuf,
@@ -276,9 +278,12 @@ pub fn resolve_through_imports(
 
             for capture in query_match.captures {
                 if let Ok(import_text) = capture.node.utf8_text(source.as_bytes()) {
-                    debug!("import_text: {import_text}, symbol_name: {symbol_name}");
-
                     if import_text.ends_with(&format!(".{}", symbol_name)) {
+                        debug!(
+                            "project: {}, import_text: {import_text}, symbol_name: {symbol_name}",
+                            project_root.to_str().unwrap()
+                        );
+
                         result = Some((project_root.clone(), import_text.to_string()));
                         return;
                     }
@@ -316,7 +321,8 @@ pub fn set_start_position(source: &str, usage_node: &Node, file_uri: &str) -> Op
         .matches(&query, tree.root_node(), other_source.as_bytes())
         .for_each(|query_match| {
             if result.is_some() {
-                return; // Already found a match
+                // Already found a match
+                return;
             }
 
             for capture in query_match.captures {
@@ -324,6 +330,47 @@ pub fn set_start_position(source: &str, usage_node: &Node, file_uri: &str) -> Op
                     if name == symbol_name {
                         result = node_to_lsp_location(&capture.node, file_uri)
                     }
+                };
+            }
+        });
+
+    result
+}
+
+fn resolve_same_package(
+    symbol_name: &str,
+    source: &str,
+    project_root: &PathBuf,
+) -> Option<(PathBuf, String)> {
+    let query_text = r#"
+        (package_declaration
+          (scoped_identifier) @package_name)
+    "#;
+
+    let language = tree_sitter_groovy::language();
+    let query = Query::new(&language, query_text).ok()?;
+
+    let mut parser = Parser::new();
+    parser.set_language(&language).ok()?;
+    let tree = parser.parse(source, None)?;
+
+    let mut cursor = QueryCursor::new();
+    let mut result = None;
+
+    cursor
+        .matches(&query, tree.root_node(), source.as_bytes())
+        .for_each(|query_match| {
+            if result.is_some() {
+                // Already found a match
+                // should only have 1 match
+                return;
+            }
+
+            for capture in query_match.captures {
+                if let Ok(package_name) = capture.node.utf8_text(source.as_bytes()) {
+                    let fqn = format!("{}.{}", package_name, symbol_name);
+                    result = Some((project_root.clone(), fqn));
+                    return;
                 };
             }
         });
