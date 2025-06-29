@@ -13,7 +13,7 @@ use symbol_index::{
 use tokio::fs;
 use tracing::debug;
 
-use crate::core::{constants::PROJECT_ROOT_MARKER, utils::is_project_root};
+use crate::core::utils::is_project_root;
 
 use super::{
     build_tools::{detect_build_tool, BuildTool},

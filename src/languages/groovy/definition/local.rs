@@ -3,12 +3,12 @@ use std::usize;
 use tower_lsp::lsp_types::Location;
 use tree_sitter::{Node, Query, QueryCursor, StreamingIterator, Tree};
 
-use crate::core::{symbols::SymbolType, utils::node_to_lsp_location};
-
-use super::utils::{
-    determine_symbol_type_from_context, find_definition_candidates,
-    get_declaration_query_for_symbol_type,
+use crate::{
+    core::{symbols::SymbolType, utils::node_to_lsp_location},
+    languages::LanguageSupport,
 };
+
+use super::utils::{find_definition_candidates, get_declaration_query_for_symbol_type};
 
 #[tracing::instrument(skip_all)]
 pub fn find_local(
@@ -16,8 +16,9 @@ pub fn find_local(
     source: &str,
     file_uri: &str,
     usage_node: &Node,
+    language_support: &dyn LanguageSupport,
 ) -> Option<Location> {
-    let definition_node = search_local_definitions(tree, source, usage_node)?;
+    let definition_node = search_local_definitions(tree, source, usage_node, language_support)?;
 
     node_to_lsp_location(&definition_node, file_uri)
 }
@@ -27,10 +28,13 @@ pub fn search_local_definitions<'a>(
     tree: &'a Tree,
     source: &str,
     usage_node: &Node<'a>,
+    language_support: &dyn LanguageSupport,
 ) -> Option<Node<'a>> {
     let symbol_name = usage_node.utf8_text(source.as_bytes()).ok()?;
 
-    let symbol_type = determine_symbol_type_from_context(tree, usage_node, source).ok()?;
+    let symbol_type = language_support
+        .determine_symbol_type_from_context(tree, usage_node, source)
+        .ok()?;
 
     let query_text = get_declaration_query_for_symbol_type(&symbol_type)?;
     let candidates = find_definition_candidates(tree, source, &symbol_name, query_text)?;

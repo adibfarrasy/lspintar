@@ -8,15 +8,16 @@ use tokio::{fs, spawn, task};
 use tower_lsp::lsp_types::{Location, Position};
 use tree_sitter::{Query, QueryCursor, StreamingIterator, Tree};
 
-use crate::core::{
-    dependency_cache::DependencyCache,
-    symbols::SymbolType,
-    utils::{create_parser_for_language, node_to_lsp_location, path_to_file_uri, uri_to_path},
+use crate::{
+    core::{
+        dependency_cache::DependencyCache,
+        symbols::SymbolType,
+        utils::{create_parser_for_language, node_to_lsp_location, path_to_file_uri, uri_to_path},
+    },
+    languages::LanguageSupport,
 };
 
-use super::{
-    definition::utils::determine_symbol_type_from_context, utils::find_identifier_at_position,
-};
+use super::utils::find_identifier_at_position;
 
 static IMPLEMENTATION_QUERY: OnceLock<Option<Query>> = OnceLock::new();
 
@@ -29,10 +30,12 @@ pub fn handle(
     source: &str,
     position: Position,
     dependency_cache: Arc<DependencyCache>,
+    language_support: &dyn LanguageSupport,
 ) -> Result<Vec<Location>> {
     let identifier_node = find_identifier_at_position(tree, source, position)?;
     let symbol_name = identifier_node.utf8_text(source.as_bytes())?;
-    let symbol_type = determine_symbol_type_from_context(tree, &identifier_node, source)?;
+    let symbol_type =
+        language_support.determine_symbol_type_from_context(tree, &identifier_node, source)?;
 
     match symbol_type {
         SymbolType::InterfaceDeclaration | SymbolType::Type => futures::executor::block_on(

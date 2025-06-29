@@ -3,9 +3,12 @@ use std::{collections::HashSet, path::PathBuf, sync::Arc};
 use tower_lsp::lsp_types::Location;
 use tree_sitter::Node;
 
-use crate::core::{
-    dependency_cache::DependencyCache,
-    utils::{path_to_file_uri, uri_to_path},
+use crate::{
+    core::{
+        dependency_cache::DependencyCache,
+        utils::{path_to_file_uri, uri_to_path},
+    },
+    languages::LanguageSupport,
 };
 
 use super::utils::{prepare_symbol_lookup_key, search_definition_in_project};
@@ -16,6 +19,7 @@ pub fn find_in_workspace(
     file_uri: &str,
     usage_node: &Node,
     dependency_cache: Arc<DependencyCache>,
+    language_support: &dyn LanguageSupport,
 ) -> Option<Location> {
     // NOTE: Naive implementation, does not consider whether dependency is
     // valid, only checking if the symbol is in the cache.
@@ -40,7 +44,13 @@ pub fn find_in_workspace(
         if let Some(file_location) = dependency_cache.symbol_index.get(&symbol_key) {
             let other_uri = path_to_file_uri(&file_location)?;
 
-            return search_definition_in_project(file_uri, source, usage_node, &other_uri);
+            return search_definition_in_project(
+                file_uri,
+                source,
+                usage_node,
+                &other_uri,
+                language_support,
+            );
         }
     }
 

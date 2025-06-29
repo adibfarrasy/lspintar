@@ -20,3 +20,8 @@ note:
 
 cub:
     @cargo clean && cargo update && cargo build
+
+b:
+    @echo "RUSTFLAGS=-A warnings cargo build"
+    @RUSTFLAGS="-A warnings" cargo build
+    @just note

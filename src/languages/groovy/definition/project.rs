@@ -3,7 +3,10 @@ use std::sync::Arc;
 use tower_lsp::lsp_types::Location;
 use tree_sitter::Node;
 
-use crate::core::{dependency_cache::DependencyCache, utils::path_to_file_uri};
+use crate::{
+    core::{dependency_cache::DependencyCache, utils::path_to_file_uri},
+    languages::LanguageSupport,
+};
 
 use super::utils::{prepare_symbol_lookup_key, search_definition_in_project};
 
@@ -13,6 +16,7 @@ pub fn find_in_project(
     file_uri: &str,
     usage_node: &Node,
     dependency_cache: Arc<DependencyCache>,
+    language_support: &dyn LanguageSupport,
 ) -> Option<Location> {
     let symbol_key = prepare_symbol_lookup_key(usage_node, source, file_uri, None)?;
 
@@ -25,5 +29,5 @@ pub fn find_in_project(
         return None;
     }
 
-    search_definition_in_project(file_uri, source, usage_node, &other_uri)
+    search_definition_in_project(file_uri, source, usage_node, &other_uri, language_support)
 }

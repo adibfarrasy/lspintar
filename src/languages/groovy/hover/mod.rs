@@ -7,7 +7,7 @@ use tree_sitter::Tree;
 
 use crate::{
     core::{symbols::SymbolType, utils::location_to_node},
-    languages::groovy::definition::utils::determine_symbol_type_from_context,
+    languages::LanguageSupport,
 };
 
 mod class;
@@ -16,12 +16,19 @@ mod interface;
 mod method;
 mod utils;
 
-pub fn handle(tree: &Tree, source: &str, location: Location) -> Option<Hover> {
+pub fn handle(
+    tree: &Tree,
+    source: &str,
+    location: Location,
+    language_support: &dyn LanguageSupport,
+) -> Option<Hover> {
     let node = location_to_node(&location, tree)?;
 
     tracing::debug!("location: {:#?}", location);
 
-    let symbol_type = determine_symbol_type_from_context(tree, &node, source).ok()?;
+    let symbol_type = language_support
+        .determine_symbol_type_from_context(tree, &node, source)
+        .ok()?;
 
     let content = match symbol_type {
         SymbolType::ClassDeclaration => extract_class_signature(tree, source),
