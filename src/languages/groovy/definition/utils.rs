@@ -5,7 +5,7 @@ use std::{
 
 use anyhow::{anyhow, Context, Result};
 use tower_lsp::lsp_types::Location;
-use tracing::{debug, field::debug};
+use tracing::debug;
 use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator, Tree};
 
 use crate::core::{

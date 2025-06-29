@@ -6,8 +6,9 @@ use tree_sitter::Tree;
 use walkdir::WalkDir;
 use zip::ZipArchive;
 
-use crate::core::{
-    build_tools::BuildTool, constants::GROOVY_DEFAULT_IMPORTS, utils::create_parser_for_language,
+use crate::{
+    core::{build_tools::BuildTool, utils::create_parser_for_language},
+    languages::groovy::constants::GROOVY_DEFAULT_IMPORTS,
 };
 
 use super::DependencyCache;
@@ -43,6 +44,7 @@ impl BuiltinResolver {
 
     #[tracing::instrument(skip_all)]
     pub async fn initialize_builtins(&self, cache: &DependencyCache) -> Result<()> {
+        // TODO: currently assumes it's a groovy project. should check if the imports are necessary.
         let futures: Vec<_> = GROOVY_DEFAULT_IMPORTS
             .iter()
             .map(|import_pattern| self.resolve_import_pattern(import_pattern, cache))

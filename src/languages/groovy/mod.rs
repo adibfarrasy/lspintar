@@ -4,6 +4,7 @@ mod hover;
 mod implementation;
 mod utils;
 
+pub mod constants;
 pub mod support;
 pub mod symbols;
 

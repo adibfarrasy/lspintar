@@ -1,3 +1,11 @@
+mod builtin;
+mod external;
+mod local;
+mod project;
+mod workspace;
+
+pub mod utils;
+
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
@@ -11,14 +19,6 @@ use utils::set_start_position;
 use workspace::find_in_workspace;
 
 use crate::core::dependency_cache::DependencyCache;
-
-mod builtin;
-mod external;
-mod local;
-mod project;
-mod workspace;
-
-pub mod utils;
 
 pub fn handle(
     tree: &Tree,
