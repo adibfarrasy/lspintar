@@ -4,22 +4,20 @@ use std::{
     path::PathBuf,
     sync::{Arc, OnceLock},
 };
-use tokio::{fs, spawn, task};
-use tower_lsp::lsp_types::{Location, Position};
-use tree_sitter::{Query, QueryCursor, StreamingIterator, Tree};
+use tokio::{fs, task};
+use tower_lsp::lsp_types::{Location, Position, Range, Url};
+use tree_sitter::{Query, StreamingIterator, Tree};
 
 use crate::{
     core::{
         dependency_cache::DependencyCache,
         symbols::SymbolType,
-        utils::{create_parser_for_language, node_to_lsp_location, path_to_file_uri, uri_to_path},
+        utils::{node_to_lsp_location, path_to_file_uri},
     },
     languages::LanguageSupport,
 };
 
 use super::utils::find_identifier_at_position;
-
-static IMPLEMENTATION_QUERY: OnceLock<Option<Query>> = OnceLock::new();
 
 static IMPLEMENTATION_WITH_METHOD_QUERY: OnceLock<Option<Query>> = OnceLock::new();
 
@@ -38,9 +36,9 @@ pub fn handle(
         language_support.determine_symbol_type_from_context(tree, &identifier_node, source)?;
 
     match symbol_type {
-        SymbolType::InterfaceDeclaration | SymbolType::Type => futures::executor::block_on(
-            find_interface_implementations(symbol_name, &dependency_cache),
-        ),
+        SymbolType::InterfaceDeclaration | SymbolType::ClassDeclaration | SymbolType::Type => {
+            futures::executor::block_on(find_implementations(symbol_name, &dependency_cache))
+        }
         SymbolType::MethodDeclaration => futures::executor::block_on(async {
             // TODO: currently only handle interfaces.
             // implement abstract class handling next.
@@ -48,7 +46,7 @@ pub fn handle(
             let parent_name =
                 get_parent_name(tree, source, symbol_name).context("Failed to get parent name")?;
 
-            let locations = find_interface_implementations(&parent_name, &dependency_cache).await?;
+            let locations = find_implementations(&parent_name, &dependency_cache).await?;
 
             find_method_implementations(symbol_name, locations).await
         }),
@@ -57,95 +55,59 @@ pub fn handle(
 }
 
 #[tracing::instrument(skip_all)]
-async fn find_interface_implementations(
+async fn find_implementations(
     interface_name: &str,
     dependency_cache: &DependencyCache,
 ) -> Result<Vec<Location>> {
-    // TODO: because it's always looping this has performance issue
-    // implement caching import sites next
-    let unique_files: std::collections::HashSet<PathBuf> = dependency_cache
-        .symbol_index
+    let project_roots: std::collections::HashSet<PathBuf> = dependency_cache
+        .inheritance_index
         .iter()
-        .map(|entry| entry.value().clone())
+        .map(|entry| entry.key().0.clone())
         .collect();
 
-    let tasks: Vec<_> = unique_files
-        .iter()
-        .filter_map(|file_path| {
-            path_to_file_uri(file_path).map(|file_uri| {
-                let interface_name = interface_name.to_string();
-                spawn(async move { find_implementations_in_file(&file_uri, &interface_name).await })
+    let tasks: Vec<_> = project_roots
+        .into_iter()
+        .map(|project_root| {
+            let interface_name = interface_name.to_string();
+            let inheritance_index = dependency_cache.inheritance_index.clone();
+
+            task::spawn(async move {
+                inheritance_index
+                    .get(&(project_root, interface_name))
+                    .map(|file_paths| file_paths.value().clone())
             })
         })
         .collect();
 
     let results = futures::future::join_all(tasks).await;
 
-    let mut implementations = Vec::new();
+    let mut all_locations = Vec::new();
     for result in results {
-        if let Ok(Ok(impls)) = result {
-            implementations.extend(impls);
+        if let Ok(Some(index_value)) = result {
+            for (file_path, line, col) in index_value {
+                if let Some(file_uri) = path_to_file_uri(&file_path) {
+                    let uri = Url::parse(&file_uri)
+                        .inspect_err(|e| debug!("Failed to parse URI: {e}"))?;
+                    let location = Location {
+                        uri,
+                        range: Range {
+                            start: Position {
+                                line: line as u32,
+                                character: col as u32,
+                            },
+                            end: Position {
+                                line: line as u32,
+                                character: col as u32,
+                            },
+                        },
+                    };
+                    all_locations.push(location);
+                }
+            }
         }
     }
 
-    Ok(implementations)
-}
-
-#[tracing::instrument(skip_all)]
-async fn find_implementations_in_file(file_uri: &str, target_name: &str) -> Result<Vec<Location>> {
-    let file_path = uri_to_path(file_uri).context("Invalid file URI")?;
-    let content = fs::read_to_string(&file_path)
-        .await
-        .context("Failed to read file")?;
-
-    let file_uri = file_uri.to_string();
-    let target_name = target_name.to_string();
-
-    task::spawn_blocking(move || {
-        let mut parser = create_parser_for_language("groovy").context("Failed to create parser")?;
-        let tree = parser
-            .parse(&content, None)
-            .context("Failed to parse file")?;
-
-        let query = get_implementation_query()
-            .as_ref()
-            .context("Failed to get query")?;
-        let mut cursor = QueryCursor::new();
-        let mut locations = Vec::new();
-
-        cursor
-            .matches(&query, tree.root_node(), content.as_bytes())
-            .for_each(|query_match| {
-                let mut class_name_node = None;
-                let mut target_found = false;
-
-                for capture in query_match.captures {
-                    let capture_name = query.capture_names()[capture.index as usize];
-                    let node_text = capture.node.utf8_text(content.as_bytes()).unwrap_or("");
-
-                    match capture_name {
-                        "class_name" => class_name_node = Some(capture.node),
-                        "interface_name" if node_text == target_name => {
-                            target_found = true;
-                        }
-                        _ => {}
-                    }
-                }
-
-                if target_found {
-                    tracing::debug!("found implementation node: {:#?}", class_name_node);
-                    if let Some(node) = class_name_node {
-                        if let Some(location) = node_to_lsp_location(&node, &file_uri) {
-                            locations.push(location);
-                        }
-                    }
-                }
-            });
-
-        Ok(locations)
-    })
-    .await
-    .map_err(|e| anyhow::anyhow!("Task join error: {}", e))?
+    Ok(all_locations)
 }
 
 #[tracing::instrument(skip_all)]
@@ -229,22 +191,6 @@ async fn find_method_implementations(
     }
 
     Ok(results)
-}
-
-#[tracing::instrument(skip_all)]
-fn get_implementation_query() -> &'static Option<Query> {
-    IMPLEMENTATION_QUERY.get_or_init(|| {
-        let language = tree_sitter_groovy::language();
-        let text = r#"(class_declaration 
-                name: (identifier) @class_name
-                interfaces: (super_interfaces 
-                    (type_list (type_identifier) @interface_name)))
-                "#;
-
-        Query::new(&language, text)
-            .context("failed to parse query")
-            .ok()
-    })
 }
 
 #[tracing::instrument(skip_all)]

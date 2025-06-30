@@ -207,4 +207,6 @@ pub struct SymbolDefinition {
     pub source_file: PathBuf,
     pub line: usize,
     pub column: usize,
+    pub extends: Option<String>,
+    pub implements: Vec<String>,
 }

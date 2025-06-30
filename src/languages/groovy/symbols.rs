@@ -1,6 +1,6 @@
 use std::sync::OnceLock;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use tree_sitter::{Node, Query, QueryCursor, StreamingIterator, Tree};
 
 use crate::core::{
@@ -18,15 +18,25 @@ fn get_extract_symbol_queries() -> &'static [(Query, SymbolType)] {
         let language = tree_sitter_groovy::language();
         [
             (
-                r#"(class_declaration name: (identifier) @name)"#,
+                r#"(class_declaration 
+                    name: (identifier) @name
+                    superclass: (superclass (type_identifier) @extends)?
+                    interfaces: (super_interfaces (type_list (type_identifier) @implements)*)?)
+                "#,
                 SymbolType::ClassDeclaration,
             ),
             (
-                r#"(interface_declaration name: (identifier) @name)"#,
+                r#"(interface_declaration 
+                    name: (identifier) @name
+                    interfaces: (extends_interfaces (type_list (type_identifier) @extends)*)?)
+                "#,
                 SymbolType::InterfaceDeclaration,
             ),
             (
-                r#"(enum_declaration name: (identifier) @name)"#,
+                r#"(enum_declaration 
+                    name: (identifier) @name
+                    interfaces: (super_interfaces (type_list (type_identifier) @implements)*)?)
+                "#,
                 SymbolType::EnumDeclaration,
             ),
             (
@@ -60,24 +70,43 @@ pub fn extract_groovy_symbols(parsed_file: &ParsedSourceFile) -> Result<Vec<Symb
         );
 
         matches.for_each(|query_match| {
-            for capture in query_match.captures {
-                if let Ok(symbol_name) = capture.node.utf8_text(parsed_file.content.as_bytes()) {
-                    if is_groovy_symbol_accessible(&capture.node, &parsed_file.content) {
-                        let fully_qualified_name = if let Some(ref pkg) = package {
-                            format!("{}.{}", pkg, symbol_name)
-                        } else {
-                            return;
-                        };
+            let mut symbol_name = None;
+            let mut extends = None;
+            let mut implements = Vec::new();
 
-                        symbols.push(SymbolDefinition {
-                            name: symbol_name.to_string(),
-                            fully_qualified_name,
-                            symbol_type: symbol_type.clone(),
-                            source_file: parsed_file.file_path.clone(),
-                            line: capture.node.start_position().row,
-                            column: capture.node.start_position().column,
-                        });
+            for capture in query_match.captures {
+                let capture_name = query.capture_names()[capture.index as usize];
+
+                if let Ok(text) = capture.node.utf8_text(parsed_file.content.as_bytes()) {
+                    match capture_name {
+                        "name" => symbol_name = Some(text.to_string()),
+                        "extends" => extends = Some(text.to_string()),
+                        "implements" => implements.push(text.to_string()),
+                        _ => {}
                     }
+                }
+            }
+
+            if let Some(name) = symbol_name {
+                let name_node = query_match.captures[0].node;
+
+                if is_groovy_symbol_accessible(&name_node, &parsed_file.content) {
+                    let fully_qualified_name = if let Some(ref pkg) = package {
+                        format!("{}.{}", pkg, name)
+                    } else {
+                        return;
+                    };
+
+                    symbols.push(SymbolDefinition {
+                        name,
+                        fully_qualified_name,
+                        symbol_type: symbol_type.clone(),
+                        source_file: parsed_file.file_path.clone(),
+                        line: name_node.start_position().row,
+                        column: name_node.start_position().column,
+                        extends,
+                        implements,
+                    });
                 }
             }
         });

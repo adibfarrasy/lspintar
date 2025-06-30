@@ -1,5 +1,4 @@
 # TODO
-src/core/dependency_cache/mod.rs:94: implement
 src/core/dependency_cache/symbol_index.rs:179: Implement Java symbol extraction
 src/core/dependency_cache/symbol_index.rs:183: Implement Kotlin symbol extraction
 src/core/dependency_cache/builtin.rs:47: currently assumes it's a groovy project. should check if the imports are necessary.
@@ -9,9 +8,8 @@ src/languages/groovy/support.rs:53: replace this with more sophisticated handlin
 src/languages/groovy/definition/local.rs:380: Could enhance with variable type lookup
 src/languages/groovy/definition/mod.rs:7: make this private?
 src/languages/groovy/definition/utils.rs:167: handle wildcard import
-src/languages/groovy/implementation.rs:45: currently only handle interfaces.
-src/languages/groovy/implementation.rs:64: because it's always looping this has performance issue
-src/languages/groovy/implementation.rs:197: currently using naive implementation
+src/languages/groovy/implementation.rs:43: currently only handle interfaces.
+src/languages/groovy/implementation.rs:159: currently using naive implementation
 src/languages/groovy/symbols.rs:13: currently only handles non-nested declarations
 
 # FIXME

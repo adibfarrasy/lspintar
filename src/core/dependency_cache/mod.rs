@@ -8,7 +8,7 @@ use builtin::BuiltinTypeInfo;
 use dashmap::DashMap;
 use symbol_index::{
     collect_source_files, extract_symbol_definitions, find_project_roots,
-    parse_source_files_parallel,
+    parse_source_files_parallel, SymbolDefinition,
 };
 use tokio::fs;
 use tracing::debug;
@@ -21,9 +21,6 @@ use super::{
 };
 
 pub struct DependencyCache {
-    // Maps project root -> resolved classpath entries
-    pub classpaths: Arc<DashMap<PathBuf, Vec<PathBuf>>>,
-    //
     // Maps (project_root, fully_qualified_name) -> file locations
     pub symbol_index: Arc<DashMap<(PathBuf, String), PathBuf>>,
 
@@ -32,15 +29,18 @@ pub struct DependencyCache {
 
     // Maps package pattern -> source directory (java.lang.* -> /path/to/java/lang/)
     pub builtin_packages: Arc<DashMap<String, PathBuf>>,
+
+    // Maps (project_root, type_name) -> Vec<PathBuf>
+    pub inheritance_index: Arc<DashMap<(PathBuf, String), Vec<(PathBuf, usize, usize)>>>,
 }
 
 impl DependencyCache {
     pub fn new() -> Self {
         Self {
-            classpaths: Arc::new(DashMap::new()),
             symbol_index: Arc::new(DashMap::new()),
             builtin_infos: Arc::new(DashMap::new()),
             builtin_packages: Arc::new(DashMap::new()),
+            inheritance_index: Arc::new(DashMap::new()),
         }
     }
 
@@ -58,13 +58,6 @@ impl DependencyCache {
 
         let start = Instant::now();
         debug!("Starting workspace indexing...");
-
-        // Index classpath (read build.gradle, pom.xml, etc.)
-        let classpath_start = Instant::now();
-        self.index_classpaths(&build_tool)
-            .await
-            .inspect_err(|e| debug!("Failed to index classpath: {e}"))?;
-        debug!("Classpath indexing took: {:?}", classpath_start.elapsed());
 
         // Index all source files in the project
         let symbols_start = Instant::now();
@@ -90,11 +83,6 @@ impl DependencyCache {
         Ok(())
     }
 
-    async fn index_classpaths(&self, build_tool: &BuildTool) -> Result<()> {
-        // TODO: implement
-        Ok(())
-    }
-
     #[tracing::instrument(skip_all)]
     async fn index_project_symbols(&self) -> Result<()> {
         let project_roots = find_project_roots()
@@ -115,8 +103,10 @@ impl DependencyCache {
                 .inspect_err(|e| debug!("Failed to extract symbol definitions: {e}"))?;
 
             for symbol in symbol_definitions {
-                let key = (project_root.clone(), symbol.fully_qualified_name);
-                self.symbol_index.insert(key, symbol.source_file);
+                let key = (project_root.clone(), symbol.fully_qualified_name.clone());
+                self.symbol_index.insert(key, symbol.source_file.clone());
+
+                self.index_inheritance(&project_root, &symbol);
             }
         }
 
@@ -195,5 +185,21 @@ impl DependencyCache {
     async fn index_builtin_types(&self, build_tool: &BuildTool) -> Result<()> {
         let resolver = builtin::BuiltinResolver::new(build_tool);
         resolver.initialize_builtins(self).await
+    }
+
+    fn index_inheritance(&self, project_root: &PathBuf, symbol: &SymbolDefinition) {
+        if let Some(parent_class) = &symbol.extends {
+            self.inheritance_index
+                .entry((project_root.clone(), parent_class.clone()))
+                .or_insert_with(Vec::new)
+                .push((symbol.source_file.clone(), symbol.line, symbol.column));
+        }
+
+        for interface in &symbol.implements {
+            self.inheritance_index
+                .entry((project_root.clone(), interface.clone()))
+                .or_insert_with(Vec::new)
+                .push((symbol.source_file.clone(), symbol.line, symbol.column));
+        }
     }
 }
