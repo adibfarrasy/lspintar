@@ -8,11 +8,15 @@ pub fn extract_class_signature(tree: &Tree, source: &str) -> Option<String> {
     let query_text = r#"
     (package_declaration
       (scoped_identifier) @package_name)
-    (class_declaration
-      (modifiers)? @modifiers
-      name: (identifier) @class_name
-      interfaces: (super_interfaces)? @interface_line
-      superclass: (superclass)? @superclass_line
+
+    (
+      (groovydoc_comment)? @groovydoc
+      (class_declaration
+        (modifiers)? @modifiers
+        name: (identifier) @class_name
+        interfaces: (super_interfaces)? @interface_line
+        superclass: (superclass)? @superclass_line
+      )
     )
     "#;
 
@@ -26,6 +30,7 @@ pub fn extract_class_signature(tree: &Tree, source: &str) -> Option<String> {
     let mut interface_line = String::new();
     let mut superclass_line = String::new();
     let mut modifiers = String::new();
+    let mut groovydoc = String::new();
 
     cursor
         .matches(&query, tree.root_node(), source.as_bytes())
@@ -46,6 +51,7 @@ pub fn extract_class_signature(tree: &Tree, source: &str) -> Option<String> {
                     }
                     "interface_line" => interface_line = text.to_string(),
                     "superclass_line" => superclass_line = text.to_string(),
+                    "groovydoc" => groovydoc = text.to_string(),
                     _ => {}
                 }
             }
@@ -57,6 +63,7 @@ pub fn extract_class_signature(tree: &Tree, source: &str) -> Option<String> {
         class_name,
         interface_line,
         superclass_line,
+        groovydoc,
     )
 }
 
@@ -66,6 +73,7 @@ fn format_class_signature(
     class_name: String,
     interface_line: String,
     superclass_line: String,
+    groovydoc: String,
 ) -> Option<String> {
     if class_name.is_empty() {
         return None;
@@ -103,8 +111,7 @@ fn format_class_signature(
 
     parts.push("---".to_string());
 
-    // TODO: Add docstring extraction
-    parts.push("<placeholder docstring>".to_string());
+    parts.push(groovydoc);
 
     Some(parts.join("\n"))
 }

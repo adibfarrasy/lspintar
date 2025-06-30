@@ -8,12 +8,15 @@ pub fn extract_method_signature(tree: &Tree, node: &Node, source: &str) -> Optio
     let query_text = r#"
     (package_declaration
       (scoped_identifier) @package_name)
-    (method_declaration
-      (modifiers)? @modifiers
-      type: (_)? @return_type
-      name: (identifier) @method_name
-      parameters: (formal_parameters) @parameters
-      (throws)? @throws_clause
+    (
+      (groovydoc_comment)? @groovydoc
+      (method_declaration
+        (modifiers)? @modifiers
+        type: (_)? @return_type
+        name: (identifier) @method_name
+        parameters: (formal_parameters) @parameters
+        (throws)? @throws_clause
+      )
     )
     "#;
 
@@ -28,6 +31,7 @@ pub fn extract_method_signature(tree: &Tree, node: &Node, source: &str) -> Optio
     let mut parameters = String::new();
     let mut throws_clause = String::new();
     let mut found_method = false;
+    let mut groovydoc = String::new();
 
     let node_text = node.utf8_text(source.as_bytes()).ok()?;
 
@@ -55,6 +59,7 @@ pub fn extract_method_signature(tree: &Tree, node: &Node, source: &str) -> Optio
                     "method_name" => current_method_name = text.to_string(),
                     "parameters" => temp_parameters = text.to_string(),
                     "throws_clause" => temp_throws = text.to_string(),
+                    "groovydoc" => groovydoc = text.to_string(),
                     _ => {}
                 }
             }
@@ -79,6 +84,7 @@ pub fn extract_method_signature(tree: &Tree, node: &Node, source: &str) -> Optio
         node_text.to_string(),
         parameters,
         throws_clause,
+        groovydoc,
     )
 }
 
@@ -89,6 +95,7 @@ fn format_method_signature(
     method_name: String,
     parameters: String,
     throws_clause: String,
+    groovydoc: String,
 ) -> Option<String> {
     let mut parts = Vec::new();
 
@@ -125,10 +132,12 @@ fn format_method_signature(
     }
 
     parts.push(signature);
+
     parts.push("```".to_string());
     parts.push("\n".to_string());
+
     parts.push("---".to_string());
-    parts.push("Method documentation".to_string());
+    parts.push(groovydoc);
 
     Some(parts.join("\n"))
 }

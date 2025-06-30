@@ -8,13 +8,16 @@ pub fn extract_field_signature(tree: &Tree, node: &Node, source: &str) -> Option
     let query_text = r#"
     (package_declaration
       (scoped_identifier) @package_name)
-    (field_declaration
-      (modifiers)? @modifiers
-      type: (type_identifier) @field_type
-      declarator: (variable_declarator
-        name: (identifier) @field_name
-        value: (_)? @initial_value
-      ))
+    (
+      (groovydoc_comment)? @groovydoc
+      (field_declaration
+        (modifiers)? @modifiers
+        type: (type_identifier) @field_type
+        declarator: (variable_declarator
+          name: (identifier) @field_name
+          value: (_)? @initial_value
+        ))
+    )
     "#;
 
     let query = Query::new(&tree.language(), query_text)
@@ -27,6 +30,7 @@ pub fn extract_field_signature(tree: &Tree, node: &Node, source: &str) -> Option
     let mut field_type = String::new();
     let mut initial_value = String::new();
     let mut found_field = false;
+    let mut groovydoc = String::new();
 
     let node_text = node.utf8_text(source.as_bytes()).ok()?;
 
@@ -52,6 +56,7 @@ pub fn extract_field_signature(tree: &Tree, node: &Node, source: &str) -> Option
                     "field_type" => temp_field_type = text.to_string(),
                     "field_name" => current_field_name = text.to_string(),
                     "initial_value" => temp_initial_value = text.to_string(),
+                    "groovydoc" => groovydoc = text.to_string(),
                     _ => {}
                 }
             }
@@ -74,6 +79,7 @@ pub fn extract_field_signature(tree: &Tree, node: &Node, source: &str) -> Option
         field_type,
         node_text.to_string(),
         initial_value,
+        groovydoc,
     )
 }
 
@@ -83,6 +89,7 @@ fn format_field_signature(
     field_type: String,
     field_name: String,
     initial_value: String,
+    groovydoc: String,
 ) -> Option<String> {
     let mut parts = Vec::new();
 
@@ -118,10 +125,12 @@ fn format_field_signature(
     }
 
     parts.push(signature);
+
     parts.push("```".to_string());
     parts.push("\n".to_string());
+
     parts.push("---".to_string());
-    parts.push("Field documentation".to_string());
+    parts.push(groovydoc);
 
     Some(parts.join("\n"))
 }

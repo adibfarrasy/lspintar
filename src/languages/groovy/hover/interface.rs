@@ -8,10 +8,13 @@ pub fn extract_interface_signature(tree: &Tree, source: &str) -> Option<String> 
     let query_text = r#"
     (package_declaration
       (scoped_identifier) @package_name)
-    (interface_declaration
-      (modifiers)? @modifiers
-      name: (identifier) @interface_name
-      interfaces: (super_interfaces)? @extends_line
+    (
+      (groovydoc_comment)? @groovydoc
+      (interface_declaration
+        (modifiers)? @modifiers
+        name: (identifier) @interface_name
+        interfaces: (super_interfaces)? @extends_line
+      )
     )
     "#;
 
@@ -24,6 +27,7 @@ pub fn extract_interface_signature(tree: &Tree, source: &str) -> Option<String> 
     let mut interface_name = String::new();
     let mut extends_line = String::new();
     let mut modifiers = String::new();
+    let mut groovydoc = String::new();
 
     cursor
         .matches(&query, tree.root_node(), source.as_bytes())
@@ -43,12 +47,19 @@ pub fn extract_interface_signature(tree: &Tree, source: &str) -> Option<String> 
                         interface_name.push_str(text);
                     }
                     "extends_line" => extends_line = text.to_string(),
+                    "groovydoc" => groovydoc = text.to_string(),
                     _ => {}
                 }
             }
         });
 
-    format_interface_signature(package_name, modifiers, interface_name, extends_line)
+    format_interface_signature(
+        package_name,
+        modifiers,
+        interface_name,
+        extends_line,
+        groovydoc,
+    )
 }
 
 fn format_interface_signature(
@@ -56,6 +67,7 @@ fn format_interface_signature(
     modifiers: String,
     interface_name: String,
     extends_line: String,
+    groovydoc: String,
 ) -> Option<String> {
     if interface_name.is_empty() {
         return None;
@@ -87,9 +99,7 @@ fn format_interface_signature(
     parts.push("\n".to_string());
 
     parts.push("---".to_string());
-
-    // TODO: Add docstring extraction
-    parts.push("<placeholder docstring>".to_string());
+    parts.push(groovydoc);
 
     Some(parts.join("\n"))
 }
