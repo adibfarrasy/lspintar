@@ -1,17 +1,19 @@
-use std::{io::Read, path::PathBuf};
-
 use anyhow::{anyhow, Context, Result};
+use std::io::Cursor;
+use std::sync::{Arc, OnceLock};
+use std::thread;
+use std::{io::Read, path::PathBuf};
 use tracing::debug;
 use tree_sitter::Tree;
 use walkdir::WalkDir;
 use zip::ZipArchive;
 
-use crate::{
-    core::{build_tools::BuildTool, utils::create_parser_for_language},
-    languages::groovy::constants::GROOVY_DEFAULT_IMPORTS,
-};
+use crate::{core::build_tools::BuildTool, languages::groovy::constants::GROOVY_DEFAULT_IMPORTS};
 
 use super::DependencyCache;
+
+static GROOVY_PARSER: OnceLock<tree_sitter::Language> = OnceLock::new();
+static JAVA_PARSER: OnceLock<tree_sitter::Language> = OnceLock::new();
 
 #[derive(Debug, Clone)]
 pub struct SourceFileInfo {
@@ -50,11 +52,11 @@ impl DependencyResolver {
     }
 
     #[tracing::instrument(skip_all)]
-    pub async fn index_external_dependencies(&self, cache: &DependencyCache) -> Result<()> {
+    pub async fn index_external_dependencies(&self, cache: Arc<DependencyCache>) -> Result<()> {
         let futures: Vec<_> = self
             .dependency_paths
             .iter()
-            .map(|import_path| self.load_package_classes(import_path, cache))
+            .map(|import_path| self.load_package_classes(import_path, cache.clone()))
             .collect();
 
         futures::future::try_join_all(futures).await?;
@@ -68,7 +70,7 @@ impl DependencyResolver {
     async fn load_package_classes(
         &self,
         source_path: &PathBuf,
-        cache: &DependencyCache,
+        cache: Arc<DependencyCache>,
     ) -> Result<()> {
         let source_files = WalkDir::new(source_path)
             .into_iter()
@@ -86,21 +88,20 @@ impl DependencyResolver {
 
         for entry in source_files {
             if entry.path().extension().unwrap().to_str() == Some("zip") {
-                self.load_from_zip(&entry.path().to_path_buf(), cache)
+                self.load_from_zip(&entry.path().to_path_buf(), cache.clone())
                     .await?;
             } else {
                 let file_path = entry.path();
                 let content = tokio::fs::read_to_string(&file_path).await?;
 
                 if let Some(class_name) = file_path.file_stem().and_then(|s| s.to_str()) {
-                    self.parse_and_cache_external(
+                    parse_and_cache_external(
                         class_name,
                         file_path.to_path_buf(),
                         None,
                         content,
-                        cache,
+                        &cache.clone(),
                     )
-                    .await
                     .with_context(|| {
                         let err_text = format!("Failed to parse external classes: {}", class_name);
                         debug!(err_text);
@@ -113,74 +114,75 @@ impl DependencyResolver {
         Ok(())
     }
 
-    async fn load_from_zip(&self, zip_path: &PathBuf, cache: &DependencyCache) -> Result<()> {
-        let file = std::fs::File::open(zip_path)?;
-        let mut archive = ZipArchive::new(file)?;
+    async fn load_from_zip(&self, zip_path: &PathBuf, cache: Arc<DependencyCache>) -> Result<()> {
+        let zip_data = tokio::fs::read(zip_path).await?;
 
-        for i in 0..archive.len() {
-            let mut zip_file = archive.by_index(i)?;
-            let file_name = zip_file.name().to_string();
+        tokio::task::spawn_blocking({
+            let zip_path = zip_path.clone();
+            move || -> Result<()> {
+                let cursor = Cursor::new(zip_data);
+                let mut archive = ZipArchive::new(cursor)?;
 
-            if file_name.ends_with(".java") || file_name.ends_with(".groovy") {
-                let class_name = file_name
-                    .split('/')
-                    .last()
-                    .unwrap()
-                    .trim_end_matches(".java")
-                    .trim_end_matches(".groovy");
+                let entries: Vec<(String, String)> = (0..archive.len())
+                    .filter_map(|i| {
+                        let mut file = archive.by_index(i).ok()?;
+                        let file_name = file.name().to_string();
 
-                let mut content = String::new();
-                zip_file.read_to_string(&mut content)?;
+                        if !(file_name.ends_with(".java") || file_name.ends_with(".groovy")) {
+                            return None;
+                        }
 
-                self.parse_and_cache_external(
-                    class_name,
-                    zip_path.clone(),
-                    Some(file_name.clone()),
-                    content,
-                    cache,
-                )
-                .await?;
+                        if !should_index_package(&file_name) {
+                            return None;
+                        }
+
+                        let mut content = String::new();
+                        file.read_to_string(&mut content).ok()?;
+                        Some((file_name, content))
+                    })
+                    .collect();
+
+                let chunk_size = std::cmp::max(1, entries.len() / num_cpus::get());
+                let mut handles = Vec::new();
+
+                for chunk in entries.chunks(chunk_size) {
+                    let chunk = chunk.to_vec();
+                    let zip_path = zip_path.clone();
+                    let cache = cache.clone();
+
+                    let handle = thread::spawn(move || -> Result<()> {
+                        for (file_name, content) in chunk {
+                            let class_name = file_name
+                                .split('/')
+                                .last()
+                                .unwrap()
+                                .trim_end_matches(".java")
+                                .trim_end_matches(".groovy");
+
+                            parse_and_cache_external(
+                                class_name,
+                                zip_path.clone(),
+                                Some(file_name.clone()),
+                                content.clone(),
+                                &cache,
+                            )?;
+                        }
+
+                        Ok(())
+                    });
+
+                    handles.push(handle);
+                }
+
+                for handle in handles {
+                    handle
+                        .join()
+                        .map_err(|_| anyhow::anyhow!("Thread panicked"))??;
+                }
+                Ok(())
             }
-        }
-
-        Ok(())
-    }
-
-    #[tracing::instrument(skip_all)]
-    async fn parse_and_cache_external(
-        &self,
-        class_name: &str,
-        source_path: PathBuf,
-        zip_internal_path: Option<String>,
-        content: String,
-        cache: &DependencyCache,
-    ) -> Result<()> {
-        let language = if source_path.extension().and_then(|s| s.to_str()) == Some("groovy") {
-            "groovy"
-        } else {
-            "java"
-        };
-
-        let mut parser = create_parser_for_language(language).with_context(|| {
-            debug!("Failed to create parser for {language}");
-            "Failed to create parser"
-        })?;
-
-        let tree = parser.parse(&content, None).with_context(|| {
-            debug!("Failed to parse source file {:#?}", source_path);
-            "Failed to parse source file"
-        })?;
-
-        let external_info = SourceFileInfo {
-            source_path,
-            zip_internal_path,
-            tree,
-            content,
-        };
-
-        cache
-            .external_infos
-            .insert(class_name.to_string(), external_info);
+        })
+        .await??;
 
         Ok(())
     }
@@ -195,11 +197,12 @@ fn get_maven_local_repo() -> Option<PathBuf> {
 }
 
 fn get_gradle_cache() -> Option<PathBuf> {
-    if let Ok(cache_path) = std::env::var("GRADLE_USER_HOME") {
-        return Some(PathBuf::from(cache_path).join("caches"));
-    }
+    let cache_dir = match std::env::var("GRADLE_USER_HOME") {
+        Ok(cache_path) => PathBuf::from(cache_path).join("caches"),
+        _ => dirs::home_dir().map(|home| home.join(".gradle/caches"))?,
+    };
 
-    dirs::home_dir().map(|home| home.join(".gradle/caches"))
+    Some(cache_dir.join("modules-2/files-2.1"))
 }
 
 #[tracing::instrument(skip_all)]
@@ -301,4 +304,83 @@ fn try_find_package_name(content: &str) -> Option<String> {
                 .next()
                 .map(|s| s.to_string())
         })
+}
+
+#[tracing::instrument(skip_all)]
+fn parse_and_cache_external(
+    class_name: &str,
+    source_path: PathBuf,
+    zip_internal_path: Option<String>,
+    content: String,
+    cache: &DependencyCache,
+) -> Result<()> {
+    let language = if source_path.extension().and_then(|s| s.to_str()) == Some("groovy")
+        || zip_internal_path
+            .as_ref()
+            .map(|p| p.ends_with(".groovy"))
+            .unwrap_or(false)
+    {
+        GROOVY_PARSER.get_or_init(|| tree_sitter_groovy::language())
+    } else {
+        JAVA_PARSER.get_or_init(|| tree_sitter_java::LANGUAGE.into())
+    };
+
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(language)
+        .with_context(|| "Failed to set parser language")?;
+
+    let tree = parser
+        .parse(&content, None)
+        .with_context(|| format!("Failed to parse source file: {:?}", source_path))?;
+
+    let external_info = SourceFileInfo {
+        source_path,
+        zip_internal_path,
+        tree,
+        content,
+    };
+
+    cache
+        .external_infos
+        .insert(class_name.to_string(), external_info);
+
+    Ok(())
+}
+
+fn should_index_package(file_path: &str) -> bool {
+    const HIGH_PRIORITY: &[&str] = &[
+        "java/lang/",
+        "java/util/",
+        "java/io/",
+        "java/math/",
+        "java/net/",
+        "java/text/",
+        "java/security/",
+        "groovy/lang/",
+        "groovy/util/",
+    ];
+
+    const SKIP_PACKAGES: &[&str] = &[
+        "jdk/",
+        "sun/",
+        "com/sun/",
+        "java/awt/",
+        "javax/swing/",
+        "java/applet/",
+        "javax/imageio/",
+        "javax/print/",
+        "javax/sound/",
+    ];
+
+    if SKIP_PACKAGES.iter().any(|skip| file_path.starts_with(skip)) {
+        return false;
+    }
+
+    if HIGH_PRIORITY.iter().any(|pkg| file_path.starts_with(pkg)) {
+        return true;
+    }
+
+    // NOTE: include everything else that's not explicitly skipped
+    true
 }

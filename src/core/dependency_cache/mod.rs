@@ -38,7 +38,7 @@ impl DependencyCache {
     }
 
     #[tracing::instrument(skip_all)]
-    pub async fn index_workspace(&self) -> Result<()> {
+    pub async fn index_workspace(self: Arc<Self>) -> Result<()> {
         let current_dir = env::current_dir()?;
         let project_root = if is_project_root(&current_dir) {
             current_dir
@@ -64,7 +64,7 @@ impl DependencyCache {
 
         let resolver = external::DependencyResolver::new(&build_tool);
         resolver
-            .index_external_dependencies(self)
+            .index_external_dependencies(self.clone())
             .await
             .inspect_err(|e| tracing::debug!("Failed to index external types: {e}"))?;
         debug!(

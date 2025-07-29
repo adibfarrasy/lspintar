@@ -17,4 +17,5 @@ src/languages/groovy/definition/external.rs:16: currently accidentally work beca
 # WARN
 
 # NOTE
+src/core/dependency_cache/external.rs:384: include everything else that's not explicitly skipped
 src/languages/groovy/definition/workspace.rs:24: Naive implementation, does not consider whether dependency is valid,

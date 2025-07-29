@@ -44,7 +44,7 @@ impl LanguageServer for LspServer {
             .log_message(MessageType::INFO, "LSP server initialized")
             .await;
 
-        if let Err(error) = self.dependency_cache.index_workspace().await {
+        if let Err(error) = self.dependency_cache.clone().index_workspace().await {
             self.client
                 .log_message(
                     MessageType::ERROR,
