@@ -50,14 +50,13 @@ pub trait LanguageSupport: Send + Sync {
         usage_node: &Node,
     ) -> Result<Location> {
         self.find_local(tree, source, file_uri, usage_node)
-            .or_else(|| self.find_builtin(source, usage_node, dependency_cache.clone()))
             .or_else(|| {
                 self.find_in_project(source, file_uri, usage_node, dependency_cache.clone())
             })
             .or_else(|| {
                 self.find_in_workspace(source, file_uri, usage_node, dependency_cache.clone())
             })
-            .or_else(|| self.find_external(source, file_uri, usage_node, dependency_cache.clone()))
+            .or_else(|| self.find_external(source, usage_node, dependency_cache.clone()))
             .and_then(|location| {
                 self.set_start_position(source, usage_node, &location.uri.to_string())
             })
@@ -70,15 +69,6 @@ pub trait LanguageSupport: Send + Sync {
         source: &str,
         file_uri: &str,
         usage_node: &Node,
-    ) -> Option<Location> {
-        None
-    }
-
-    fn find_builtin(
-        &self,
-        source: &str,
-        usage_node: &Node,
-        dependency_cache: Arc<DependencyCache>,
     ) -> Option<Location> {
         None
     }
@@ -106,7 +96,6 @@ pub trait LanguageSupport: Send + Sync {
     fn find_external(
         &self,
         source: &str,
-        file_uri: &str,
         usage_node: &Node,
         dependency_cache: Arc<DependencyCache>,
     ) -> Option<Location> {

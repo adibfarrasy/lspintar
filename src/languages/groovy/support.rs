@@ -11,7 +11,6 @@ use crate::core::dependency_cache::DependencyCache;
 use crate::core::symbols::SymbolType;
 use crate::languages::traits::LanguageSupport;
 
-use super::definition::builtin::find_builtin;
 use super::definition::external::find_external;
 use super::definition::local::find_local;
 use super::definition::project::find_in_project;
@@ -214,29 +213,6 @@ impl LanguageSupport for GroovySupport {
         result
     }
 
-    fn find_definition_chain(
-        &self,
-        tree: &Tree,
-        source: &str,
-        dependency_cache: Arc<DependencyCache>,
-        file_uri: &str,
-        usage_node: &Node,
-    ) -> Result<Location> {
-        self.find_local(tree, source, file_uri, usage_node)
-            .or_else(|| self.find_builtin(source, usage_node, dependency_cache.clone()))
-            .or_else(|| {
-                self.find_in_project(source, file_uri, usage_node, dependency_cache.clone())
-            })
-            .or_else(|| {
-                self.find_in_workspace(source, file_uri, usage_node, dependency_cache.clone())
-            })
-            .or_else(|| self.find_external(source, file_uri, usage_node, dependency_cache.clone()))
-            .and_then(|location| {
-                self.set_start_position(source, usage_node, &location.uri.to_string())
-            })
-            .ok_or_else(|| anyhow::anyhow!("Definition not found"))
-    }
-
     fn find_local(
         &self,
         tree: &Tree,
@@ -245,15 +221,6 @@ impl LanguageSupport for GroovySupport {
         usage_node: &Node,
     ) -> Option<Location> {
         find_local(tree, source, file_uri, usage_node, self)
-    }
-
-    fn find_builtin(
-        &self,
-        source: &str,
-        usage_node: &Node,
-        dependency_cache: Arc<DependencyCache>,
-    ) -> Option<Location> {
-        find_builtin(source, usage_node, dependency_cache)
     }
 
     fn find_in_project(
@@ -279,11 +246,10 @@ impl LanguageSupport for GroovySupport {
     fn find_external(
         &self,
         source: &str,
-        file_uri: &str,
         usage_node: &Node,
         dependency_cache: Arc<DependencyCache>,
     ) -> Option<Location> {
-        find_external(source, file_uri, usage_node, dependency_cache)
+        find_external(source, usage_node, dependency_cache)
     }
 
     fn set_start_position(

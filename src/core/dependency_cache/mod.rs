@@ -1,11 +1,11 @@
-pub mod builtin;
+pub mod external;
 pub mod symbol_index;
 
 use std::{collections::HashMap, env, path::PathBuf, sync::Arc, time::Instant};
 
 use anyhow::{anyhow, Context, Result};
-use builtin::BuiltinTypeInfo;
 use dashmap::DashMap;
+use external::SourceFileInfo;
 use symbol_index::{
     collect_source_files, extract_symbol_definitions, find_project_roots,
     parse_source_files_parallel, SymbolDefinition,
@@ -15,20 +15,14 @@ use tracing::debug;
 
 use crate::core::utils::is_project_root;
 
-use super::{
-    build_tools::{detect_build_tool, BuildTool},
-    utils::find_project_root,
-};
+use super::{build_tools::detect_build_tool, utils::find_project_root};
 
 pub struct DependencyCache {
     // Maps (project_root, fully_qualified_name) -> file locations
     pub symbol_index: Arc<DashMap<(PathBuf, String), PathBuf>>,
 
     // Maps builtin class name -> (source_file_path, parsed_tree, source_content)
-    pub builtin_infos: Arc<DashMap<String, BuiltinTypeInfo>>,
-
-    // Maps package pattern -> source directory (java.lang.* -> /path/to/java/lang/)
-    pub builtin_packages: Arc<DashMap<String, PathBuf>>,
+    pub external_infos: Arc<DashMap<String, SourceFileInfo>>,
 
     // Maps (project_root, type_name) -> Vec<PathBuf>
     pub inheritance_index: Arc<DashMap<(PathBuf, String), Vec<(PathBuf, usize, usize)>>>,
@@ -38,8 +32,7 @@ impl DependencyCache {
     pub fn new() -> Self {
         Self {
             symbol_index: Arc::new(DashMap::new()),
-            builtin_infos: Arc::new(DashMap::new()),
-            builtin_packages: Arc::new(DashMap::new()),
+            external_infos: Arc::new(DashMap::new()),
             inheritance_index: Arc::new(DashMap::new()),
         }
     }
@@ -59,21 +52,25 @@ impl DependencyCache {
         let start = Instant::now();
         debug!("Starting workspace indexing...");
 
-        // Index all source files in the project
         let symbols_start = Instant::now();
         self.index_project_symbols()
             .await
             .inspect_err(|e| debug!("Failed to index project symbols: {e}"))?;
         debug!("Symbol indexing took: {:?}", symbols_start.elapsed());
 
-        // Index builtin types (java.lang.*, groovy.lang.*)
-        let builtin_start = Instant::now();
+        let ext_dependency_start = Instant::now();
 
         debug!("build_tool: {:#?}", &build_tool);
-        self.index_builtin_types(&build_tool)
+
+        let resolver = external::DependencyResolver::new(&build_tool);
+        resolver
+            .index_external_dependencies(self)
             .await
-            .inspect_err(|e| tracing::debug!("Failed to index builtin types: {e}"))?;
-        debug!("Builtin indexing took: {:?}", builtin_start.elapsed());
+            .inspect_err(|e| tracing::debug!("Failed to index external types: {e}"))?;
+        debug!(
+            "External dependency indexing took: {:?}",
+            ext_dependency_start.elapsed()
+        );
 
         let total_time = start.elapsed();
         debug!("Total workspace indexing completed in: {:?}", total_time);
@@ -152,39 +149,25 @@ impl DependencyCache {
                 .insert(symbol_name.clone(), file_value);
         }
 
-        // Convert builtin_infos to serializable format
-        let mut builtins = HashMap::new();
-        for entry in self.builtin_infos.iter() {
-            let (class_name, builtin_info) = (entry.key(), entry.value());
-            builtins.insert(
+        // Convert external_infos to serializable format
+        let mut external_dependencies = HashMap::new();
+        for entry in self.external_infos.iter() {
+            let (class_name, external_info) = (entry.key(), entry.value());
+            external_dependencies.insert(
                 class_name.clone(),
                 serde_json::json!({
-                    "source_file": builtin_info.source_path.to_string_lossy(),
+                    "source_file": external_info.source_path.to_string_lossy(),
                 }),
             );
         }
 
-        // Convert builtin_packages to serializable format
-        let mut packages = HashMap::new();
-        for entry in self.builtin_packages.iter() {
-            let (pattern, path) = (entry.key(), entry.value());
-            packages.insert(pattern.clone(), path.to_string_lossy().to_string());
-        }
-
         serde_json::json!({
             "symbol_index": projects,
-            "builtin_infos": builtins,
-            "builtin_packages": packages,
+            "external_infos": external_dependencies,
             "total_symbols": self.symbol_index.len(),
-            "total_builtins": self.builtin_infos.len(),
-            "total_packages": self.builtin_packages.len(),
+            "total_external": self.external_infos.len(),
             "generated_at": chrono::Utc::now().to_rfc3339()
         })
-    }
-
-    async fn index_builtin_types(&self, build_tool: &BuildTool) -> Result<()> {
-        let resolver = builtin::BuiltinResolver::new(build_tool);
-        resolver.initialize_builtins(self).await
     }
 
     fn index_inheritance(&self, project_root: &PathBuf, symbol: &SymbolDefinition) {

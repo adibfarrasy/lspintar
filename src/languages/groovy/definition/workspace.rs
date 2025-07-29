@@ -21,8 +21,8 @@ pub fn find_in_workspace(
     dependency_cache: Arc<DependencyCache>,
     language_support: &dyn LanguageSupport,
 ) -> Option<Location> {
-    // NOTE: Naive implementation, does not consider whether dependency is
-    // valid, only checking if the symbol is in the cache.
+    // NOTE: Naive implementation, does not consider whether dependency is valid,
+    // only checking if the symbol is in the cache.
     let workspace_projects: Vec<PathBuf> = dependency_cache
         .symbol_index
         .iter()

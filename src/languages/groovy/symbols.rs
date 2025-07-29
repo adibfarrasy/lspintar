@@ -115,7 +115,7 @@ pub fn extract_groovy_symbols(parsed_file: &ParsedSourceFile) -> Result<Vec<Symb
     Ok(symbols)
 }
 
-fn extract_groovy_package(tree: &Tree, content: &str) -> Option<String> {
+pub fn extract_groovy_package(tree: &Tree, content: &str) -> Option<String> {
     let query_text = r#"(package_declaration (scoped_identifier) @package)"#;
     let query = Query::new(&tree_sitter_groovy::language(), query_text).ok()?;
     let mut cursor = QueryCursor::new();
