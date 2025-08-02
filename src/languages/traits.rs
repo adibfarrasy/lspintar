@@ -56,7 +56,7 @@ pub trait LanguageSupport: Send + Sync {
             .or_else(|| {
                 self.find_in_workspace(source, file_uri, usage_node, dependency_cache.clone())
             })
-            .or_else(|| self.find_external(source, usage_node, dependency_cache.clone()))
+            .or_else(|| self.find_external(source, file_uri, usage_node, dependency_cache.clone()))
             .and_then(|location| {
                 self.set_start_position(source, usage_node, &location.uri.to_string())
             })
@@ -96,6 +96,7 @@ pub trait LanguageSupport: Send + Sync {
     fn find_external(
         &self,
         source: &str,
+        file_uri: &str,
         usage_node: &Node,
         dependency_cache: Arc<DependencyCache>,
     ) -> Option<Location> {

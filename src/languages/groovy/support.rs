@@ -246,10 +246,11 @@ impl LanguageSupport for GroovySupport {
     fn find_external(
         &self,
         source: &str,
+        file_uri: &str,
         usage_node: &Node,
         dependency_cache: Arc<DependencyCache>,
     ) -> Option<Location> {
-        find_external(source, usage_node, dependency_cache)
+        find_external(source, file_uri, usage_node, dependency_cache)
     }
 
     fn set_start_position(

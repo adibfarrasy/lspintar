@@ -1,9 +1,12 @@
 # TODO
 src/core/dependency_cache/symbol_index.rs:179: Implement Java symbol extraction
 src/core/dependency_cache/symbol_index.rs:183: Implement Kotlin symbol extraction
+src/core/dependency_cache/project_deps.rs:137: Implement resolve_external_dependency_classes()
+src/core/dependency_cache/project_deps.rs:143: Implement update_project_metadata_cache()
 src/languages/groovy/support.rs:52: replace this with more sophisticated handling
 src/languages/groovy/definition/local.rs:380: Could enhance with variable type lookup
 src/languages/groovy/definition/mod.rs:6: make this private?
+src/languages/groovy/definition/project.rs:21: Update to be project-aware
 src/languages/groovy/definition/utils.rs:167: handle wildcard import
 src/languages/groovy/implementation.rs:43: currently only handle interfaces.
 src/languages/groovy/implementation.rs:159: currently using naive implementation
@@ -17,5 +20,5 @@ src/languages/groovy/definition/external.rs:16: currently accidentally work beca
 # WARN
 
 # NOTE
-src/core/dependency_cache/external.rs:384: include everything else that's not explicitly skipped
-src/languages/groovy/definition/workspace.rs:24: Naive implementation, does not consider whether dependency is valid,
+src/core/dependency_cache/external.rs:375: include everything else that's not explicitly skipped
+src/languages/groovy/definition/workspace.rs:89: Naive implementation, does not consider whether dependency is valid,

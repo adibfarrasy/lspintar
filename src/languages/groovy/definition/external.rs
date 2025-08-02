@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 use anyhow::Context;
 use tower_lsp::lsp_types::Location;
@@ -8,7 +8,7 @@ use tree_sitter::Node;
 use crate::core::{
     dependency_cache::{external::SourceFileInfo, DependencyCache},
     symbols::SymbolType,
-    utils::{node_to_lsp_location, path_to_file_uri},
+    utils::{find_project_root, node_to_lsp_location, path_to_file_uri, uri_to_path},
 };
 
 use super::utils::search_definition;
@@ -17,6 +17,45 @@ use super::utils::search_definition;
 // betweeen java and groovy.
 #[tracing::instrument(skip_all)]
 pub fn find_external(
+    source: &str,
+    file_uri: &str,
+    usage_node: &Node,
+    dependency_cache: Arc<DependencyCache>,
+) -> Option<Location> {
+    let current_project = uri_to_path(file_uri).and_then(|path| find_project_root(&path))?;
+
+    find_project_external(
+        source,
+        usage_node,
+        current_project,
+        dependency_cache.clone(),
+    )
+    .or_else(|| fallback_impl(source, usage_node, dependency_cache))
+}
+
+#[tracing::instrument(skip_all)]
+fn find_project_external(
+    source: &str,
+    usage_node: &Node,
+    current_project: PathBuf,
+    dependency_cache: Arc<DependencyCache>,
+) -> Option<Location> {
+    let symbol_name = usage_node.utf8_text(source.as_bytes()).ok()?.to_string();
+
+    let project_key = (current_project, symbol_name.clone());
+    if let Some(external_info) = dependency_cache.project_external_infos.get(&project_key) {
+        return search_external_definition_and_convert(&symbol_name, external_info.value().clone());
+    }
+
+    if let Some(external_info) = dependency_cache.external_infos.get(&symbol_name) {
+        return search_external_definition_and_convert(&symbol_name, external_info.value().clone());
+    }
+
+    None
+}
+
+#[tracing::instrument(skip_all)]
+fn fallback_impl(
     source: &str,
     usage_node: &Node,
     dependency_cache: Arc<DependencyCache>,

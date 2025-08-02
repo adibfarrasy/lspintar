@@ -33,7 +33,6 @@ impl DependencyResolver {
 
         match build_tool {
             BuildTool::Gradle => dependency_paths.extend(get_gradle_cache()),
-            BuildTool::Maven => dependency_paths.extend(get_maven_local_repo()),
         };
 
         let java_home = std::env::var("JAVA_HOME").ok().map(PathBuf::from);
@@ -186,14 +185,6 @@ impl DependencyResolver {
 
         Ok(())
     }
-}
-
-fn get_maven_local_repo() -> Option<PathBuf> {
-    std::env::var("M2_REPO")
-        .or_else(|_| std::env::var("maven.repo.local"))
-        .map(PathBuf::from)
-        .ok()
-        .or_else(|| dirs::home_dir().map(|home| home.join(".m2/repository")))
 }
 
 fn get_gradle_cache() -> Option<PathBuf> {

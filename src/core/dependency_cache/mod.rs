@@ -1,4 +1,5 @@
 pub mod external;
+pub mod project_deps;
 pub mod symbol_index;
 
 use std::{collections::HashMap, env, path::PathBuf, sync::Arc, time::Instant};
@@ -6,6 +7,7 @@ use std::{collections::HashMap, env, path::PathBuf, sync::Arc, time::Instant};
 use anyhow::{anyhow, Context, Result};
 use dashmap::DashMap;
 use external::SourceFileInfo;
+use project_deps::ProjectMetadata;
 use symbol_index::{
     collect_source_files, extract_symbol_definitions, find_project_roots,
     parse_source_files_parallel, SymbolDefinition,
@@ -26,6 +28,10 @@ pub struct DependencyCache {
 
     // Maps (project_root, type_name) -> Vec<PathBuf>
     pub inheritance_index: Arc<DashMap<(PathBuf, String), Vec<(PathBuf, usize, usize)>>>,
+
+    pub project_external_infos: Arc<DashMap<(PathBuf, String), SourceFileInfo>>,
+
+    pub project_metadata: Arc<DashMap<PathBuf, ProjectMetadata>>,
 }
 
 impl DependencyCache {
@@ -34,6 +40,8 @@ impl DependencyCache {
             symbol_index: Arc::new(DashMap::new()),
             external_infos: Arc::new(DashMap::new()),
             inheritance_index: Arc::new(DashMap::new()),
+            project_external_infos: Arc::new(DashMap::new()),
+            project_metadata: Arc::new(DashMap::new()),
         }
     }
 
@@ -70,6 +78,17 @@ impl DependencyCache {
         debug!(
             "External dependency indexing took: {:?}",
             ext_dependency_start.elapsed()
+        );
+
+        let project_deps_start = Instant::now();
+        let project_mapper = project_deps::ProjectMapper::new(build_tool.clone());
+        project_mapper
+            .index_project_dependencies(project_root, self.clone())
+            .await
+            .inspect_err(|e| debug!("Failed to index project dependencies: {e}"))?;
+        debug!(
+            "Project dependency indexing took: {:?}",
+            project_deps_start.elapsed()
         );
 
         let total_time = start.elapsed();
