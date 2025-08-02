@@ -1,10 +1,16 @@
 use anyhow::Result;
 use dashmap::DashSet;
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+    sync::Arc,
+};
 use tracing::debug;
 
 use crate::core::build_tools::{
-    execute_gradle_dependencies, parse_gradle_dependencies_output, parse_settings_gradle, BuildTool,
+    execute_gradle_dependencies, extract_class_names_from_jar, find_jar_in_gradle_cache,
+    index_jar_sources, parse_gradle_dependencies_output, parse_settings_gradle, BuildTool,
+    ExternalDependency,
 };
 
 use super::DependencyCache;
@@ -94,6 +100,9 @@ impl ProjectMapper {
         let gradle_results = futures::future::join_all(gradle_tasks).await;
 
         let mut all_gradle_results = HashMap::new();
+        let root_gradle_result = execute_gradle_dependencies(&project_root).await?;
+        all_gradle_results.insert("".to_string(), root_gradle_result);
+
         for task_result in gradle_results {
             let (project_name, gradle_result) =
                 task_result.map_err(|e| anyhow::anyhow!("Task join error: {}", e))?;
@@ -131,17 +140,112 @@ impl ProjectMapper {
             );
         }
 
-        // Step 6: Resolve external dependency class names
-        // For each external dep, find the JAR in gradle cache
-        // Extract class names from JARs (or use existing external indexing)
-        // TODO: Implement resolve_external_dependency_classes()
+        for (project_name, (external_deps, project_deps)) in &all_parsed_deps {
+            let current_project_path = if project_name.is_empty() || project_name == ":" {
+                // Root project
+                project_root.clone()
+            } else {
+                project_map.get(project_name).cloned().unwrap_or_else(|| {
+                    debug!("Project path not found for {}, using root", project_name);
+                    project_root.clone()
+                })
+            };
 
-        // Step 7: Update project metadata in cache
-        // Populate inter_project_deps with resolved project paths
-        // Populate external_dep_names with class names from external deps
-        // Update build_file_hash and indexing_status
-        // TODO: Implement update_project_metadata_cache()
+            let class_names = self
+                .resolve_and_index_external_dependencies(
+                    external_deps,
+                    &current_project_path,
+                    cache.clone(),
+                )
+                .await?;
+
+            cache
+                .project_metadata
+                .entry(current_project_path.clone())
+                .or_insert_with(|| ProjectMetadata {
+                    inter_project_deps: Arc::new(DashSet::new()),
+                    external_dep_names: Arc::new(DashSet::new()),
+                    build_file_hash: String::new(),
+                    indexing_status: IndexingStatus::InProgress,
+                });
+
+            if let Some(mut metadata) = cache.project_metadata.get_mut(&current_project_path) {
+                metadata.external_dep_names.clear();
+                for class_name in class_names {
+                    metadata.external_dep_names.insert(class_name);
+                }
+
+                metadata.inter_project_deps.clear();
+                for project_ref in project_deps {
+                    if let Some(project_path) = project_map.get(project_ref) {
+                        metadata.inter_project_deps.insert(project_path.clone());
+                    }
+                }
+
+                metadata.indexing_status = IndexingStatus::Completed;
+
+                debug!(
+                    "Updated metadata for project {}: {} external classes, {} project deps",
+                    project_name,
+                    metadata.external_dep_names.len(),
+                    metadata.inter_project_deps.len()
+                );
+            }
+        }
 
         Ok(())
+    }
+
+    #[tracing::instrument(skip_all)]
+    async fn resolve_and_index_external_dependencies(
+        &self,
+        external_deps: &[ExternalDependency],
+        project_path: &PathBuf,
+        cache: Arc<DependencyCache>,
+    ) -> Result<HashSet<String>> {
+        let mut all_class_names = HashSet::new();
+
+        let chunk_size = std::cmp::max(1, external_deps.len() / num_cpus::get());
+        let mut handles = Vec::new();
+
+        for chunk in external_deps.chunks(chunk_size) {
+            let chunk = chunk.to_vec();
+            let project_path = project_path.clone();
+            let cache = cache.clone();
+
+            let handle = tokio::task::spawn(async move {
+                let mut chunk_classes = HashSet::new();
+
+                for dep in chunk {
+                    if let Some(jar_path) = find_jar_in_gradle_cache(&dep).await {
+                        if let Ok(classes) = extract_class_names_from_jar(&jar_path).await {
+                            chunk_classes.extend(classes.clone());
+
+                            if let Err(e) =
+                                index_jar_sources(&jar_path, &project_path, &cache, &classes).await
+                            {
+                                debug!("Failed to index JAR sources for {:?}: {}", jar_path, e);
+                            }
+                        }
+                    }
+                }
+
+                chunk_classes
+            });
+            handles.push(handle);
+        }
+
+        for handle in handles {
+            if let Ok(chunk_classes) = handle.await {
+                all_class_names.extend(chunk_classes);
+            }
+        }
+
+        debug!(
+            "Resolved {} external class names for project {:?}",
+            all_class_names.len(),
+            project_path
+        );
+        Ok(all_class_names)
     }
 }

@@ -1,6 +1,7 @@
 use std::{collections::HashSet, path::PathBuf, sync::Arc};
 
 use tower_lsp::lsp_types::Location;
+use tracing::debug;
 use tree_sitter::Node;
 
 use crate::{
@@ -88,6 +89,8 @@ fn fallback_impl(
 ) -> Option<Location> {
     // NOTE: Naive implementation, does not consider whether dependency is valid,
     // only checking if the symbol is in the cache.
+
+    debug!("using fallback method");
 
     let workspace_projects: Vec<PathBuf> = dependency_cache
         .symbol_index

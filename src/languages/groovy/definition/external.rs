@@ -30,7 +30,6 @@ pub fn find_external(
         current_project,
         dependency_cache.clone(),
     )
-    .or_else(|| fallback_impl(source, usage_node, dependency_cache))
 }
 
 #[tracing::instrument(skip_all)]
@@ -52,35 +51,6 @@ fn find_project_external(
     }
 
     None
-}
-
-#[tracing::instrument(skip_all)]
-fn fallback_impl(
-    source: &str,
-    usage_node: &Node,
-    dependency_cache: Arc<DependencyCache>,
-) -> Option<Location> {
-    let (symbol_name, external_info) =
-        extract_symbol_and_external_info(source, usage_node, dependency_cache)?;
-
-    search_external_definition_and_convert(&symbol_name, external_info)
-}
-
-#[tracing::instrument(skip_all)]
-fn extract_symbol_and_external_info(
-    source: &str,
-    usage_node: &Node,
-    dependency_cache: Arc<DependencyCache>,
-) -> Option<(String, SourceFileInfo)> {
-    let symbol_name = usage_node.utf8_text(source.as_bytes()).ok()?.to_string();
-
-    let external_info = dependency_cache
-        .external_infos
-        .get(&symbol_name)?
-        .value()
-        .clone();
-
-    Some((symbol_name, external_info))
 }
 
 #[tracing::instrument(skip_all)]

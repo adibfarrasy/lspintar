@@ -1,3 +1,5 @@
+use std::sync::OnceLock;
+
 pub const SOURCE_DIRS: [&str; 4] = [
     "src/main/java",
     "src/test/java",
@@ -8,3 +10,6 @@ pub const SOURCE_DIRS: [&str; 4] = [
 pub const EXTENSIONS: [&str; 5] = ["java", "kt", "gradle", "kts", "groovy"];
 
 pub const PROJECT_ROOT_MARKER: [&str; 4] = ["build.gradle", "build.gradle.kts", "pom.xml", ".git"];
+
+pub static GROOVY_PARSER: OnceLock<tree_sitter::Language> = OnceLock::new();
+pub static JAVA_PARSER: OnceLock<tree_sitter::Language> = OnceLock::new();

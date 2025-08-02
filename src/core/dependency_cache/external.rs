@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Context, Result};
 use std::io::Cursor;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::thread;
 use std::{io::Read, path::PathBuf};
 use tracing::debug;
@@ -8,12 +8,10 @@ use tree_sitter::Tree;
 use walkdir::WalkDir;
 use zip::ZipArchive;
 
+use crate::core::constants::{GROOVY_PARSER, JAVA_PARSER};
 use crate::{core::build_tools::BuildTool, languages::groovy::constants::GROOVY_DEFAULT_IMPORTS};
 
 use super::DependencyCache;
-
-static GROOVY_PARSER: OnceLock<tree_sitter::Language> = OnceLock::new();
-static JAVA_PARSER: OnceLock<tree_sitter::Language> = OnceLock::new();
 
 #[derive(Debug, Clone)]
 pub struct SourceFileInfo {

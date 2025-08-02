@@ -1,10 +1,18 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
+    io::{Cursor, Read},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 use tokio::process::Command;
 use tracing::debug;
+use zip::ZipArchive;
+
+use super::{
+    constants::{GROOVY_PARSER, JAVA_PARSER},
+    dependency_cache::{external::SourceFileInfo, DependencyCache},
+};
 
 #[derive(Debug, Clone)]
 pub enum BuildTool {
@@ -20,38 +28,78 @@ pub fn detect_build_tool(project_root: &Path) -> Option<BuildTool> {
     None
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn parse_settings_gradle(project_root: &PathBuf) -> Result<HashMap<String, PathBuf>> {
     let settings_file = project_root.join("settings.gradle");
     if !settings_file.exists() {
-        // No settings.gradle means single project, return empty map
+        debug!("settings.gradle not found");
         return Ok(HashMap::new());
     }
 
     let content = tokio::fs::read_to_string(&settings_file).await?;
     let mut project_map = HashMap::new();
 
+    let mut in_include_block = false;
+    let mut include_content = String::new();
+
     for line in content.lines() {
         let line = line.trim();
 
-        // Handle include syntax: include ':module-a', ':my-project'
+        // Skip comments
+        if line.starts_with("//") || line.starts_with("/*") {
+            continue;
+        }
+
         if line.starts_with("include ") {
-            let projects_str = line.strip_prefix("include ").unwrap();
+            in_include_block = true;
+            include_content = line.strip_prefix("include ").unwrap().to_string();
 
-            for project_ref in projects_str.split(',') {
-                let project_name = project_ref.trim().trim_matches(['\'', '"', ' ']);
+            // Check if this is a single-line include (no opening parenthesis or ends with quote)
+            if !include_content.contains('(') || include_content.trim_end().ends_with(['\'', '"']) {
+                parse_include_content(&include_content, project_root, &mut project_map);
+                in_include_block = false;
+                include_content.clear();
+            }
+        } else if in_include_block {
+            include_content.push(' ');
+            include_content.push_str(line);
 
-                if project_ref.starts_with(':') {
-                    // Convert ':my-project' -> 'my-project', ':shared:common' -> 'shared/common'
-                    let path_str = project_ref.strip_prefix(':').unwrap().replace(':', "/");
-                    project_map.insert(project_name.to_string(), project_root.join(path_str));
-                } else {
-                    continue;
-                };
+            // Check if this line ends the include block (closing parenthesis or ends with quote)
+            if line.contains(')') || line.trim_end().ends_with(['\'', '"']) {
+                parse_include_content(&include_content, project_root, &mut project_map);
+                in_include_block = false;
+                include_content.clear();
             }
         }
     }
 
     Ok(project_map)
+}
+
+fn parse_include_content(
+    content: &str,
+    project_root: &PathBuf,
+    project_map: &mut HashMap<String, PathBuf>,
+) {
+    let content = content.trim_matches(['(', ')', ' ']);
+
+    for project_ref in content.split(',') {
+        let project_ref = project_ref.trim().trim_matches(['\'', '"', ' ']);
+
+        if let Some(project_name_with_colons) = project_ref.strip_prefix(':') {
+            let project_name = project_name_with_colons.to_string().replace(':', "/");
+            let project_path = project_root.join(&project_name);
+
+            debug!("Found project: '{}' -> {:?}", project_name, project_path);
+            project_map.insert(project_name, project_path);
+        } else if !project_ref.is_empty() {
+            let project_name = project_ref.to_string().replace(':', "/");
+            let project_path = project_root.join(&project_name);
+
+            debug!("Found project: '{}' -> {:?}", project_name, project_path);
+            project_map.insert(project_name, project_path);
+        }
+    }
 }
 
 #[tracing::instrument(skip_all)]
@@ -68,6 +116,8 @@ pub async fn execute_gradle_dependencies(
 
     let mut results = GradleDependenciesResult::new();
 
+    let start = tokio::time::Instant::now();
+
     for config in &["compileClasspath", "testCompileClasspath"] {
         let output = tokio::time::timeout(
             std::time::Duration::from_secs(60),
@@ -77,6 +127,12 @@ pub async fn execute_gradle_dependencies(
                 .output(),
         )
         .await??;
+
+        let duration = start.elapsed();
+        debug!(
+            "`gradle :{:#?}:dependencies --configuration {} --quiet` command took: {:?}",
+            project_root, config, duration
+        );
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -232,4 +288,213 @@ pub struct ExternalDependency {
     pub group: String,
     pub artifact: String,
     pub version: String,
+}
+
+#[tracing::instrument(skip_all)]
+pub async fn find_jar_in_gradle_cache(dep: &ExternalDependency) -> Option<PathBuf> {
+    let cache_base = get_gradle_cache_base()?;
+
+    // Gradle cache structure: group/artifact/version/hash/artifact-version.jar
+    let group_path = dep.group.replace('.', "/");
+    let artifact_dir = cache_base
+        .join(&group_path)
+        .join(&dep.artifact)
+        .join(&dep.version);
+
+    if !artifact_dir.exists() {
+        debug!("Gradle cache directory not found: {:?}", artifact_dir);
+        return None;
+    }
+
+    // There should be only one hash directory
+    let mut read_dir = tokio::fs::read_dir(&artifact_dir).await.ok()?;
+    while let Some(entry) = read_dir.next_entry().await.ok()? {
+        if entry.file_type().await.ok()?.is_dir() {
+            let jar_name = format!("{}-{}.jar", dep.artifact, dep.version);
+            let jar_path = entry.path().join(&jar_name);
+
+            if jar_path.exists() {
+                debug!("Found JAR: {:?}", jar_path);
+                return Some(jar_path);
+            }
+        }
+    }
+
+    debug!(
+        "JAR not found for dependency: {}:{}:{}",
+        dep.group, dep.artifact, dep.version
+    );
+    None
+}
+
+#[tracing::instrument(skip_all)]
+pub async fn extract_class_names_from_jar(jar_path: &PathBuf) -> Result<HashSet<String>> {
+    let jar_data = tokio::fs::read(jar_path).await?;
+
+    tokio::task::spawn_blocking({
+        let jar_path = jar_path.clone();
+        move || -> Result<HashSet<String>> {
+            let cursor = Cursor::new(jar_data);
+            let mut archive = ZipArchive::new(cursor)?;
+            let mut class_names = HashSet::new();
+
+            for i in 0..archive.len() {
+                let file = archive.by_index(i)?;
+                let file_name = file.name();
+
+                // Only process .class files, skip inner classes and test classes
+                if file_name.ends_with(".class") && should_index_class(file_name) {
+                    if let Some(class_name) = class_path_to_name(file_name) {
+                        class_names.insert(class_name);
+                    }
+                }
+            }
+
+            debug!(
+                "Extracted {} classes from JAR: {:?}",
+                class_names.len(),
+                jar_path
+            );
+            Ok(class_names)
+        }
+    })
+    .await?
+}
+
+fn get_gradle_cache_base() -> Option<PathBuf> {
+    match std::env::var("GRADLE_USER_HOME") {
+        Ok(cache_path) => Some(PathBuf::from(cache_path).join("caches/modules-2/files-2.1")),
+        _ => dirs::home_dir().map(|home| home.join(".gradle/caches/modules-2/files-2.1")),
+    }
+}
+
+fn should_index_class(class_path: &str) -> bool {
+    // Skip inner classes (contain $), test classes, and common build artifacts
+    if class_path.contains('$') {
+        return false;
+    }
+
+    if class_path.contains("/test/") || class_path.contains("/tests/") {
+        return false;
+    }
+
+    // Skip common build/framework artifacts that aren't user-accessible
+    const SKIP_PACKAGES: &[&str] = &["META-INF/", "WEB-INF/", "org/gradle/", "org/apache/maven/"];
+
+    !SKIP_PACKAGES
+        .iter()
+        .any(|skip| class_path.starts_with(skip))
+}
+
+fn class_path_to_name(class_path: &str) -> Option<String> {
+    // Convert "com/example/MyClass.class" to "com.example.MyClass"
+    let without_extension = class_path.strip_suffix(".class")?;
+    Some(without_extension.replace('/', "."))
+}
+
+#[tracing::instrument(skip_all)]
+pub async fn index_jar_sources(
+    jar_path: &PathBuf,
+    project_path: &PathBuf,
+    cache: &Arc<DependencyCache>,
+    class_names: &HashSet<String>,
+) -> Result<()> {
+    let jar_data = tokio::fs::read(jar_path).await?;
+
+    tokio::task::spawn_blocking({
+        let jar_path = jar_path.clone();
+        let project_path = project_path.clone();
+        let cache = cache.clone();
+        let class_names = class_names.clone();
+
+        move || -> Result<()> {
+            let cursor = Cursor::new(jar_data);
+            let mut archive = ZipArchive::new(cursor)?;
+
+            for i in 0..archive.len() {
+                let mut file = archive.by_index(i)?;
+                let file_name = file.name().to_string();
+
+                if !(file_name.ends_with(".java") || file_name.ends_with(".groovy")) {
+                    continue;
+                }
+
+                let class_name = file_name
+                    .split('/')
+                    .last()
+                    .unwrap()
+                    .trim_end_matches(".java")
+                    .trim_end_matches(".groovy");
+
+                if !class_names.contains(class_name) {
+                    continue;
+                }
+
+                let mut content = String::new();
+                if file.read_to_string(&mut content).is_err() {
+                    continue;
+                }
+
+                if let Err(e) = parse_and_cache_project_external(
+                    class_name,
+                    &project_path,
+                    jar_path.clone(),
+                    Some(file_name.clone()),
+                    content,
+                    &cache,
+                ) {
+                    debug!("Failed to parse external source {}: {}", class_name, e);
+                }
+            }
+
+            Ok(())
+        }
+    })
+    .await??;
+
+    Ok(())
+}
+
+#[tracing::instrument(skip_all)]
+fn parse_and_cache_project_external(
+    class_name: &str,
+    project_path: &PathBuf,
+    source_path: PathBuf,
+    zip_internal_path: Option<String>,
+    content: String,
+    cache: &DependencyCache,
+) -> Result<()> {
+    let language = if source_path.extension().and_then(|s| s.to_str()) == Some("groovy")
+        || zip_internal_path
+            .as_ref()
+            .map(|p| p.ends_with(".groovy"))
+            .unwrap_or(false)
+    {
+        GROOVY_PARSER.get_or_init(|| tree_sitter_groovy::language())
+    } else {
+        JAVA_PARSER.get_or_init(|| tree_sitter_java::LANGUAGE.into())
+    };
+
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(language)
+        .with_context(|| "Failed to set parser language")?;
+
+    let tree = parser
+        .parse(&content, None)
+        .with_context(|| format!("Failed to parse source file: {:?}", source_path))?;
+
+    let external_info = SourceFileInfo {
+        source_path,
+        zip_internal_path,
+        tree,
+        content,
+    };
+
+    let project_key = (project_path.clone(), class_name.to_string());
+    cache
+        .project_external_infos
+        .insert(project_key, external_info);
+
+    Ok(())
 }
