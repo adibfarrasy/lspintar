@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use std::{
     collections::{HashMap, HashSet},
+    fs,
     io::{Cursor, Read},
     path::{Path, PathBuf},
     sync::Arc,
@@ -136,7 +137,10 @@ pub async fn execute_gradle_dependencies(
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            tracing::warn!("Gradle dependencies failed for {}: {}", config, stderr);
+            debug!(
+                "`gradle :{:#?}:dependencies --configuration {} --quiet` command failed: {:?}",
+                project_root, config, stderr
+            );
             continue;
         }
 
@@ -207,7 +211,7 @@ fn extract_project_dependency(line: &str) -> Option<String> {
     // Match lines like: "+--- project :my-project" or "\\--- project :other-module"
     if line.contains("project :") {
         if let Some(start) = line.find("project :") {
-            let project_part = &line[start + "project ".len()..];
+            let project_part = &line[start + "project :".len()..];
             let project_ref = project_part.split_whitespace().next()?;
             return Some(project_ref.to_string());
         }
@@ -291,7 +295,7 @@ pub struct ExternalDependency {
 }
 
 #[tracing::instrument(skip_all)]
-pub async fn find_jar_in_gradle_cache(dep: &ExternalDependency) -> Option<PathBuf> {
+pub fn find_jar_in_gradle_cache(dep: &ExternalDependency) -> Option<PathBuf> {
     let cache_base = get_gradle_cache_base()?;
 
     // Gradle cache structure: group/artifact/version/hash/artifact-version.jar
@@ -307,14 +311,14 @@ pub async fn find_jar_in_gradle_cache(dep: &ExternalDependency) -> Option<PathBu
     }
 
     // There should be only one hash directory
-    let mut read_dir = tokio::fs::read_dir(&artifact_dir).await.ok()?;
-    while let Some(entry) = read_dir.next_entry().await.ok()? {
-        if entry.file_type().await.ok()?.is_dir() {
+    let mut read_dir = fs::read_dir(&artifact_dir).ok()?;
+    while let Some(entry) = read_dir.next() {
+        let entry = entry.ok()?;
+        if entry.file_type().ok()?.is_dir() {
             let jar_name = format!("{}-{}.jar", dep.artifact, dep.version);
             let jar_path = entry.path().join(&jar_name);
 
             if jar_path.exists() {
-                debug!("Found JAR: {:?}", jar_path);
                 return Some(jar_path);
             }
         }
@@ -328,37 +332,32 @@ pub async fn find_jar_in_gradle_cache(dep: &ExternalDependency) -> Option<PathBu
 }
 
 #[tracing::instrument(skip_all)]
-pub async fn extract_class_names_from_jar(jar_path: &PathBuf) -> Result<HashSet<String>> {
-    let jar_data = tokio::fs::read(jar_path).await?;
+pub fn extract_class_names_from_jar(jar_path: &PathBuf) -> Result<HashSet<String>> {
+    let jar_data = fs::read(jar_path)?;
 
-    tokio::task::spawn_blocking({
-        let jar_path = jar_path.clone();
-        move || -> Result<HashSet<String>> {
-            let cursor = Cursor::new(jar_data);
-            let mut archive = ZipArchive::new(cursor)?;
-            let mut class_names = HashSet::new();
+    let jar_path = jar_path.clone();
+    let cursor = Cursor::new(jar_data);
+    let mut archive = ZipArchive::new(cursor)?;
+    let mut class_names = HashSet::new();
 
-            for i in 0..archive.len() {
-                let file = archive.by_index(i)?;
-                let file_name = file.name();
+    for i in 0..archive.len() {
+        let file = archive.by_index(i)?;
+        let file_name = file.name();
 
-                // Only process .class files, skip inner classes and test classes
-                if file_name.ends_with(".class") && should_index_class(file_name) {
-                    if let Some(class_name) = class_path_to_name(file_name) {
-                        class_names.insert(class_name);
-                    }
-                }
+        // Only process .class files, skip inner classes and test classes
+        if file_name.ends_with(".class") && should_index_class(file_name) {
+            if let Some(class_name) = class_path_to_name(file_name) {
+                class_names.insert(class_name);
             }
-
-            debug!(
-                "Extracted {} classes from JAR: {:?}",
-                class_names.len(),
-                jar_path
-            );
-            Ok(class_names)
         }
-    })
-    .await?
+    }
+
+    debug!(
+        "Extracted {} classes from JAR: {:?}",
+        class_names.len(),
+        jar_path
+    );
+    Ok(class_names)
 }
 
 fn get_gradle_cache_base() -> Option<PathBuf> {
@@ -393,64 +392,57 @@ fn class_path_to_name(class_path: &str) -> Option<String> {
 }
 
 #[tracing::instrument(skip_all)]
-pub async fn index_jar_sources(
+pub fn index_jar_sources(
     jar_path: &PathBuf,
     project_path: &PathBuf,
     cache: &Arc<DependencyCache>,
     class_names: &HashSet<String>,
 ) -> Result<()> {
-    let jar_data = tokio::fs::read(jar_path).await?;
+    let jar_data = fs::read(jar_path)?;
 
-    tokio::task::spawn_blocking({
-        let jar_path = jar_path.clone();
-        let project_path = project_path.clone();
-        let cache = cache.clone();
-        let class_names = class_names.clone();
+    let jar_path = jar_path.clone();
+    let project_path = project_path.clone();
+    let cache = cache.clone();
+    let class_names = class_names.clone();
 
-        move || -> Result<()> {
-            let cursor = Cursor::new(jar_data);
-            let mut archive = ZipArchive::new(cursor)?;
+    let cursor = Cursor::new(jar_data);
+    let mut archive = ZipArchive::new(cursor)?;
 
-            for i in 0..archive.len() {
-                let mut file = archive.by_index(i)?;
-                let file_name = file.name().to_string();
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i)?;
+        let file_name = file.name().to_string();
 
-                if !(file_name.ends_with(".java") || file_name.ends_with(".groovy")) {
-                    continue;
-                }
-
-                let class_name = file_name
-                    .split('/')
-                    .last()
-                    .unwrap()
-                    .trim_end_matches(".java")
-                    .trim_end_matches(".groovy");
-
-                if !class_names.contains(class_name) {
-                    continue;
-                }
-
-                let mut content = String::new();
-                if file.read_to_string(&mut content).is_err() {
-                    continue;
-                }
-
-                if let Err(e) = parse_and_cache_project_external(
-                    class_name,
-                    &project_path,
-                    jar_path.clone(),
-                    Some(file_name.clone()),
-                    content,
-                    &cache,
-                ) {
-                    debug!("Failed to parse external source {}: {}", class_name, e);
-                }
-            }
-
-            Ok(())
+        if !(file_name.ends_with(".java") || file_name.ends_with(".groovy")) {
+            continue;
         }
-    })
-    .await??;
+
+        let class_name = file_name
+            .split('/')
+            .last()
+            .unwrap()
+            .trim_end_matches(".java")
+            .trim_end_matches(".groovy");
+
+        if !class_names.contains(class_name) {
+            continue;
+        }
+
+        let mut content = String::new();
+        if file.read_to_string(&mut content).is_err() {
+            continue;
+        }
+
+        if let Err(e) = parse_and_cache_project_external(
+            class_name,
+            &project_path,
+            jar_path.clone(),
+            Some(file_name.clone()),
+            content,
+            &cache,
+        ) {
+            debug!("Failed to parse external source {}: {}", class_name, e);
+        }
+    }
 
     Ok(())
 }

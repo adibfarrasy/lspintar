@@ -168,7 +168,6 @@ impl DependencyCache {
                 .insert(symbol_name.clone(), file_value);
         }
 
-        // Convert external_infos to serializable format
         let mut external_dependencies = HashMap::new();
         for entry in self.external_infos.iter() {
             let (class_name, external_info) = (entry.key(), entry.value());
@@ -180,11 +179,48 @@ impl DependencyCache {
             );
         }
 
+        let mut project_external_dependencies = HashMap::new();
+        for entry in self.project_external_infos.iter() {
+            let ((project_root, class_name), external_info) = (entry.key(), entry.value());
+            let project_key = project_root.to_string_lossy().to_string();
+
+            project_external_dependencies
+                .entry(project_key)
+                .or_insert_with(HashMap::new)
+                .insert(
+                    class_name.clone(),
+                    serde_json::json!({
+                        "source_file": external_info.source_path.to_string_lossy(),
+                        "zip_internal_path": external_info.zip_internal_path,
+                    }),
+                );
+        }
+
+        let mut project_metadata = HashMap::new();
+        for entry in self.project_metadata.iter() {
+            let (project_root, metadata) = (entry.key(), entry.value());
+            let project_key = project_root.to_string_lossy().to_string();
+
+            project_metadata.insert(
+                project_key,
+                serde_json::json!({
+                    "inter_project_deps": metadata.inter_project_deps.iter()
+                        .map(|p| p.to_string_lossy().to_string())
+                        .collect::<Vec<_>>(),
+                    "external_dep_names_count": metadata.external_dep_names.len(),
+                    "indexing_status": format!("{:?}", metadata.indexing_status),
+                }),
+            );
+        }
+
         serde_json::json!({
             "symbol_index": projects,
             "external_infos": external_dependencies,
+            "project_external_infos": project_external_dependencies,
+            "project_metadata": project_metadata,
             "total_symbols": self.symbol_index.len(),
             "total_external": self.external_infos.len(),
+            "total_project_external": self.project_external_infos.len(),
             "generated_at": chrono::Utc::now().to_rfc3339()
         })
     }

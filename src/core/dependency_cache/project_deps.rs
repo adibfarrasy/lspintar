@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use dashmap::DashSet;
 use std::{
     collections::{HashMap, HashSet},
@@ -23,7 +23,6 @@ pub struct ProjectMetadata {
     // External class names available to a project
     pub external_dep_names: Arc<DashSet<String>>,
 
-    pub build_file_hash: String,
     pub indexing_status: IndexingStatus,
 }
 
@@ -54,7 +53,6 @@ impl ProjectMapper {
             ProjectMetadata {
                 inter_project_deps: Arc::new(DashSet::new()),
                 external_dep_names: Arc::new(DashSet::new()),
-                build_file_hash: String::new(),
                 indexing_status: IndexingStatus::InProgress,
             },
         );
@@ -85,42 +83,14 @@ impl ProjectMapper {
         let project_map = parse_settings_gradle(&project_root).await?;
         debug!("Found {} projects in settings.gradle", project_map.len());
 
-        let gradle_tasks: Vec<_> = project_map
-            .iter()
-            .map(|(project_name, subproject_path)| {
-                let project_name = project_name.clone();
-                let subproject_path = subproject_path.clone();
-                tokio::spawn(async move {
-                    let result = execute_gradle_dependencies(&subproject_path).await;
-                    (project_name, result)
-                })
-            })
-            .collect();
-
-        let gradle_results = futures::future::join_all(gradle_tasks).await;
-
         let mut all_gradle_results = HashMap::new();
+        for (project_name, subproject_path) in project_map.iter() {
+            let result = execute_gradle_dependencies(&subproject_path).await?;
+            all_gradle_results.insert(project_name.to_owned(), result);
+        }
+
         let root_gradle_result = execute_gradle_dependencies(&project_root).await?;
         all_gradle_results.insert("".to_string(), root_gradle_result);
-
-        for task_result in gradle_results {
-            let (project_name, gradle_result) =
-                task_result.map_err(|e| anyhow::anyhow!("Task join error: {}", e))?;
-
-            match gradle_result {
-                Ok(result) => {
-                    debug!("Gradle dependencies completed for project {}", project_name);
-                    all_gradle_results.insert(project_name, result);
-                }
-                Err(e) => {
-                    debug!(
-                        "Failed to get dependencies for project {}: {}",
-                        project_name, e
-                    );
-                    // Continue with other projects instead of failing entire operation
-                }
-            }
-        }
 
         let mut all_parsed_deps = HashMap::new();
         for (project_name, gradle_result) in &all_gradle_results {
@@ -145,19 +115,27 @@ impl ProjectMapper {
                 // Root project
                 project_root.clone()
             } else {
-                project_map.get(project_name).cloned().unwrap_or_else(|| {
-                    debug!("Project path not found for {}, using root", project_name);
-                    project_root.clone()
-                })
+                match project_map.get(project_name) {
+                    Some(path) => {
+                        debug!("Processing project {} -> {:?}", project_name, path);
+                        path.clone()
+                    }
+                    None => {
+                        debug!(
+                            "Project path not found for {}, available keys: {:?}",
+                            project_name,
+                            project_map.keys().collect::<Vec<_>>()
+                        );
+                        return Err(anyhow!("Project path not found for {}", project_name));
+                    }
+                }
             };
 
-            let class_names = self
-                .resolve_and_index_external_dependencies(
-                    external_deps,
-                    &current_project_path,
-                    cache.clone(),
-                )
-                .await?;
+            let class_names = self.resolve_and_index_external_dependencies(
+                external_deps,
+                &current_project_path,
+                cache.clone(),
+            )?;
 
             cache
                 .project_metadata
@@ -165,7 +143,6 @@ impl ProjectMapper {
                 .or_insert_with(|| ProjectMetadata {
                     inter_project_deps: Arc::new(DashSet::new()),
                     external_dep_names: Arc::new(DashSet::new()),
-                    build_file_hash: String::new(),
                     indexing_status: IndexingStatus::InProgress,
                 });
 
@@ -176,6 +153,7 @@ impl ProjectMapper {
                 }
 
                 metadata.inter_project_deps.clear();
+
                 for project_ref in project_deps {
                     if let Some(project_path) = project_map.get(project_ref) {
                         metadata.inter_project_deps.insert(project_path.clone());
@@ -197,14 +175,13 @@ impl ProjectMapper {
     }
 
     #[tracing::instrument(skip_all)]
-    async fn resolve_and_index_external_dependencies(
+    fn resolve_and_index_external_dependencies(
         &self,
         external_deps: &[ExternalDependency],
         project_path: &PathBuf,
         cache: Arc<DependencyCache>,
     ) -> Result<HashSet<String>> {
         let mut all_class_names = HashSet::new();
-
         let chunk_size = std::cmp::max(1, external_deps.len() / num_cpus::get());
         let mut handles = Vec::new();
 
@@ -213,30 +190,32 @@ impl ProjectMapper {
             let project_path = project_path.clone();
             let cache = cache.clone();
 
-            let handle = tokio::task::spawn(async move {
+            let handle = std::thread::spawn(move || {
                 let mut chunk_classes = HashSet::new();
-
                 for dep in chunk {
-                    if let Some(jar_path) = find_jar_in_gradle_cache(&dep).await {
-                        if let Ok(classes) = extract_class_names_from_jar(&jar_path).await {
+                    if let Some(jar_path) = find_jar_in_gradle_cache(&dep) {
+                        debug!("Found JAR: {:?}", jar_path);
+                        if let Ok(classes) = extract_class_names_from_jar(&jar_path) {
+                            debug!("JAR {} has {} classes", jar_path.display(), classes.len());
                             chunk_classes.extend(classes.clone());
 
                             if let Err(e) =
-                                index_jar_sources(&jar_path, &project_path, &cache, &classes).await
+                                index_jar_sources(&jar_path, &project_path, &cache, &classes)
                             {
-                                debug!("Failed to index JAR sources for {:?}: {}", jar_path, e);
+                                debug!("JAR source indexing failed for {:?}: {}", jar_path, e);
+                            } else {
+                                debug!("JAR source indexing completed for {:?}", jar_path);
                             }
                         }
                     }
                 }
-
                 chunk_classes
             });
             handles.push(handle);
         }
 
         for handle in handles {
-            if let Ok(chunk_classes) = handle.await {
+            if let Ok(chunk_classes) = handle.join() {
                 all_class_names.extend(chunk_classes);
             }
         }
