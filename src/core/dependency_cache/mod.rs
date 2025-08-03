@@ -1,13 +1,14 @@
 pub mod builtin;
 pub mod project_deps;
+pub mod source_file_info;
 pub mod symbol_index;
 
 use std::{collections::HashMap, env, path::PathBuf, sync::Arc, time::Instant};
 
 use anyhow::{anyhow, Context, Result};
-use builtin::SourceFileInfo;
 use dashmap::DashMap;
 use project_deps::ProjectMetadata;
+use source_file_info::SourceFileInfo;
 use symbol_index::{
     collect_source_files, extract_symbol_definitions, find_project_roots,
     parse_source_files_parallel, SymbolDefinition,
@@ -169,33 +170,33 @@ impl DependencyCache {
                 .insert(symbol_name.clone(), file_value);
         }
 
-        let mut external_dependencies = HashMap::new();
-        for entry in self.builtin_infos.iter() {
-            let (class_name, external_info) = (entry.key(), entry.value());
-            external_dependencies.insert(
-                class_name.clone(),
-                serde_json::json!({
-                    "source_file": external_info.source_path.to_string_lossy(),
-                }),
-            );
-        }
+        // let mut external_dependencies = HashMap::new();
+        // for entry in self.builtin_infos.iter() {
+        //     let (class_name, external_info) = (entry.key(), entry.value());
+        //     external_dependencies.insert(
+        //         class_name.clone(),
+        //         serde_json::json!({
+        //             "source_file": external_info.source_path.to_string_lossy(),
+        //         }),
+        //     );
+        // }
 
-        let mut project_external_dependencies = HashMap::new();
-        for entry in self.project_external_infos.iter() {
-            let ((project_root, class_name), external_info) = (entry.key(), entry.value());
-            let project_key = project_root.to_string_lossy().to_string();
-
-            project_external_dependencies
-                .entry(project_key)
-                .or_insert_with(HashMap::new)
-                .insert(
-                    class_name.clone(),
-                    serde_json::json!({
-                        "source_file": external_info.source_path.to_string_lossy(),
-                        "zip_internal_path": external_info.zip_internal_path,
-                    }),
-                );
-        }
+        // let mut project_external_dependencies = HashMap::new();
+        // for entry in self.project_external_infos.iter() {
+        //     let ((project_root, class_name), external_info) = (entry.key(), entry.value());
+        //     let project_key = project_root.to_string_lossy().to_string();
+        //
+        //     project_external_dependencies
+        //         .entry(project_key)
+        //         .or_insert_with(HashMap::new)
+        //         .insert(
+        //             class_name.clone(),
+        //             serde_json::json!({
+        //                 "source_file": external_info.source_path.to_string_lossy(),
+        //                 "zip_internal_path": external_info.zip_internal_path,
+        //             }),
+        //         );
+        // }
 
         let mut project_metadata = HashMap::new();
         for entry in self.project_metadata.iter() {
@@ -216,8 +217,8 @@ impl DependencyCache {
 
         serde_json::json!({
             "symbol_index": projects,
-            "external_infos": external_dependencies,
-            "project_external_infos": project_external_dependencies,
+            // "external_infos": external_dependencies,
+            // "project_external_infos": project_external_dependencies,
             "project_metadata": project_metadata,
             "total_symbols": self.symbol_index.len(),
             "total_external": self.builtin_infos.len(),

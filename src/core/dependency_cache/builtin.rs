@@ -1,25 +1,16 @@
 use anyhow::{anyhow, Context, Result};
 use std::io::Cursor;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
-use std::{io::Read, path::PathBuf};
 use tracing::debug;
-use tree_sitter::Tree;
 use walkdir::WalkDir;
 use zip::ZipArchive;
 
-use crate::core::constants::{GROOVY_PARSER, JAVA_PARSER};
 use crate::languages::groovy::constants::GROOVY_DEFAULT_IMPORTS;
 
+use super::source_file_info::SourceFileInfo;
 use super::DependencyCache;
-
-#[derive(Debug, Clone)]
-pub struct SourceFileInfo {
-    pub source_path: PathBuf,
-    pub zip_internal_path: Option<String>, // e.g. "java/lang/String.java"
-    pub tree: Tree,
-    pub content: String,
-}
 
 pub struct BuiltinResolver {
     dependency_paths: Vec<PathBuf>,
@@ -85,14 +76,12 @@ impl BuiltinResolver {
                     .await?;
             } else {
                 let file_path = entry.path();
-                let content = tokio::fs::read_to_string(&file_path).await?;
 
                 if let Some(class_name) = file_path.file_stem().and_then(|s| s.to_str()) {
                     parse_and_cache_builtin(
                         class_name,
                         file_path.to_path_buf(),
                         None,
-                        content,
                         &cache.clone(),
                     )
                     .with_context(|| {
@@ -116,9 +105,9 @@ impl BuiltinResolver {
                 let cursor = Cursor::new(zip_data);
                 let mut archive = ZipArchive::new(cursor)?;
 
-                let entries: Vec<(String, String)> = (0..archive.len())
+                let entries: Vec<String> = (0..archive.len())
                     .filter_map(|i| {
-                        let mut file = archive.by_index(i).ok()?;
+                        let file = archive.by_index(i).ok()?;
                         let file_name = file.name().to_string();
 
                         if !(file_name.ends_with(".java") || file_name.ends_with(".groovy")) {
@@ -129,9 +118,7 @@ impl BuiltinResolver {
                             return None;
                         }
 
-                        let mut content = String::new();
-                        file.read_to_string(&mut content).ok()?;
-                        Some((file_name, content))
+                        Some(file_name)
                     })
                     .collect();
 
@@ -144,7 +131,7 @@ impl BuiltinResolver {
                     let cache = cache.clone();
 
                     let handle = thread::spawn(move || -> Result<()> {
-                        for (file_name, content) in chunk {
+                        for file_name in chunk {
                             let class_name = file_name
                                 .split('/')
                                 .last()
@@ -156,7 +143,6 @@ impl BuiltinResolver {
                                 class_name,
                                 zip_path.clone(),
                                 Some(file_name.clone()),
-                                content.clone(),
                                 &cache,
                             )?;
                         }
@@ -287,35 +273,9 @@ fn parse_and_cache_builtin(
     class_name: &str,
     source_path: PathBuf,
     zip_internal_path: Option<String>,
-    content: String,
     cache: &DependencyCache,
 ) -> Result<()> {
-    let language = if source_path.extension().and_then(|s| s.to_str()) == Some("groovy")
-        || zip_internal_path
-            .as_ref()
-            .map(|p| p.ends_with(".groovy"))
-            .unwrap_or(false)
-    {
-        GROOVY_PARSER.get_or_init(|| tree_sitter_groovy::language())
-    } else {
-        JAVA_PARSER.get_or_init(|| tree_sitter_java::LANGUAGE.into())
-    };
-
-    let mut parser = tree_sitter::Parser::new();
-    parser
-        .set_language(language)
-        .with_context(|| "Failed to set parser language")?;
-
-    let tree = parser
-        .parse(&content, None)
-        .with_context(|| format!("Failed to parse source file: {:?}", source_path))?;
-
-    let external_info = SourceFileInfo {
-        source_path,
-        zip_internal_path,
-        tree,
-        content,
-    };
+    let external_info = SourceFileInfo::new(source_path, zip_internal_path);
 
     cache
         .builtin_infos

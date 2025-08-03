@@ -11,9 +11,7 @@ src/languages/groovy/implementation.rs:159: currently using naive implementation
 src/languages/groovy/symbols.rs:13: currently only handles non-nested declarations
 
 # FIXME
-src/core/build_tools.rs:397: this should be customizable by the user
-src/core/build_tools.rs:527: remove debug
-src/core/build_tools.rs:552: remove debug
+src/core/build_tools.rs:394: this should be customizable by the user
 src/languages/groovy/definition/external.rs:16: currently accidentally work because the tree-sitter node names overlap
 
 # HACK
@@ -21,5 +19,6 @@ src/languages/groovy/definition/external.rs:16: currently accidentally work beca
 # WARN
 
 # NOTE
-src/core/dependency_cache/builtin.rs:360: include everything else that's not explicitly skipped
+src/core/build_tools.rs:489: use any reasonable number to get the first few lines
+src/core/dependency_cache/builtin.rs:320: include everything else that's not explicitly skipped
 src/languages/groovy/definition/workspace.rs:90: Naive implementation, does not consider whether dependency is valid,

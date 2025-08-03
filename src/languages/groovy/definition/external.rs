@@ -6,7 +6,7 @@ use tracing::{debug, error};
 use tree_sitter::Node;
 
 use crate::core::{
-    dependency_cache::{builtin::SourceFileInfo, DependencyCache},
+    dependency_cache::{source_file_info::SourceFileInfo, DependencyCache},
     symbols::SymbolType,
     utils::{find_project_root, node_to_lsp_location, path_to_file_uri, uri_to_path},
 };
@@ -58,16 +58,21 @@ fn search_external_definition_and_convert(
     symbol_name: &str,
     external_info: SourceFileInfo,
 ) -> Option<Location> {
-    let definition_node = search_definition(
-        &external_info.tree,
-        &external_info.content,
-        symbol_name,
-        SymbolType::Type,
-    )
-    .context(format!("definition for {symbol_name} not found"))
-    .ok()?;
+    let tree = external_info
+        .get_tree()
+        .context(format!("failed to get tree for {symbol_name}"))
+        .ok()?;
 
-    let file_uri = get_uri(&external_info)
+    let content = external_info
+        .get_content()
+        .context(format!("failed to get content for {symbol_name}"))
+        .ok()?;
+
+    let definition_node = search_definition(&tree, &content, symbol_name, SymbolType::Type)
+        .context(format!("definition for {symbol_name} not found"))
+        .ok()?;
+
+    let file_uri = get_uri(&external_info.clone())
         .context(format!("file_uri for {symbol_name} not found"))
         .ok()?;
 
@@ -98,8 +103,13 @@ fn extract_zip_file_to_temp(
     let safe_filename = zip_internal_path.replace('/', "_");
     let temp_file = temp_dir.join(&safe_filename);
 
+    let content = builtin_info
+        .get_content()
+        .context(format!("failed to get content for {zip_internal_path}"))
+        .ok()?;
+
     if !temp_file.exists() {
-        if let Err(e) = std::fs::write(&temp_file, &builtin_info.content) {
+        if let Err(e) = std::fs::write(&temp_file, &content) {
             error!("Failed to write temp file for builtin: {}", e);
             return None;
         }

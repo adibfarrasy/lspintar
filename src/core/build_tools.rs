@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::Result;
 use std::{
     collections::{HashMap, HashSet},
     fs,
@@ -10,10 +10,7 @@ use tokio::process::Command;
 use tracing::debug;
 use zip::ZipArchive;
 
-use super::{
-    constants::{GROOVY_PARSER, JAVA_PARSER},
-    dependency_cache::{builtin::SourceFileInfo, DependencyCache},
-};
+use super::dependency_cache::{source_file_info::SourceFileInfo, DependencyCache};
 
 #[derive(Debug, Clone)]
 pub enum BuildTool {
@@ -462,10 +459,14 @@ pub fn index_jar_sources(
             continue;
         }
 
-        let package_name =
-            extract_package_name(&content).ok_or_else(|| anyhow!("package name not found"))?;
+        let package_name = extract_package_name(&content);
 
-        if !class_fqn_names.contains(&format!("{}.{}", package_name, class_name)) {
+        if package_name.is_none() {
+            debug!("package_name not found");
+            continue;
+        }
+
+        if !class_fqn_names.contains(&format!("{}.{}", package_name.unwrap(), class_name)) {
             debug!("class_names does not contain {}", file_name);
             continue;
         }
@@ -475,7 +476,6 @@ pub fn index_jar_sources(
             project_path,
             jar_path.clone(),
             Some(file_name.clone()),
-            content,
             cache.clone(),
         ) {
             debug!("Failed to parse external source {}: {}", class_name, e);
@@ -512,49 +512,15 @@ fn parse_and_cache_project_external(
     project_path: &PathBuf,
     jar_path: PathBuf,
     zip_internal_path: Option<String>,
-    content: String,
     cache: Arc<DependencyCache>,
 ) -> Result<()> {
-    let language = if zip_internal_path
-        .as_ref()
-        .map(|p| p.ends_with(".groovy"))
-        .unwrap_or(false)
-    {
-        GROOVY_PARSER.get_or_init(|| tree_sitter_groovy::language())
-    } else {
-        JAVA_PARSER.get_or_init(|| tree_sitter_java::LANGUAGE.into())
-    };
-
-    // FIXME: remove debug
-    debug!("language: {:#?}", language);
-
-    let mut parser = tree_sitter::Parser::new();
-    parser
-        .set_language(language)
-        .with_context(|| "Failed to set parser language")?;
-
-    let tree = parser
-        .parse(&content, None)
-        .with_context(|| format!("Failed to parse source file: {:?}", jar_path))?;
-
-    let external_info = SourceFileInfo {
-        source_path: jar_path,
-        zip_internal_path,
-        tree,
-        content,
-    };
+    let external_info = SourceFileInfo::new(jar_path, zip_internal_path);
 
     let project_key = (project_path.clone(), class_name.to_string());
 
     cache
         .project_external_infos
         .insert(project_key, external_info);
-
-    // FIXME: remove debug
-    debug!(
-        "cache size after insert: {}",
-        cache.project_external_infos.len()
-    );
 
     Ok(())
 }
