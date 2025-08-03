@@ -6,7 +6,7 @@ use tracing::{debug, error};
 use tree_sitter::Node;
 
 use crate::core::{
-    dependency_cache::{external::SourceFileInfo, DependencyCache},
+    dependency_cache::{builtin::SourceFileInfo, DependencyCache},
     symbols::SymbolType,
     utils::{find_project_root, node_to_lsp_location, path_to_file_uri, uri_to_path},
 };
@@ -46,7 +46,7 @@ fn find_project_external(
         return search_external_definition_and_convert(&symbol_name, external_info.value().clone());
     }
 
-    if let Some(external_info) = dependency_cache.external_infos.get(&symbol_name) {
+    if let Some(external_info) = dependency_cache.builtin_infos.get(&symbol_name) {
         return search_external_definition_and_convert(&symbol_name, external_info.value().clone());
     }
 

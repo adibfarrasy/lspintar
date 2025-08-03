@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use std::{
     collections::{HashMap, HashSet},
     fs,
@@ -12,7 +12,7 @@ use zip::ZipArchive;
 
 use super::{
     constants::{GROOVY_PARSER, JAVA_PARSER},
-    dependency_cache::{external::SourceFileInfo, DependencyCache},
+    dependency_cache::{builtin::SourceFileInfo, DependencyCache},
 };
 
 #[derive(Debug, Clone)]
@@ -295,19 +295,26 @@ pub struct ExternalDependency {
 }
 
 #[tracing::instrument(skip_all)]
-pub fn find_jar_in_gradle_cache(dep: &ExternalDependency) -> Option<PathBuf> {
+pub fn find_sources_jar_in_gradle_cache(dep: &ExternalDependency) -> Option<PathBuf> {
     let cache_base = get_gradle_cache_base()?;
 
-    // Gradle cache structure: group/artifact/version/hash/artifact-version.jar
-    let group_path = dep.group.replace('.', "/");
-    let artifact_dir = cache_base
-        .join(&group_path)
+    let mut artifact_dir = cache_base
+        .join(&dep.group)
         .join(&dep.artifact)
         .join(&dep.version);
 
     if !artifact_dir.exists() {
-        debug!("Gradle cache directory not found: {:?}", artifact_dir);
-        return None;
+        let group_path = dep.group.replace('.', "/");
+
+        artifact_dir = cache_base
+            .join(&group_path)
+            .join(&dep.artifact)
+            .join(&dep.version);
+
+        if !artifact_dir.exists() {
+            debug!("Gradle cache directory not found: {:?}", artifact_dir);
+            return None;
+        }
     }
 
     // There should be only one hash directory
@@ -315,7 +322,7 @@ pub fn find_jar_in_gradle_cache(dep: &ExternalDependency) -> Option<PathBuf> {
     while let Some(entry) = read_dir.next() {
         let entry = entry.ok()?;
         if entry.file_type().ok()?.is_dir() {
-            let jar_name = format!("{}-{}.jar", dep.artifact, dep.version);
+            let jar_name = format!("{}-{}-sources.jar", dep.artifact, dep.version);
             let jar_path = entry.path().join(&jar_name);
 
             if jar_path.exists() {
@@ -344,9 +351,10 @@ pub fn extract_class_names_from_jar(jar_path: &PathBuf) -> Result<HashSet<String
         let file = archive.by_index(i)?;
         let file_name = file.name();
 
-        // Only process .class files, skip inner classes and test classes
-        if file_name.ends_with(".class") && should_index_class(file_name) {
-            if let Some(class_name) = class_path_to_name(file_name) {
+        if (file_name.ends_with(".java") || file_name.ends_with(".groovy"))
+            && should_index_source_file(file_name)
+        {
+            if let Some(class_name) = source_path_to_class_name(file_name) {
                 class_names.insert(class_name);
             }
         }
@@ -360,50 +368,72 @@ pub fn extract_class_names_from_jar(jar_path: &PathBuf) -> Result<HashSet<String
     Ok(class_names)
 }
 
-fn get_gradle_cache_base() -> Option<PathBuf> {
-    match std::env::var("GRADLE_USER_HOME") {
-        Ok(cache_path) => Some(PathBuf::from(cache_path).join("caches/modules-2/files-2.1")),
-        _ => dirs::home_dir().map(|home| home.join(".gradle/caches/modules-2/files-2.1")),
-    }
-}
-
-fn should_index_class(class_path: &str) -> bool {
+fn should_index_source_file(file_path: &str) -> bool {
     // Skip inner classes (contain $), test classes, and common build artifacts
-    if class_path.contains('$') {
+    if file_path.contains('$') {
         return false;
     }
 
-    if class_path.contains("/test/") || class_path.contains("/tests/") {
+    if file_path.contains("/test/") || file_path.contains("/tests/") {
         return false;
     }
 
     // Skip common build/framework artifacts that aren't user-accessible
     const SKIP_PACKAGES: &[&str] = &["META-INF/", "WEB-INF/", "org/gradle/", "org/apache/maven/"];
 
-    !SKIP_PACKAGES
-        .iter()
-        .any(|skip| class_path.starts_with(skip))
+    !SKIP_PACKAGES.iter().any(|skip| file_path.starts_with(skip))
 }
 
-fn class_path_to_name(class_path: &str) -> Option<String> {
-    // Convert "com/example/MyClass.class" to "com.example.MyClass"
-    let without_extension = class_path.strip_suffix(".class")?;
+fn source_path_to_class_name(source_path: &str) -> Option<String> {
+    // Convert "com/example/MyClass.java" or "com/example/MyClass.groovy" to "com.example.MyClass"
+    let without_extension = source_path
+        .strip_suffix(".java")
+        .or_else(|| source_path.strip_suffix(".groovy"))?;
+
     Some(without_extension.replace('/', "."))
+}
+
+pub fn get_gradle_cache_base() -> Option<PathBuf> {
+    // FIXME: this should be customizable by the user
+    // 0. user-defined path
+    let user_defined_path_str = ".sdkman/candidates/gradle/6.3/caches/modules-2/files-2.1";
+    if let Some(path) = dirs::home_dir()
+        .map(|home| home.join(user_defined_path_str))
+        .filter(|path| path.exists())
+    {
+        return Some(path);
+    }
+
+    // 1. Explicit GRADLE_USER_HOME
+    if let Ok(gradle_user_home) = std::env::var("GRADLE_USER_HOME") {
+        let cache = PathBuf::from(gradle_user_home).join("caches/modules-2/files-2.1");
+        if cache.exists() {
+            return Some(cache);
+        }
+    }
+
+    // 2. SYSTEM: GRADLE_HOME
+    if let Ok(gradle_home) = std::env::var("GRADLE_HOME") {
+        let cache = PathBuf::from(gradle_home).join("caches/modules-2/files-2.1");
+        if cache.exists() {
+            return Some(cache);
+        }
+    }
+
+    // 3. FALLBACK: Default user cache
+    dirs::home_dir()
+        .map(|home| home.join(".gradle/caches/modules-2/files-2.1"))
+        .filter(|path| path.exists())
 }
 
 #[tracing::instrument(skip_all)]
 pub fn index_jar_sources(
     jar_path: &PathBuf,
     project_path: &PathBuf,
-    cache: &Arc<DependencyCache>,
-    class_names: &HashSet<String>,
+    cache: Arc<DependencyCache>,
+    class_fqn_names: &HashSet<String>,
 ) -> Result<()> {
     let jar_data = fs::read(jar_path)?;
-
-    let jar_path = jar_path.clone();
-    let project_path = project_path.clone();
-    let cache = cache.clone();
-    let class_names = class_names.clone();
 
     let cursor = Cursor::new(jar_data);
     let mut archive = ZipArchive::new(cursor)?;
@@ -412,7 +442,10 @@ pub fn index_jar_sources(
         let mut file = archive.by_index(i)?;
         let file_name = file.name().to_string();
 
-        if !(file_name.ends_with(".java") || file_name.ends_with(".groovy")) {
+        if !(file_name.ends_with(".java")
+            || file_name.ends_with(".groovy")
+            || should_index_source_file(&file_name))
+        {
             continue;
         }
 
@@ -423,22 +456,27 @@ pub fn index_jar_sources(
             .trim_end_matches(".java")
             .trim_end_matches(".groovy");
 
-        if !class_names.contains(class_name) {
+        let mut content = String::new();
+        if file.read_to_string(&mut content).is_err() {
+            debug!("failed to read content for file {}", file_name);
             continue;
         }
 
-        let mut content = String::new();
-        if file.read_to_string(&mut content).is_err() {
+        let package_name =
+            extract_package_name(&content).ok_or_else(|| anyhow!("package name not found"))?;
+
+        if !class_fqn_names.contains(&format!("{}.{}", package_name, class_name)) {
+            debug!("class_names does not contain {}", file_name);
             continue;
         }
 
         if let Err(e) = parse_and_cache_project_external(
             class_name,
-            &project_path,
+            project_path,
             jar_path.clone(),
             Some(file_name.clone()),
             content,
-            &cache,
+            cache.clone(),
         ) {
             debug!("Failed to parse external source {}: {}", class_name, e);
         }
@@ -447,25 +485,48 @@ pub fn index_jar_sources(
     Ok(())
 }
 
+fn extract_package_name(content: &str) -> Option<String> {
+    // NOTE: use any reasonable number to get the first few lines
+    for line in content.lines().take(50) {
+        let line = line.trim();
+
+        if line.starts_with("package ") {
+            let package_part = line
+                .strip_prefix("package ")?
+                .trim()
+                .trim_end_matches(';')
+                .trim();
+
+            let package_name = package_part.split_whitespace().next()?.to_string();
+
+            return Some(package_name);
+        }
+    }
+
+    None
+}
+
 #[tracing::instrument(skip_all)]
 fn parse_and_cache_project_external(
     class_name: &str,
     project_path: &PathBuf,
-    source_path: PathBuf,
+    jar_path: PathBuf,
     zip_internal_path: Option<String>,
     content: String,
-    cache: &DependencyCache,
+    cache: Arc<DependencyCache>,
 ) -> Result<()> {
-    let language = if source_path.extension().and_then(|s| s.to_str()) == Some("groovy")
-        || zip_internal_path
-            .as_ref()
-            .map(|p| p.ends_with(".groovy"))
-            .unwrap_or(false)
+    let language = if zip_internal_path
+        .as_ref()
+        .map(|p| p.ends_with(".groovy"))
+        .unwrap_or(false)
     {
         GROOVY_PARSER.get_or_init(|| tree_sitter_groovy::language())
     } else {
         JAVA_PARSER.get_or_init(|| tree_sitter_java::LANGUAGE.into())
     };
+
+    // FIXME: remove debug
+    debug!("language: {:#?}", language);
 
     let mut parser = tree_sitter::Parser::new();
     parser
@@ -474,19 +535,26 @@ fn parse_and_cache_project_external(
 
     let tree = parser
         .parse(&content, None)
-        .with_context(|| format!("Failed to parse source file: {:?}", source_path))?;
+        .with_context(|| format!("Failed to parse source file: {:?}", jar_path))?;
 
     let external_info = SourceFileInfo {
-        source_path,
+        source_path: jar_path,
         zip_internal_path,
         tree,
         content,
     };
 
     let project_key = (project_path.clone(), class_name.to_string());
+
     cache
         .project_external_infos
         .insert(project_key, external_info);
+
+    // FIXME: remove debug
+    debug!(
+        "cache size after insert: {}",
+        cache.project_external_infos.len()
+    );
 
     Ok(())
 }

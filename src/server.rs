@@ -1,6 +1,8 @@
 use dashmap::DashMap;
 use request::GotoImplementationParams;
 use request::GotoImplementationResponse;
+use serde_json::Value;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::Result;
@@ -24,7 +26,13 @@ pub struct LspServer {
 
 #[tower_lsp::async_trait]
 impl LanguageServer for LspServer {
-    async fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
+    async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
+        if let Some(init_options) = params.initialization_options {
+            self.parse_configuration(init_options).await.map_err(|_| {
+                tower_lsp::jsonrpc::Error::invalid_params("invalid initialization options")
+            })?;
+        }
+
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
@@ -324,5 +332,10 @@ impl LspServer {
             .ok_or(tower_lsp::jsonrpc::Error::internal_error())?;
 
         Ok((document.content.clone(), tree.clone()))
+    }
+
+    async fn parse_configuration(&self, init_options: Value) -> anyhow::Result<()> {
+        // TODO: implement parse_configuration
+        Ok(())
     }
 }

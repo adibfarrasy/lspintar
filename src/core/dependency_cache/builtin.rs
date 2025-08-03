@@ -9,7 +9,7 @@ use walkdir::WalkDir;
 use zip::ZipArchive;
 
 use crate::core::constants::{GROOVY_PARSER, JAVA_PARSER};
-use crate::{core::build_tools::BuildTool, languages::groovy::constants::GROOVY_DEFAULT_IMPORTS};
+use crate::languages::groovy::constants::GROOVY_DEFAULT_IMPORTS;
 
 use super::DependencyCache;
 
@@ -21,17 +21,13 @@ pub struct SourceFileInfo {
     pub content: String,
 }
 
-pub struct DependencyResolver {
+pub struct BuiltinResolver {
     dependency_paths: Vec<PathBuf>,
 }
 
-impl DependencyResolver {
-    pub fn new(build_tool: &BuildTool) -> Self {
+impl BuiltinResolver {
+    pub fn new() -> Self {
         let mut dependency_paths = Vec::new();
-
-        match build_tool {
-            BuildTool::Gradle => dependency_paths.extend(get_gradle_cache()),
-        };
 
         let java_home = std::env::var("JAVA_HOME").ok().map(PathBuf::from);
         let groovy_home = std::env::var("GROOVY_HOME").ok().map(PathBuf::from);
@@ -49,7 +45,7 @@ impl DependencyResolver {
     }
 
     #[tracing::instrument(skip_all)]
-    pub async fn index_external_dependencies(&self, cache: Arc<DependencyCache>) -> Result<()> {
+    pub async fn index_builtin_dependencies(&self, cache: Arc<DependencyCache>) -> Result<()> {
         let futures: Vec<_> = self
             .dependency_paths
             .iter()
@@ -92,7 +88,7 @@ impl DependencyResolver {
                 let content = tokio::fs::read_to_string(&file_path).await?;
 
                 if let Some(class_name) = file_path.file_stem().and_then(|s| s.to_str()) {
-                    parse_and_cache_external(
+                    parse_and_cache_builtin(
                         class_name,
                         file_path.to_path_buf(),
                         None,
@@ -156,7 +152,7 @@ impl DependencyResolver {
                                 .trim_end_matches(".java")
                                 .trim_end_matches(".groovy");
 
-                            parse_and_cache_external(
+                            parse_and_cache_builtin(
                                 class_name,
                                 zip_path.clone(),
                                 Some(file_name.clone()),
@@ -183,15 +179,6 @@ impl DependencyResolver {
 
         Ok(())
     }
-}
-
-fn get_gradle_cache() -> Option<PathBuf> {
-    let cache_dir = match std::env::var("GRADLE_USER_HOME") {
-        Ok(cache_path) => PathBuf::from(cache_path).join("caches"),
-        _ => dirs::home_dir().map(|home| home.join(".gradle/caches"))?,
-    };
-
-    Some(cache_dir.join("modules-2/files-2.1"))
 }
 
 #[tracing::instrument(skip_all)]
@@ -296,7 +283,7 @@ fn try_find_package_name(content: &str) -> Option<String> {
 }
 
 #[tracing::instrument(skip_all)]
-fn parse_and_cache_external(
+fn parse_and_cache_builtin(
     class_name: &str,
     source_path: PathBuf,
     zip_internal_path: Option<String>,
@@ -331,7 +318,7 @@ fn parse_and_cache_external(
     };
 
     cache
-        .external_infos
+        .builtin_infos
         .insert(class_name.to_string(), external_info);
 
     Ok(())

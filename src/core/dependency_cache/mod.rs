@@ -1,12 +1,12 @@
-pub mod external;
+pub mod builtin;
 pub mod project_deps;
 pub mod symbol_index;
 
 use std::{collections::HashMap, env, path::PathBuf, sync::Arc, time::Instant};
 
 use anyhow::{anyhow, Context, Result};
+use builtin::SourceFileInfo;
 use dashmap::DashMap;
-use external::SourceFileInfo;
 use project_deps::ProjectMetadata;
 use symbol_index::{
     collect_source_files, extract_symbol_definitions, find_project_roots,
@@ -24,11 +24,12 @@ pub struct DependencyCache {
     pub symbol_index: Arc<DashMap<(PathBuf, String), PathBuf>>,
 
     // Maps builtin class name -> (source_file_path, parsed_tree, source_content)
-    pub external_infos: Arc<DashMap<String, SourceFileInfo>>,
+    pub builtin_infos: Arc<DashMap<String, SourceFileInfo>>,
 
     // Maps (project_root, type_name) -> Vec<PathBuf>
     pub inheritance_index: Arc<DashMap<(PathBuf, String), Vec<(PathBuf, usize, usize)>>>,
 
+    // Maps (project_root, type_name) -> (source_file_path, parsed_tree, source_content)
     pub project_external_infos: Arc<DashMap<(PathBuf, String), SourceFileInfo>>,
 
     pub project_metadata: Arc<DashMap<PathBuf, ProjectMetadata>>,
@@ -38,7 +39,7 @@ impl DependencyCache {
     pub fn new() -> Self {
         Self {
             symbol_index: Arc::new(DashMap::new()),
-            external_infos: Arc::new(DashMap::new()),
+            builtin_infos: Arc::new(DashMap::new()),
             inheritance_index: Arc::new(DashMap::new()),
             project_external_infos: Arc::new(DashMap::new()),
             project_metadata: Arc::new(DashMap::new()),
@@ -66,18 +67,18 @@ impl DependencyCache {
             .inspect_err(|e| debug!("Failed to index project symbols: {e}"))?;
         debug!("Symbol indexing took: {:?}", symbols_start.elapsed());
 
-        let ext_dependency_start = Instant::now();
+        let builtin_dependency_start = Instant::now();
 
         debug!("build_tool: {:#?}", &build_tool);
 
-        let resolver = external::DependencyResolver::new(&build_tool);
+        let resolver = builtin::BuiltinResolver::new();
         resolver
-            .index_external_dependencies(self.clone())
+            .index_builtin_dependencies(self.clone())
             .await
             .inspect_err(|e| tracing::debug!("Failed to index external types: {e}"))?;
         debug!(
-            "External dependency indexing took: {:?}",
-            ext_dependency_start.elapsed()
+            "Builtin dependency indexing took: {:?}",
+            builtin_dependency_start.elapsed()
         );
 
         let project_deps_start = Instant::now();
@@ -169,7 +170,7 @@ impl DependencyCache {
         }
 
         let mut external_dependencies = HashMap::new();
-        for entry in self.external_infos.iter() {
+        for entry in self.builtin_infos.iter() {
             let (class_name, external_info) = (entry.key(), entry.value());
             external_dependencies.insert(
                 class_name.clone(),
@@ -219,7 +220,7 @@ impl DependencyCache {
             "project_external_infos": project_external_dependencies,
             "project_metadata": project_metadata,
             "total_symbols": self.symbol_index.len(),
-            "total_external": self.external_infos.len(),
+            "total_external": self.builtin_infos.len(),
             "total_project_external": self.project_external_infos.len(),
             "generated_at": chrono::Utc::now().to_rfc3339()
         })

@@ -1,6 +1,7 @@
 # TODO
 src/core/dependency_cache/symbol_index.rs:179: Implement Java symbol extraction
 src/core/dependency_cache/symbol_index.rs:183: Implement Kotlin symbol extraction
+src/server.rs:338: implement parse_configuration
 src/languages/groovy/support.rs:52: replace this with more sophisticated handling
 src/languages/groovy/definition/local.rs:380: Could enhance with variable type lookup
 src/languages/groovy/definition/mod.rs:6: make this private?
@@ -10,6 +11,9 @@ src/languages/groovy/implementation.rs:159: currently using naive implementation
 src/languages/groovy/symbols.rs:13: currently only handles non-nested declarations
 
 # FIXME
+src/core/build_tools.rs:397: this should be customizable by the user
+src/core/build_tools.rs:527: remove debug
+src/core/build_tools.rs:552: remove debug
 src/languages/groovy/definition/external.rs:16: currently accidentally work because the tree-sitter node names overlap
 
 # HACK
@@ -17,5 +21,5 @@ src/languages/groovy/definition/external.rs:16: currently accidentally work beca
 # WARN
 
 # NOTE
-src/core/dependency_cache/external.rs:373: include everything else that's not explicitly skipped
+src/core/dependency_cache/builtin.rs:360: include everything else that's not explicitly skipped
 src/languages/groovy/definition/workspace.rs:90: Naive implementation, does not consider whether dependency is valid,
