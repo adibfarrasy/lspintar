@@ -5,10 +5,15 @@ use tower_lsp::lsp_types::Location;
 use tracing::{debug, error};
 use tree_sitter::Node;
 
-use crate::core::{
-    dependency_cache::{source_file_info::SourceFileInfo, DependencyCache},
-    symbols::SymbolType,
-    utils::{find_project_root, node_to_lsp_location, path_to_file_uri, uri_to_path},
+use crate::{
+    core::{
+        constants::IS_INDEXING_COMPLETED,
+        dependency_cache::{source_file_info::SourceFileInfo, DependencyCache},
+        state_manager::get_global,
+        symbols::SymbolType,
+        utils::{find_project_root, node_to_lsp_location, path_to_file_uri, uri_to_path},
+    },
+    lsp_warning,
 };
 
 use super::utils::search_definition;
@@ -45,9 +50,12 @@ fn find_project_external(
     if let Some(external_info) = dependency_cache.project_external_infos.get(&project_key) {
         return search_external_definition_and_convert(&symbol_name, external_info.value().clone());
     }
-
     if let Some(external_info) = dependency_cache.builtin_infos.get(&symbol_name) {
         return search_external_definition_and_convert(&symbol_name, external_info.value().clone());
+    }
+
+    if get_global(IS_INDEXING_COMPLETED).is_none() {
+        lsp_warning!("Indexing still in progress...");
     }
 
     None

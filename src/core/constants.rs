@@ -13,3 +13,5 @@ pub const PROJECT_ROOT_MARKER: [&str; 4] = ["build.gradle", "build.gradle.kts", 
 
 pub static GROOVY_PARSER: OnceLock<tree_sitter::Language> = OnceLock::new();
 pub static JAVA_PARSER: OnceLock<tree_sitter::Language> = OnceLock::new();
+
+pub const IS_INDEXING_COMPLETED: &str = "is_indexing_completed";

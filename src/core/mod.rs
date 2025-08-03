@@ -3,6 +3,8 @@ pub mod constants;
 pub mod dependency_cache;
 pub mod diagnostic_manager;
 pub mod document_manager;
+pub mod logging_service;
+pub mod state_manager;
 pub mod symbols;
 pub mod utils;
 

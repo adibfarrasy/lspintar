@@ -2,7 +2,6 @@ use dashmap::DashMap;
 use request::GotoImplementationParams;
 use request::GotoImplementationResponse;
 use serde_json::Value;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::Result;
@@ -11,10 +10,14 @@ use tower_lsp::LanguageServer;
 use tree_sitter::Tree;
 
 use crate::core::dependency_cache::DependencyCache;
+use crate::core::logging_service;
+use crate::core::state_manager;
 use crate::core::DiagnosticManager;
 use crate::core::Document;
 use crate::core::DocumentManager;
 use crate::languages::LanguageRegistry;
+use crate::lsp_error;
+use crate::lsp_info;
 
 pub struct LspServer {
     documents: Arc<RwLock<DocumentManager>>,
@@ -48,17 +51,8 @@ impl LanguageServer for LspServer {
     }
 
     async fn initialized(&self, _: InitializedParams) {
-        self.client
-            .log_message(MessageType::INFO, "LSP server initialized")
-            .await;
-
         if let Err(error) = self.dependency_cache.clone().index_workspace().await {
-            self.client
-                .log_message(
-                    MessageType::ERROR,
-                    format!("An error occurred: {}", error.to_string()),
-                )
-                .await;
+            lsp_error!("An error occurred: {}", error.to_string())
         }
     }
 
@@ -256,6 +250,9 @@ impl LanguageServer for LspServer {
 
 impl LspServer {
     pub fn new(client: tower_lsp::Client, registry: Arc<LanguageRegistry>) -> Self {
+        logging_service::init_logging_service(client.clone());
+        state_manager::init_state_manager();
+
         Self {
             documents: Arc::new(RwLock::new(DocumentManager::new())),
             language_registry: registry,

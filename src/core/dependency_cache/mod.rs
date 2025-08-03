@@ -16,7 +16,10 @@ use symbol_index::{
 use tokio::fs;
 use tracing::debug;
 
-use crate::core::utils::is_project_root;
+use crate::{
+    core::{state_manager::set_global, utils::is_project_root},
+    lsp_info,
+};
 
 use super::{build_tools::detect_build_tool, utils::find_project_root};
 
@@ -60,7 +63,7 @@ impl DependencyCache {
             detect_build_tool(project_root.as_path()).context("Cannot detect build tool")?;
 
         let start = Instant::now();
-        debug!("Starting workspace indexing...");
+        lsp_info!("Starting workspace indexing...");
 
         let symbols_start = Instant::now();
         self.index_project_symbols()
@@ -69,8 +72,6 @@ impl DependencyCache {
         debug!("Symbol indexing took: {:?}", symbols_start.elapsed());
 
         let builtin_dependency_start = Instant::now();
-
-        debug!("build_tool: {:#?}", &build_tool);
 
         let resolver = builtin::BuiltinResolver::new();
         resolver
@@ -94,7 +95,9 @@ impl DependencyCache {
         );
 
         let total_time = start.elapsed();
-        debug!("Total workspace indexing completed in: {:?}", total_time);
+        debug!("Total workspace indexing completed in {:?}", total_time);
+        lsp_info!("Indexing completed in {:?}", total_time);
+        set_global("is_indexing_completed", true).await;
 
         let _ = self.dump_to_file().await;
 
