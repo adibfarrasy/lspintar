@@ -1,23 +1,34 @@
+use anyhow::Context;
 use dashmap::DashMap;
 use request::GotoImplementationParams;
 use request::GotoImplementationResponse;
 use serde_json::Value;
+use std::env;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::LanguageServer;
+use tracing::debug;
 use tree_sitter::Tree;
 
+use crate::core::build_tools::run_gradle_build;
+use crate::core::constants::BUILD_ON_INIT;
+use crate::core::constants::GRADLE_CACHE_DIR;
 use crate::core::dependency_cache::DependencyCache;
 use crate::core::logging_service;
 use crate::core::state_manager;
+use crate::core::state_manager::get_global;
+use crate::core::utils::is_project_root;
 use crate::core::DiagnosticManager;
 use crate::core::Document;
 use crate::core::DocumentManager;
+use crate::core::{
+    build_tools::{detect_build_tool, BuildTool},
+    utils::find_project_root,
+};
 use crate::languages::LanguageRegistry;
 use crate::lsp_error;
-use crate::lsp_info;
 
 pub struct LspServer {
     documents: Arc<RwLock<DocumentManager>>,
@@ -51,8 +62,14 @@ impl LanguageServer for LspServer {
     }
 
     async fn initialized(&self, _: InitializedParams) {
+        if let Some(true) = get_global(BUILD_ON_INIT).and_then(|v| v.as_bool()) {
+            if let Err(error) = self.build_on_init().await {
+                lsp_error!("{}", error.to_string())
+            };
+        }
+
         if let Err(error) = self.dependency_cache.clone().index_workspace().await {
-            lsp_error!("An error occurred: {}", error.to_string())
+            lsp_error!("{}", error.to_string())
         }
     }
 
@@ -331,8 +348,45 @@ impl LspServer {
         Ok((document.content.clone(), tree.clone()))
     }
 
+    #[tracing::instrument(skip_all)]
     async fn parse_configuration(&self, init_options: Value) -> anyhow::Result<()> {
-        // TODO: implement parse_configuration
+        if let Some(obj) = init_options.as_object() {
+            if let Some(gradle_cache) = obj.get(GRADLE_CACHE_DIR) {
+                if let Some(cache_dir) = gradle_cache.as_str() {
+                    state_manager::set_global(GRADLE_CACHE_DIR, cache_dir);
+                    debug!("Custom Gradle cache directory configured: {}", cache_dir);
+                }
+            }
+
+            if let Some(run_build) = obj.get(BUILD_ON_INIT) {
+                if let Some(build_flag) = run_build.as_bool() {
+                    state_manager::set_global(BUILD_ON_INIT, build_flag);
+                    debug!("Gradle build on init: {}", build_flag);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    #[tracing::instrument(skip_all)]
+    async fn build_on_init(&self) -> anyhow::Result<()> {
+        let current_dir = env::current_dir().context("Failed to get current directory")?;
+
+        let project_root = if is_project_root(&current_dir) {
+            current_dir
+        } else {
+            find_project_root(&current_dir.to_path_buf()).context("Cannot find project root")?
+        };
+
+        let build_tool = detect_build_tool(&project_root).context("Cannot detect build tool")?;
+
+        match build_tool {
+            BuildTool::Gradle => {
+                run_gradle_build(&project_root).await?;
+            }
+        }
+
         Ok(())
     }
 }

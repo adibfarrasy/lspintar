@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::{
     collections::{HashMap, HashSet},
     fs,
@@ -10,7 +10,13 @@ use tokio::process::Command;
 use tracing::debug;
 use zip::ZipArchive;
 
-use super::dependency_cache::{source_file_info::SourceFileInfo, DependencyCache};
+use crate::{lsp_error, lsp_info};
+
+use super::{
+    constants::GRADLE_CACHE_DIR,
+    dependency_cache::{source_file_info::SourceFileInfo, DependencyCache},
+    state_manager::get_global,
+};
 
 #[derive(Debug, Clone)]
 pub enum BuildTool {
@@ -98,6 +104,44 @@ fn parse_include_content(
             project_map.insert(project_name, project_path);
         }
     }
+}
+
+#[tracing::instrument(skip_all)]
+pub async fn run_gradle_build(project_root: &PathBuf) -> anyhow::Result<()> {
+    let gradle_command = if project_root.join("gradlew").exists() {
+        "./gradlew"
+    } else if project_root.join("gradlew.bat").exists() {
+        "./gradlew.bat"
+    } else {
+        "gradle"
+    };
+
+    lsp_info!("Running gradle build...");
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(300),
+        Command::new(gradle_command)
+            .args(&["build", "--quiet", "--parallel"])
+            .current_dir(project_root)
+            .output(),
+    )
+    .await
+    .context("Gradle build timed out after 5 minutes")??;
+
+    if output.status.success() {
+        debug!("Gradle build completed successfully");
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        debug!(
+            "Gradle build failed.\nstdout: {}\nstderr: {}",
+            stdout, stderr
+        );
+
+        return Err(anyhow::anyhow!("Gradle build failed. See logs for detail."));
+    }
+
+    Ok(())
 }
 
 #[tracing::instrument(skip_all)]
@@ -391,29 +435,29 @@ fn source_path_to_class_name(source_path: &str) -> Option<String> {
 }
 
 pub fn get_gradle_cache_base() -> Option<PathBuf> {
-    // FIXME: this should be customizable by the user
-    // 0. user-defined path
-    let user_defined_path_str = ".sdkman/candidates/gradle/6.3/caches/modules-2/files-2.1";
-    if let Some(path) = dirs::home_dir()
-        .map(|home| home.join(user_defined_path_str))
-        .filter(|path| path.exists())
-    {
-        return Some(path);
+    // 0. User-defined path
+    if let Some(gradle_cache_value) = get_global(GRADLE_CACHE_DIR) {
+        if let Some(dir_str) = gradle_cache_value.as_str() {
+            let path = PathBuf::from(dir_str);
+            if path.exists() {
+                return Some(path);
+            }
+        }
     }
 
     // 1. Explicit GRADLE_USER_HOME
     if let Ok(gradle_user_home) = std::env::var("GRADLE_USER_HOME") {
-        let cache = PathBuf::from(gradle_user_home).join("caches/modules-2/files-2.1");
-        if cache.exists() {
-            return Some(cache);
+        let path = PathBuf::from(gradle_user_home).join("caches/modules-2/files-2.1");
+        if path.exists() {
+            return Some(path);
         }
     }
 
     // 2. SYSTEM: GRADLE_HOME
     if let Ok(gradle_home) = std::env::var("GRADLE_HOME") {
-        let cache = PathBuf::from(gradle_home).join("caches/modules-2/files-2.1");
-        if cache.exists() {
-            return Some(cache);
+        let path = PathBuf::from(gradle_home).join("caches/modules-2/files-2.1");
+        if path.exists() {
+            return Some(path);
         }
     }
 

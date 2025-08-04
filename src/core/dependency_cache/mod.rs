@@ -97,7 +97,7 @@ impl DependencyCache {
         let total_time = start.elapsed();
         debug!("Total workspace indexing completed in {:?}", total_time);
         lsp_info!("Indexing completed in {:?}", total_time);
-        set_global("is_indexing_completed", true).await;
+        set_global("is_indexing_completed", true);
 
         let _ = self.dump_to_file().await;
 

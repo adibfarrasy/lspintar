@@ -15,3 +15,5 @@ pub static GROOVY_PARSER: OnceLock<tree_sitter::Language> = OnceLock::new();
 pub static JAVA_PARSER: OnceLock<tree_sitter::Language> = OnceLock::new();
 
 pub const IS_INDEXING_COMPLETED: &str = "is_indexing_completed";
+pub const GRADLE_CACHE_DIR: &str = "gradle_cache_dir";
+pub const BUILD_ON_INIT: &str = "build_on_init";

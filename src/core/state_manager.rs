@@ -1,10 +1,7 @@
 use serde_json::Value;
-use std::collections::HashMap;
-use std::sync::OnceLock;
-use tokio::{
-    runtime::Handle,
-    sync::{mpsc, oneshot},
-};
+use std::sync::{OnceLock, RwLock};
+use std::{collections::HashMap, sync::Arc};
+use tokio::sync::{mpsc, oneshot};
 
 #[derive(Debug)]
 pub enum StateCommand {
@@ -92,30 +89,24 @@ impl StateManager {
     }
 }
 
-static STATE_MANAGER: OnceLock<StateManager> = OnceLock::new();
+static STATE_STORE: OnceLock<Arc<RwLock<HashMap<String, Value>>>> = OnceLock::new();
 
 pub fn init_state_manager() {
-    let manager = StateManager::new();
-    let _ = STATE_MANAGER.set(manager);
+    let store = Arc::new(RwLock::new(HashMap::new()));
+    let _ = STATE_STORE.set(store);
 }
 
-pub async fn set_global(key: impl Into<String>, value: impl Into<Value>) {
-    if let Some(manager) = STATE_MANAGER.get() {
-        manager.set(key, value).await;
+pub fn set_global(key: impl Into<String>, value: impl Into<Value>) {
+    if let Some(store) = STATE_STORE.get() {
+        if let Ok(mut map) = store.write() {
+            map.insert(key.into(), value.into());
+        }
     }
 }
 
 pub fn get_global(key: impl Into<String>) -> Option<Value> {
-    if let Ok(handle) = Handle::try_current() {
-        handle.block_on(async {
-            if let Some(manager) = STATE_MANAGER.get() {
-                manager.get(key).await
-            } else {
-                None
-            }
-        })
-    } else {
-        // Fallback if no runtime available
-        None
-    }
+    STATE_STORE
+        .get()
+        .and_then(|store| store.read().ok())
+        .and_then(|map| map.get(&key.into()).cloned())
 }

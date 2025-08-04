@@ -87,7 +87,7 @@ fn fallback_impl(
     dependency_cache: Arc<DependencyCache>,
     language_support: &dyn LanguageSupport,
 ) -> Option<Location> {
-    // NOTE: Naive implementation, does not consider whether dependency is valid,
+    // HACK: Naive implementation, does not consider whether dependency is valid,
     // only checking if the symbol is in the cache.
 
     debug!("using fallback method");
