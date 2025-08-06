@@ -15,8 +15,8 @@ use tree_sitter::Tree;
 use walkdir::WalkDir;
 
 #[tracing::instrument(skip_all)]
-pub async fn find_project_roots() -> Result<Vec<PathBuf>> {
-    let mut current_dir = std::env::current_dir().context("Failed to get current directory")?;
+pub async fn find_project_roots(dir: &PathBuf) -> Result<Vec<PathBuf>> {
+    let mut current_dir = dir.clone();
 
     loop {
         match find_project_root(&current_dir) {
@@ -88,6 +88,10 @@ pub async fn collect_source_files(project_root: &PathBuf) -> Result<Vec<PathBuf>
         if full_path.exists() {
             scan_directory_for_sources(&full_path, &mut source_files).await?;
         }
+    }
+
+    if project_root.join("META-INF").exists() {
+        scan_directory_for_sources(&project_root, &mut source_files).await?;
     }
 
     Ok(source_files)

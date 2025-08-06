@@ -7,6 +7,7 @@ use tracing::debug;
 use walkdir::WalkDir;
 use zip::ZipArchive;
 
+use crate::core::build_tools::ExternalDependency;
 use crate::languages::groovy::constants::GROOVY_DEFAULT_IMPORTS;
 
 use super::source_file_info::SourceFileInfo;
@@ -82,6 +83,7 @@ impl BuiltinResolver {
                         class_name,
                         file_path.to_path_buf(),
                         None,
+                        None,
                         &cache.clone(),
                     )
                     .with_context(|| {
@@ -143,6 +145,7 @@ impl BuiltinResolver {
                                 class_name,
                                 zip_path.clone(),
                                 Some(file_name.clone()),
+                                None,
                                 &cache,
                             )?;
                         }
@@ -253,29 +256,15 @@ fn find_classes_in_zip(zip_path: &PathBuf, package: &str) -> Result<Vec<String>>
     Ok(classes)
 }
 
-fn try_find_package_name(content: &str) -> Option<String> {
-    content
-        .lines()
-        .find(|line| line.trim_start().starts_with("package "))
-        .and_then(|line| {
-            line.trim()
-                .strip_prefix("package ")?
-                .trim_end_matches(';')
-                .trim()
-                .split_whitespace()
-                .next()
-                .map(|s| s.to_string())
-        })
-}
-
 #[tracing::instrument(skip_all)]
 fn parse_and_cache_builtin(
     class_name: &str,
     source_path: PathBuf,
     zip_internal_path: Option<String>,
+    dependency: Option<ExternalDependency>,
     cache: &DependencyCache,
 ) -> Result<()> {
-    let external_info = SourceFileInfo::new(source_path, zip_internal_path);
+    let external_info = SourceFileInfo::new(source_path, zip_internal_path, dependency);
 
     cache
         .builtin_infos

@@ -68,7 +68,13 @@ impl LanguageServer for LspServer {
             };
         }
 
-        if let Err(error) = self.dependency_cache.clone().index_workspace().await {
+        let current_dir = env::current_dir().unwrap();
+        if let Err(error) = self
+            .dependency_cache
+            .clone()
+            .index_workspace(current_dir)
+            .await
+        {
             lsp_error!("{}", error.to_string())
         }
     }

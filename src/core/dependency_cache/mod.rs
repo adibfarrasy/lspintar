@@ -51,62 +51,75 @@ impl DependencyCache {
     }
 
     #[tracing::instrument(skip_all)]
-    pub async fn index_workspace(self: Arc<Self>) -> Result<()> {
-        let current_dir = env::current_dir()?;
+    pub async fn index_workspace(self: Arc<Self>, current_dir: PathBuf) -> Result<()> {
         let project_root = if is_project_root(&current_dir) {
-            current_dir
+            current_dir.clone()
         } else {
             find_project_root(&current_dir.to_path_buf()).context("Cannot find project root")?
         };
 
-        let build_tool =
-            detect_build_tool(project_root.as_path()).context("Cannot detect build tool")?;
+        if project_root.exists() {
+            let build_tool =
+                detect_build_tool(project_root.as_path()).context("Cannot detect build tool")?;
 
-        let start = Instant::now();
-        lsp_info!("Starting workspace indexing...");
+            let start = Instant::now();
+            lsp_info!("Starting workspace indexing...");
 
-        let symbols_start = Instant::now();
-        self.index_project_symbols()
-            .await
-            .inspect_err(|e| debug!("Failed to index project symbols: {e}"))?;
-        debug!("Symbol indexing took: {:?}", symbols_start.elapsed());
+            let symbols_start = Instant::now();
+            self.index_project_symbols(&project_root)
+                .await
+                .inspect_err(|e| debug!("Failed to index project symbols: {e}"))?;
+            debug!("Symbol indexing took: {:?}", symbols_start.elapsed());
 
-        let builtin_dependency_start = Instant::now();
+            let builtin_dependency_start = Instant::now();
 
-        let resolver = builtin::BuiltinResolver::new();
-        resolver
-            .index_builtin_dependencies(self.clone())
-            .await
-            .inspect_err(|e| tracing::debug!("Failed to index external types: {e}"))?;
-        debug!(
-            "Builtin dependency indexing took: {:?}",
-            builtin_dependency_start.elapsed()
-        );
+            let resolver = builtin::BuiltinResolver::new();
+            resolver
+                .index_builtin_dependencies(self.clone())
+                .await
+                .inspect_err(|e| tracing::debug!("Failed to index external types: {e}"))?;
+            debug!(
+                "Builtin dependency indexing took: {:?}",
+                builtin_dependency_start.elapsed()
+            );
 
-        let project_deps_start = Instant::now();
-        let project_mapper = project_deps::ProjectMapper::new(build_tool.clone());
-        project_mapper
-            .index_project_dependencies(project_root, self.clone())
-            .await
-            .inspect_err(|e| debug!("Failed to index project dependencies: {e}"))?;
-        debug!(
-            "Project dependency indexing took: {:?}",
-            project_deps_start.elapsed()
-        );
+            let project_deps_start = Instant::now();
+            let project_mapper = project_deps::ProjectMapper::new(build_tool.clone());
+            project_mapper
+                .index_project_dependencies(project_root, self.clone())
+                .await
+                .inspect_err(|e| debug!("Failed to index project dependencies: {e}"))?;
+            debug!(
+                "Project dependency indexing took: {:?}",
+                project_deps_start.elapsed()
+            );
 
-        let total_time = start.elapsed();
-        debug!("Total workspace indexing completed in {:?}", total_time);
-        lsp_info!("Indexing completed in {:?}", total_time);
-        set_global("is_indexing_completed", true);
+            let total_time = start.elapsed();
+            debug!("Total workspace indexing completed in {:?}", total_time);
+            lsp_info!("Indexing completed in {:?}", total_time);
+            set_global("is_indexing_completed", true);
 
-        let _ = self.dump_to_file().await;
+            let _ = self.dump_to_file().await;
+        }
+
+        if current_dir.join("META-INF").exists() {
+            lsp_info!("Indexing external dependency...");
+
+            let start = Instant::now();
+            self.index_project_symbols(&current_dir)
+                .await
+                .inspect_err(|e| debug!("Failed to index project symbols: {e}"))?;
+
+            let total_time = start.elapsed();
+            lsp_info!("Indexing completed in {:?}", total_time);
+        }
 
         Ok(())
     }
 
     #[tracing::instrument(skip_all)]
-    async fn index_project_symbols(&self) -> Result<()> {
-        let project_roots = find_project_roots()
+    async fn index_project_symbols(&self, current_dir: &PathBuf) -> Result<()> {
+        let project_roots = find_project_roots(current_dir)
             .await
             .inspect_err(|e| debug!("Failed to get project roots: {e}"))?;
 

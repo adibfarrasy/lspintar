@@ -86,6 +86,11 @@ impl ProjectMapper {
         let mut all_gradle_results = HashMap::new();
         for (project_name, subproject_path) in project_map.iter() {
             let result = execute_gradle_dependencies(&subproject_path).await?;
+
+            if result.is_empty() {
+                return Ok(());
+            }
+
             all_gradle_results.insert(project_name.to_owned(), result);
         }
 
@@ -199,9 +204,13 @@ impl ProjectMapper {
                             debug!("JAR {} has {} classes", jar_path.display(), classes.len());
                             chunk_classes.extend(classes.clone());
 
-                            if let Err(e) =
-                                index_jar_sources(&jar_path, &project_path, cache.clone(), &classes)
-                            {
+                            if let Err(e) = index_jar_sources(
+                                &jar_path,
+                                &project_path,
+                                cache.clone(),
+                                &classes,
+                                &dep,
+                            ) {
                                 debug!("JAR source indexing failed for {:?}: {}", jar_path, e);
                             } else {
                                 debug!("JAR source indexing completed for {:?}", jar_path);

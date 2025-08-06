@@ -189,12 +189,6 @@ pub async fn execute_gradle_dependencies(
         results.insert(config.to_string(), output_text);
     }
 
-    if results.is_empty() {
-        return Err(anyhow::anyhow!(
-            "All gradle dependency configurations failed"
-        ));
-    }
-
     Ok(results)
 }
 
@@ -473,6 +467,7 @@ pub fn index_jar_sources(
     project_path: &PathBuf,
     cache: Arc<DependencyCache>,
     class_fqn_names: &HashSet<String>,
+    dependency: &ExternalDependency,
 ) -> Result<()> {
     let jar_data = fs::read(jar_path)?;
 
@@ -520,6 +515,7 @@ pub fn index_jar_sources(
             project_path,
             jar_path.clone(),
             Some(file_name.clone()),
+            dependency,
             cache.clone(),
         ) {
             debug!("Failed to parse external source {}: {}", class_name, e);
@@ -556,9 +552,10 @@ fn parse_and_cache_project_external(
     project_path: &PathBuf,
     jar_path: PathBuf,
     zip_internal_path: Option<String>,
+    dependency: &ExternalDependency,
     cache: Arc<DependencyCache>,
 ) -> Result<()> {
-    let external_info = SourceFileInfo::new(jar_path, zip_internal_path);
+    let external_info = SourceFileInfo::new(jar_path, zip_internal_path, Some(dependency.clone()));
 
     let project_key = (project_path.clone(), class_name.to_string());
 

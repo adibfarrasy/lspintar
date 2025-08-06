@@ -9,12 +9,16 @@ use zip::ZipArchive;
 
 use tree_sitter::Tree;
 
-use crate::core::constants::{GROOVY_PARSER, JAVA_PARSER};
+use crate::core::{
+    build_tools::ExternalDependency,
+    constants::{GROOVY_PARSER, JAVA_PARSER},
+};
 
 #[derive(Debug, Clone)]
 pub struct SourceFileInfo {
     pub source_path: PathBuf,
     pub zip_internal_path: Option<String>,
+    pub dependency: Option<ExternalDependency>,
     inner: Arc<RwLock<SourceFileInfoInner>>,
 }
 
@@ -25,10 +29,15 @@ struct SourceFileInfoInner {
 }
 
 impl SourceFileInfo {
-    pub fn new(source_path: PathBuf, zip_internal_path: Option<String>) -> Self {
+    pub fn new(
+        source_path: PathBuf,
+        zip_internal_path: Option<String>,
+        dependency: Option<ExternalDependency>,
+    ) -> Self {
         Self {
             source_path,
             zip_internal_path,
+            dependency,
             inner: Arc::new(RwLock::new(SourceFileInfoInner::default())),
         }
     }
@@ -98,5 +107,11 @@ impl SourceFileInfo {
         parser
             .parse(content, None)
             .with_context(|| format!("Failed to parse: {:?}", self.source_path))
+    }
+}
+
+impl ExternalDependency {
+    pub fn to_path_string(&self) -> String {
+        return format!("{}.{}.{}", &self.group, &self.artifact, &self.version);
     }
 }

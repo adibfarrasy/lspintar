@@ -7,8 +7,12 @@ use tree_sitter::Node;
 
 use crate::{
     core::{
+        build_tools::ExternalDependency,
         constants::IS_INDEXING_COMPLETED,
-        dependency_cache::{source_file_info::SourceFileInfo, DependencyCache},
+        dependency_cache::{
+            source_file_info::{self, SourceFileInfo},
+            DependencyCache,
+        },
         state_manager::get_global,
         symbols::SymbolType,
         utils::{find_project_root, node_to_lsp_location, path_to_file_uri, uri_to_path},
@@ -46,12 +50,22 @@ fn find_project_external(
 ) -> Option<Location> {
     let symbol_name = usage_node.utf8_text(source.as_bytes()).ok()?.to_string();
 
+    let cache = dependency_cache.clone();
+
     let project_key = (current_project, symbol_name.clone());
     if let Some(external_info) = dependency_cache.project_external_infos.get(&project_key) {
-        return search_external_definition_and_convert(&symbol_name, external_info.value().clone());
+        return search_external_definition_and_convert(
+            &symbol_name,
+            external_info.value().clone(),
+            cache,
+        );
     }
     if let Some(external_info) = dependency_cache.builtin_infos.get(&symbol_name) {
-        return search_external_definition_and_convert(&symbol_name, external_info.value().clone());
+        return search_external_definition_and_convert(
+            &symbol_name,
+            external_info.value().clone(),
+            cache,
+        );
     }
 
     if get_global(IS_INDEXING_COMPLETED).is_none() {
@@ -65,6 +79,7 @@ fn find_project_external(
 fn search_external_definition_and_convert(
     symbol_name: &str,
     external_info: SourceFileInfo,
+    cache: Arc<DependencyCache>,
 ) -> Option<Location> {
     let tree = external_info
         .get_tree()
@@ -80,7 +95,7 @@ fn search_external_definition_and_convert(
         .context(format!("definition for {symbol_name} not found"))
         .ok()?;
 
-    let file_uri = get_uri(&external_info.clone())
+    let file_uri = get_uri(&external_info.clone(), cache)
         .context(format!("file_uri for {symbol_name} not found"))
         .ok()?;
 
@@ -89,40 +104,85 @@ fn search_external_definition_and_convert(
     node_to_lsp_location(&definition_node, &file_uri)
 }
 
-fn get_uri(external_info: &SourceFileInfo) -> Option<String> {
-    if let Some(zip_internal_path) = &external_info.zip_internal_path {
-        extract_zip_file_to_temp(external_info, zip_internal_path)
+fn get_uri(external_info: &SourceFileInfo, cache: Arc<DependencyCache>) -> Option<String> {
+    if let Some(_) = &external_info.zip_internal_path {
+        let temp_dir = dependency_temp_dir(external_info.dependency.clone());
+        if !temp_dir.exists() {
+            extract_zip_file_to_temp(external_info);
+
+            let cache_clone = cache.clone();
+            let temp_dir_clone = temp_dir.clone();
+            tokio::spawn(async move {
+                let _ = cache_clone.index_workspace(temp_dir_clone).await;
+            });
+        }
+
+        path_to_file_uri(&temp_dir.join(external_info.zip_internal_path.clone().unwrap()))
     } else {
         path_to_file_uri(&external_info.source_path)
     }
 }
 
-fn extract_zip_file_to_temp(
-    builtin_info: &SourceFileInfo,
-    zip_internal_path: &str,
-) -> Option<String> {
-    let temp_dir = std::env::temp_dir().join("lspintar_builtin_sources");
-    if let Err(_) = std::fs::create_dir_all(&temp_dir) {
-        error!("Failed to create temp directory for builtin sources");
+fn dependency_temp_dir(dependency: Option<ExternalDependency>) -> PathBuf {
+    let base_dir = std::env::temp_dir().join("lspintar_builtin_sources");
+
+    match dependency {
+        Some(dep) => base_dir.join(dep.to_path_string()),
+        None => base_dir.join("builtin"),
+    }
+}
+
+fn extract_zip_file_to_temp(builtin_info: &SourceFileInfo) -> Option<()> {
+    let temp_dir = dependency_temp_dir(builtin_info.dependency.clone());
+
+    if let Err(e) = std::fs::create_dir_all(&temp_dir) {
+        error!("Failed to create temp directory: {}", e);
         return None;
     }
 
-    // Create safe filename from internal path (replace / with _)
-    let safe_filename = zip_internal_path.replace('/', "_");
-    let temp_file = temp_dir.join(&safe_filename);
-
-    let content = builtin_info
-        .get_content()
-        .context(format!("failed to get content for {zip_internal_path}"))
+    let zip_file = std::fs::File::open(&builtin_info.source_path)
+        .context(format!(
+            "failed to open zip file {:?}",
+            builtin_info.source_path
+        ))
         .ok()?;
 
-    if !temp_file.exists() {
-        if let Err(e) = std::fs::write(&temp_file, &content) {
-            error!("Failed to write temp file for builtin: {}", e);
-            return None;
+    let mut archive = zip::ZipArchive::new(zip_file)
+        .context("failed to read zip archive")
+        .ok()?;
+
+    for i in 0..archive.len() {
+        let mut file = archive
+            .by_index(i)
+            .context(format!("failed to get file at index {}", i))
+            .ok()?;
+
+        if file.is_dir() {
+            continue;
         }
-        debug!("Extracted builtin to temp file: {:?}", temp_file);
+
+        let file_path = temp_dir.join(file.name());
+
+        if let Some(parent) = file_path.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                error!(
+                    "Failed to create directory structure for {:?}: {}",
+                    parent, e
+                );
+                continue;
+            }
+        }
+
+        let mut output = std::fs::File::create(&file_path)
+            .context(format!("failed to create file {:?}", file_path))
+            .ok()?;
+
+        if let Err(e) = std::io::copy(&mut file, &mut output) {
+            error!("Failed to extract file {}: {}", file.name(), e);
+            continue;
+        }
     }
 
-    path_to_file_uri(&temp_file)
+    debug!("Extracted dependency to: {:?}", temp_dir);
+    Some(())
 }
