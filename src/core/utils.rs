@@ -7,7 +7,7 @@ use tower_lsp::lsp_types::{Location, Position, Range, Url};
 use tracing::debug;
 use tree_sitter::{Node, Parser, Tree};
 
-use super::constants::PROJECT_ROOT_MARKER;
+use super::constants::{PROJECT_ROOT_MARKER, TEMP_DIR_PREFIX};
 
 #[tracing::instrument(skip_all)]
 pub fn path_to_file_uri(file_path: &PathBuf) -> Option<String> {
@@ -38,6 +38,52 @@ pub fn find_project_root(file_path: &Path) -> Option<PathBuf> {
 
         current = current.parent()?;
     }
+}
+
+pub fn find_external_dependency_root(nested_path: &PathBuf) -> Option<PathBuf> {
+    let path_str = nested_path.to_string_lossy();
+
+    if let Some(builtin_start) = path_str.find(TEMP_DIR_PREFIX) {
+        let base_path = &path_str[..builtin_start + TEMP_DIR_PREFIX.len()];
+        let remaining = &path_str[builtin_start + TEMP_DIR_PREFIX.len()..];
+
+        // Find the first directory after TEMP_DIR_PREFIX
+        // e.g., lspintar_builtin_sources/some.dependency.1.0/com/... -> some.dependency.1.0
+        if let Some(first_slash) = remaining[1..].find('/') {
+            let dep_name = &remaining[1..first_slash + 1];
+            let dep_root = format!("{}/{}", base_path, dep_name);
+            return Some(PathBuf::from(dep_root));
+        }
+    }
+
+    let mut current = nested_path.clone();
+    while let Some(parent) = current.parent() {
+        if parent.join("META-INF").exists() {
+            return Some(parent.to_path_buf());
+        }
+        current = parent.to_path_buf();
+    }
+
+    None
+}
+
+pub fn is_path_in_external_dependency(path: &PathBuf) -> bool {
+    let path_str = path.to_string_lossy();
+    path_str.contains(TEMP_DIR_PREFIX)
+        || path_str.contains(".gradle/caches")
+        || path_str.contains(".m2/repository")
+        || has_meta_inf_in_parents(path)
+}
+
+fn has_meta_inf_in_parents(path: &PathBuf) -> bool {
+    let mut current = path.clone();
+    while let Some(parent) = current.parent() {
+        if parent.join("META-INF").exists() {
+            return true;
+        }
+        current = parent.to_path_buf();
+    }
+    false
 }
 
 pub fn create_parser_for_language(language: &str) -> Option<Parser> {
@@ -161,4 +207,8 @@ pub fn is_project_root(current: &PathBuf) -> bool {
     PROJECT_ROOT_MARKER
         .iter()
         .any(|marker| current.join(marker).exists())
+}
+
+pub fn is_external_dependency(dir: &PathBuf) -> bool {
+    return dir.to_string_lossy().contains(TEMP_DIR_PREFIX);
 }

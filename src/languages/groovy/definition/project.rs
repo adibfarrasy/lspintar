@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use tower_lsp::lsp_types::Location;
+use tracing::debug;
 use tree_sitter::Node;
 
 use crate::{

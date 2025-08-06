@@ -10,7 +10,10 @@ use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator, Tree};
 use crate::{
     core::{
         symbols::SymbolType,
-        utils::{find_project_root, node_to_lsp_location, uri_to_path, uri_to_tree},
+        utils::{
+            find_external_dependency_root, find_project_root, node_to_lsp_location, uri_to_path,
+            uri_to_tree,
+        },
     },
     languages::LanguageSupport,
 };
@@ -118,7 +121,9 @@ pub fn prepare_symbol_lookup_key(
 
     let current_file_path = uri_to_path(file_uri)?;
 
-    let project_root = project_root.or_else(|| find_project_root(&current_file_path))?;
+    let project_root = project_root
+        .or_else(|| find_project_root(&current_file_path))
+        .or_else(|| find_external_dependency_root(&current_file_path))?;
 
     resolve_through_imports(&symbol_name, source, &project_root)
         .or_else(|| resolve_same_package(&symbol_name, source, &project_root))

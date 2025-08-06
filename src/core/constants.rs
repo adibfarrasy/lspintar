@@ -17,3 +17,5 @@ pub static JAVA_PARSER: OnceLock<tree_sitter::Language> = OnceLock::new();
 pub const IS_INDEXING_COMPLETED: &str = "is_indexing_completed";
 pub const GRADLE_CACHE_DIR: &str = "gradle_cache_dir";
 pub const BUILD_ON_INIT: &str = "build_on_init";
+
+pub const TEMP_DIR_PREFIX: &str = "lspintar_builtin_sources";

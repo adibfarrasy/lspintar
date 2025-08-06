@@ -15,9 +15,8 @@ use tree_sitter::Tree;
 use walkdir::WalkDir;
 
 #[tracing::instrument(skip_all)]
-pub async fn find_project_roots(dir: &PathBuf) -> Result<Vec<PathBuf>> {
+pub fn find_workspace_root(dir: &PathBuf) -> Option<PathBuf> {
     let mut current_dir = dir.clone();
-
     loop {
         match find_project_root(&current_dir) {
             Some(project_dir) => {
@@ -31,11 +30,18 @@ pub async fn find_project_roots(dir: &PathBuf) -> Result<Vec<PathBuf>> {
         }
     }
 
+    Some(current_dir)
+}
+
+#[tracing::instrument(skip_all)]
+pub fn find_project_roots(dir: &PathBuf) -> Result<Vec<PathBuf>> {
+    let workspace_dir = find_workspace_root(dir).context("Cannot find workspace root directory")?;
+
     let mut project_roots = HashSet::new();
 
     // For multi-project workspaces, also check subdirectories
     // (e.g., Gradle multi-module projects, monorepos)
-    for entry in WalkDir::new(&current_dir)
+    for entry in WalkDir::new(&workspace_dir)
         .max_depth(3) // or any reasonable depth
         .into_iter()
         .filter_map(|e| e.ok())
@@ -80,18 +86,21 @@ fn try_find_workspace_root(starting_path: &PathBuf) -> PathBuf {
     current_root
 }
 
-pub async fn collect_source_files(project_root: &PathBuf) -> Result<Vec<PathBuf>> {
+pub async fn collect_source_files(
+    project_root: &PathBuf,
+    is_external_dependency: bool,
+) -> Result<Vec<PathBuf>> {
     let mut source_files = Vec::new();
 
-    for src_dir in &SOURCE_DIRS {
-        let full_path = project_root.join(src_dir);
-        if full_path.exists() {
-            scan_directory_for_sources(&full_path, &mut source_files).await?;
-        }
-    }
-
-    if project_root.join("META-INF").exists() {
+    if is_external_dependency {
         scan_directory_for_sources(&project_root, &mut source_files).await?;
+    } else {
+        for src_dir in &SOURCE_DIRS {
+            let full_path = project_root.join(src_dir);
+            if full_path.exists() {
+                scan_directory_for_sources(&full_path, &mut source_files).await?;
+            }
+        }
     }
 
     Ok(source_files)

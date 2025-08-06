@@ -8,14 +8,17 @@ use tree_sitter::Node;
 use crate::{
     core::{
         build_tools::ExternalDependency,
-        constants::IS_INDEXING_COMPLETED,
+        constants::{IS_INDEXING_COMPLETED, TEMP_DIR_PREFIX},
         dependency_cache::{
             source_file_info::{self, SourceFileInfo},
             DependencyCache,
         },
         state_manager::get_global,
         symbols::SymbolType,
-        utils::{find_project_root, node_to_lsp_location, path_to_file_uri, uri_to_path},
+        utils::{
+            find_external_dependency_root, find_project_root, node_to_lsp_location,
+            path_to_file_uri, uri_to_path,
+        },
     },
     lsp_warning,
 };
@@ -31,7 +34,9 @@ pub fn find_external(
     usage_node: &Node,
     dependency_cache: Arc<DependencyCache>,
 ) -> Option<Location> {
-    let current_project = uri_to_path(file_uri).and_then(|path| find_project_root(&path))?;
+    let current_project = uri_to_path(file_uri).and_then(|path| {
+        find_project_root(&path).or_else(|| find_external_dependency_root(&path))
+    })?;
 
     find_project_external(
         source,
@@ -50,22 +55,12 @@ fn find_project_external(
 ) -> Option<Location> {
     let symbol_name = usage_node.utf8_text(source.as_bytes()).ok()?.to_string();
 
-    let cache = dependency_cache.clone();
-
     let project_key = (current_project, symbol_name.clone());
     if let Some(external_info) = dependency_cache.project_external_infos.get(&project_key) {
-        return search_external_definition_and_convert(
-            &symbol_name,
-            external_info.value().clone(),
-            cache,
-        );
+        return search_external_definition_and_convert(&symbol_name, external_info.value().clone());
     }
     if let Some(external_info) = dependency_cache.builtin_infos.get(&symbol_name) {
-        return search_external_definition_and_convert(
-            &symbol_name,
-            external_info.value().clone(),
-            cache,
-        );
+        return search_external_definition_and_convert(&symbol_name, external_info.value().clone());
     }
 
     if get_global(IS_INDEXING_COMPLETED).is_none() {
@@ -79,7 +74,6 @@ fn find_project_external(
 fn search_external_definition_and_convert(
     symbol_name: &str,
     external_info: SourceFileInfo,
-    cache: Arc<DependencyCache>,
 ) -> Option<Location> {
     let tree = external_info
         .get_tree()
@@ -95,7 +89,7 @@ fn search_external_definition_and_convert(
         .context(format!("definition for {symbol_name} not found"))
         .ok()?;
 
-    let file_uri = get_uri(&external_info.clone(), cache)
+    let file_uri = get_uri(&external_info.clone())
         .context(format!("file_uri for {symbol_name} not found"))
         .ok()?;
 
@@ -104,17 +98,11 @@ fn search_external_definition_and_convert(
     node_to_lsp_location(&definition_node, &file_uri)
 }
 
-fn get_uri(external_info: &SourceFileInfo, cache: Arc<DependencyCache>) -> Option<String> {
+fn get_uri(external_info: &SourceFileInfo) -> Option<String> {
     if let Some(_) = &external_info.zip_internal_path {
         let temp_dir = dependency_temp_dir(external_info.dependency.clone());
         if !temp_dir.exists() {
             extract_zip_file_to_temp(external_info);
-
-            let cache_clone = cache.clone();
-            let temp_dir_clone = temp_dir.clone();
-            tokio::spawn(async move {
-                let _ = cache_clone.index_workspace(temp_dir_clone).await;
-            });
         }
 
         path_to_file_uri(&temp_dir.join(external_info.zip_internal_path.clone().unwrap()))
@@ -124,7 +112,7 @@ fn get_uri(external_info: &SourceFileInfo, cache: Arc<DependencyCache>) -> Optio
 }
 
 fn dependency_temp_dir(dependency: Option<ExternalDependency>) -> PathBuf {
-    let base_dir = std::env::temp_dir().join("lspintar_builtin_sources");
+    let base_dir = std::env::temp_dir().join(TEMP_DIR_PREFIX);
 
     match dependency {
         Some(dep) => base_dir.join(dep.to_path_string()),

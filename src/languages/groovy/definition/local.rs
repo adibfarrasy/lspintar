@@ -1,6 +1,7 @@
 use std::usize;
 
 use tower_lsp::lsp_types::Location;
+use tracing::debug;
 use tree_sitter::{Node, Query, QueryCursor, StreamingIterator, Tree};
 
 use crate::{

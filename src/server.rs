@@ -4,6 +4,7 @@ use request::GotoImplementationParams;
 use request::GotoImplementationResponse;
 use serde_json::Value;
 use std::env;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::Result;
@@ -15,11 +16,16 @@ use tree_sitter::Tree;
 use crate::core::build_tools::run_gradle_build;
 use crate::core::constants::BUILD_ON_INIT;
 use crate::core::constants::GRADLE_CACHE_DIR;
+use crate::core::dependency_cache::symbol_index::find_workspace_root;
 use crate::core::dependency_cache::DependencyCache;
 use crate::core::logging_service;
 use crate::core::state_manager;
 use crate::core::state_manager::get_global;
+use crate::core::utils::find_external_dependency_root;
+use crate::core::utils::is_external_dependency;
+use crate::core::utils::is_path_in_external_dependency;
 use crate::core::utils::is_project_root;
+use crate::core::utils::uri_to_path;
 use crate::core::DiagnosticManager;
 use crate::core::Document;
 use crate::core::DocumentManager;
@@ -29,6 +35,7 @@ use crate::core::{
 };
 use crate::languages::LanguageRegistry;
 use crate::lsp_error;
+use crate::lsp_warning;
 
 pub struct LspServer {
     documents: Arc<RwLock<DocumentManager>>,
@@ -36,6 +43,7 @@ pub struct LspServer {
     diagnostics: Arc<DashMap<String, DiagnosticManager>>,
     dependency_cache: Arc<DependencyCache>,
     client: tower_lsp::Client,
+    workspace_root: Arc<RwLock<Option<PathBuf>>>,
 }
 
 #[tower_lsp::async_trait]
@@ -46,6 +54,25 @@ impl LanguageServer for LspServer {
                 tower_lsp::jsonrpc::Error::invalid_params("invalid initialization options")
             })?;
         }
+
+        // Best effort root guess
+        let client_root = params
+            .root_uri
+            .and_then(|uri| uri.to_file_path().ok())
+            .or_else(|| {
+                params
+                    .workspace_folders
+                    .as_ref()?
+                    .first()?
+                    .uri
+                    .to_file_path()
+                    .ok()
+            })
+            .or_else(|| Some(env::current_dir().unwrap()));
+
+        let effective_root = self.find_true_workspace_root(&client_root.unwrap()).await;
+
+        *self.workspace_root.write().await = Some(effective_root);
 
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
@@ -68,15 +95,12 @@ impl LanguageServer for LspServer {
             };
         }
 
-        let current_dir = env::current_dir().unwrap();
-        if let Err(error) = self
-            .dependency_cache
-            .clone()
-            .index_workspace(current_dir)
-            .await
-        {
-            lsp_error!("{}", error.to_string())
-        }
+        let workspace_root = {
+            let root_guard = self.workspace_root.read().await;
+            root_guard.clone()
+        };
+
+        self.update_cache(workspace_root).await
     }
 
     async fn shutdown(&self) -> Result<()> {
@@ -104,6 +128,21 @@ impl LanguageServer for LspServer {
             documents.insert(document);
 
             documents.reparse_and_cache_tree(&uri, &text_document.text, &self.language_registry);
+        }
+
+        let current_workspace = self
+            .find_true_workspace_root(&uri_to_path(&uri).unwrap())
+            .await;
+
+        let workspace_root = {
+            let root_guard = self.workspace_root.read().await;
+            root_guard.clone()
+        };
+
+        if let Some(workspace) = workspace_root {
+            if current_workspace != workspace {
+                self.update_cache(Some(current_workspace)).await
+            }
         }
 
         // Trigger initial diagnostics
@@ -282,6 +321,7 @@ impl LspServer {
             diagnostics: Arc::new(DashMap::new()),
             client,
             dependency_cache: Arc::new(DependencyCache::new()),
+            workspace_root: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -394,5 +434,42 @@ impl LspServer {
         }
 
         Ok(())
+    }
+
+    async fn find_true_workspace_root(&self, suggested_root: &PathBuf) -> PathBuf {
+        if is_path_in_external_dependency(suggested_root) {
+            if let Some(dep_root) = find_external_dependency_root(suggested_root) {
+                return dep_root;
+            }
+        }
+
+        if let Some(root) = find_workspace_root(suggested_root) {
+            return root;
+        }
+
+        suggested_root.clone()
+    }
+
+    async fn update_cache(&self, path: Option<PathBuf>) {
+        if let Some(dir) = path {
+            if is_external_dependency(&dir) {
+                if let Err(error) = self
+                    .dependency_cache
+                    .clone()
+                    .index_external_dependency(dir)
+                    .await
+                {
+                    lsp_error!("{}", error.to_string())
+                }
+            } else {
+                if let Err(error) = self.dependency_cache.clone().index_workspace(dir).await {
+                    lsp_error!("{}", error.to_string())
+                }
+            }
+
+            let _ = self.dependency_cache.clone().dump_to_file().await;
+        } else {
+            lsp_warning!("No workspace root available, skipping initialization");
+        }
     }
 }
