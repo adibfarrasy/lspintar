@@ -94,13 +94,11 @@ fn parse_include_content(
             let project_name = project_name_with_colons.to_string().replace(':', "/");
             let project_path = project_root.join(&project_name);
 
-            debug!("Found project: '{}' -> {:?}", project_name, project_path);
             project_map.insert(project_name, project_path);
         } else if !project_ref.is_empty() {
             let project_name = project_ref.to_string().replace(':', "/");
             let project_path = project_root.join(&project_name);
 
-            debug!("Found project: '{}' -> {:?}", project_name, project_path);
             project_map.insert(project_name, project_path);
         }
     }
@@ -200,9 +198,7 @@ pub fn parse_gradle_dependencies_output(
     let mut project_deps = Vec::new();
 
     // Parse both compile and test configurations
-    for (config_name, output) in &gradle_result.configurations {
-        debug!("Parsing {} configuration", config_name);
-
+    for (_, output) in &gradle_result.configurations {
         for line in output.lines() {
             let trimmed = line.trim();
 
@@ -395,11 +391,6 @@ pub fn extract_class_names_from_jar(jar_path: &PathBuf) -> Result<HashSet<String
         }
     }
 
-    debug!(
-        "Extracted {} classes from JAR: {:?}",
-        class_names.len(),
-        jar_path
-    );
     Ok(class_names)
 }
 

@@ -199,9 +199,7 @@ impl ProjectMapper {
                 let mut chunk_classes = HashSet::new();
                 for dep in chunk {
                     if let Some(jar_path) = find_sources_jar_in_gradle_cache(&dep) {
-                        debug!("Found JAR: {:?}", jar_path);
                         if let Ok(classes) = extract_class_names_from_jar(&jar_path) {
-                            debug!("JAR {} has {} classes", jar_path.display(), classes.len());
                             chunk_classes.extend(classes.clone());
 
                             if let Err(e) = index_jar_sources(

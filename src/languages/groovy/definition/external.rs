@@ -93,8 +93,6 @@ fn search_external_definition_and_convert(
         .context(format!("file_uri for {symbol_name} not found"))
         .ok()?;
 
-    debug!("file_uri: {:#?}", file_uri);
-
     node_to_lsp_location(&definition_node, &file_uri)
 }
 

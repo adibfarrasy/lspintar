@@ -195,12 +195,6 @@ fn find_package_source_directory(
             if src_zip.exists() {
                 let classes = find_classes_in_zip(&src_zip, &package_path)?;
 
-                debug!(
-                    "Found {} classes in src.zip for package {}",
-                    classes.len(),
-                    package
-                );
-
                 if !classes.is_empty() {
                     return Ok(src_zip);
                 }

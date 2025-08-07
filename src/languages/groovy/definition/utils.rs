@@ -99,7 +99,6 @@ pub fn search_definition_in_project(
         .determine_symbol_type_from_context(&current_tree, usage_node, current_source)
         .ok()?;
 
-    debug!("other_file_uri: {other_file_uri}");
     let other_tree = uri_to_tree(other_file_uri)?;
     let other_path = uri_to_path(other_file_uri)?;
     let other_source = read_to_string(other_path).ok()?;
@@ -159,11 +158,6 @@ fn resolve_through_imports(
             for capture in query_match.captures {
                 if let Ok(import_text) = capture.node.utf8_text(source.as_bytes()) {
                     if import_text.ends_with(&format!(".{}", symbol_name)) {
-                        debug!(
-                            "project: {}, import_text: {import_text}, symbol_name: {symbol_name}",
-                            project_root.to_str().unwrap()
-                        );
-
                         result = Some((project_root.clone(), import_text.to_string()));
                         return;
                     }

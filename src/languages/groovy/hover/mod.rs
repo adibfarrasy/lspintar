@@ -24,8 +24,6 @@ pub fn handle(
 ) -> Option<Hover> {
     let node = location_to_node(&location, tree)?;
 
-    tracing::debug!("location: {:#?}", location);
-
     let symbol_type = language_support
         .determine_symbol_type_from_context(tree, &node, source)
         .ok()?;
