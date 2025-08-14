@@ -1,7 +1,7 @@
 # TODO
 src/core/dependency_cache/symbol_index.rs:192: Implement Java symbol extraction
 src/core/dependency_cache/symbol_index.rs:196: Implement Kotlin symbol extraction
-src/languages/groovy/support.rs:52: replace this with more sophisticated handling
+src/languages/groovy/support.rs:55: replace this with more sophisticated handling
 src/languages/groovy/definition/local.rs:381: Could enhance with variable type lookup
 src/languages/groovy/definition/mod.rs:7: make this private?
 src/languages/groovy/implementation.rs:43: currently only handle interfaces.
@@ -17,5 +17,5 @@ src/languages/groovy/definition/workspace.rs:91: Naive implementation, does not 
 # WARN
 
 # NOTE
-src/core/build_tools.rs:493: use any reasonable number to get the first few lines
+src/core/build_tools.rs:553: use any reasonable number to get the first few lines
 src/core/dependency_cache/builtin.rs:303: include everything else that's not explicitly skipped

@@ -12,7 +12,7 @@ use crate::{
     languages::LanguageSupport,
 };
 
-use super::utils::{prepare_symbol_lookup_key_with_wildcard_support, search_definition_in_project, search_static_method_definition_in_project, extract_static_method_context};
+use super::utils::{prepare_symbol_lookup_key_with_wildcard_support, search_definition_in_project, search_static_method_definition_in_project, extract_static_method_context, get_wildcard_imports_from_source};
 use super::method_resolution::extract_call_signature_from_context;
 
 #[tracing::instrument(skip_all)]
@@ -111,7 +111,7 @@ fn fallback_impl(
         let symbol_name = usage_node.utf8_text(source.as_bytes()).ok()?.to_string();
         
         // First try to resolve the symbol using import resolution for this project
-        let symbol_key_from_imports = crate::languages::groovy::definition::utils::prepare_symbol_lookup_key_with_wildcard_support(
+        let symbol_key_from_imports = prepare_symbol_lookup_key_with_wildcard_support(
             usage_node, source, file_uri, Some(project_root.clone()), &dependency_cache
         );
         
@@ -132,7 +132,7 @@ fn fallback_impl(
         }
         
         // Also try wildcard imports (for backward compatibility with OrderService case)
-        let wildcard_packages = crate::languages::groovy::definition::utils::get_wildcard_imports_from_source(source);
+        let wildcard_packages = get_wildcard_imports_from_source(source);
         if let Some(packages) = wildcard_packages {
             for package in packages {
                 let candidate_fqn = format!("{}.{}", package, symbol_name);

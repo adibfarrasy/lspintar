@@ -20,7 +20,7 @@ use crate::core::dependency_cache::symbol_index::find_workspace_root;
 use crate::core::dependency_cache::DependencyCache;
 use crate::core::logging_service;
 use crate::core::state_manager;
-use crate::core::state_manager::get_global;
+use crate::core::state_manager::{get_global, set_global};
 use crate::core::utils::find_external_dependency_root;
 use crate::core::utils::is_external_dependency;
 use crate::core::utils::is_path_in_external_dependency;
@@ -361,7 +361,7 @@ impl LspServer {
             }
         }
 
-        let file_path = crate::core::utils::uri_to_path(uri).ok_or(
+        let file_path = uri_to_path(uri).ok_or(
             tower_lsp::jsonrpc::Error::invalid_params("Invalid URI".to_string()),
         )?;
 
@@ -455,7 +455,6 @@ impl LspServer {
                 match self.dependency_cache.load_from_disk(&dir).await {
                     Ok(true) => {
                         // Set indexing completed flag when loading from cache
-                        use crate::core::state_manager::set_global;
                         set_global("is_indexing_completed", true);
                         true
                     },

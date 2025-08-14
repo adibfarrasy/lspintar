@@ -21,6 +21,13 @@ use crate::{
 
 use super::method_resolution::{extract_call_signature_from_context, find_method_with_signature};
 
+/// Get or create a compiled query (simplified without caching for now)
+pub fn get_or_create_query(query_text: &str, language: &tree_sitter::Language) -> Option<Query> {
+    // For now, just create the query each time
+    // Tree-sitter Query compilation is actually quite fast
+    Query::new(language, query_text).ok()
+}
+
 #[tracing::instrument(skip_all)]
 pub fn get_declaration_query_for_symbol_type(symbol_type: &SymbolType) -> Option<&'static str> {
     match symbol_type {
@@ -55,23 +62,36 @@ pub fn find_definition_candidates<'a>(
     symbol_name: &str,
     query_text: &str,
 ) -> Option<Vec<Node<'a>>> {
-    let query = Query::new(&tree.language(), query_text).ok()?;
+    let query = get_or_create_query(query_text, &tree.language())?;
     let mut cursor = QueryCursor::new();
     let mut candidates = Vec::new();
 
-    cursor
-        .matches(&query, tree.root_node(), source.as_bytes())
-        .for_each(|query_match| {
-            for capture in query_match.captures {
-                let node_text = capture.node.utf8_text(source.as_bytes()).unwrap();
-
+    // Optimized: Use while loop with early termination potential
+    let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
+    while let Some(query_match) = matches.next() {
+        for capture in query_match.captures {
+            if let Ok(node_text) = capture.node.utf8_text(source.as_bytes()) {
                 if node_text == symbol_name {
-                    candidates.push(capture.node.parent().unwrap());
+                    if let Some(parent) = capture.node.parent() {
+                        candidates.push(parent);
+                    }
                 }
             }
-        });
+        }
+        
+        // Early termination for single-result queries (local scope)
+        if !candidates.is_empty() && is_local_scope_query(query_text) {
+            break;
+        }
+    }
 
-    Some(candidates)
+    if candidates.is_empty() { None } else { Some(candidates) }
+}
+
+/// Check if this is a query that should terminate early for local scope
+fn is_local_scope_query(query_text: &str) -> bool {
+    query_text.contains("formal_parameter") || 
+    query_text.contains("variable_declaration")
 }
 
 #[tracing::instrument(skip_all)]
@@ -229,63 +249,33 @@ pub fn resolve_variable_type(variable_name: &str, tree: &Tree, source: &str, cur
 }
 
 fn find_field_declaration_type(variable_name: &str, tree: &Tree, source: &str) -> Option<String> {
-    
+    // Optimized: Use a simpler, more targeted query
     let query_text = r#"
         (field_declaration 
-          type: (type_identifier) @field_type
           declarator: (variable_declarator 
             name: (identifier) @field_name))
-        
-        (field_declaration 
-          declarator: (variable_declarator 
-            name: (identifier) @field_name_untyped))
     "#;
 
-    let query = Query::new(&tree.language(), query_text).ok()?;
+    let query = get_or_create_query(query_text, &tree.language())?;
     let mut cursor = QueryCursor::new();
 
-    let mut processed_nodes = std::collections::HashSet::new();
     let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
     
     while let Some(query_match) = matches.next() {
-        let mut field_name_node = None;
-        let mut field_type = None;
-        let mut found_target = false;
-
         for capture in query_match.captures {
-            let capture_name = query.capture_names()[capture.index as usize];
-            let node_text = capture.node.utf8_text(source.as_bytes()).unwrap_or("");
-
-            // Skip if we've already processed this node
-            let node_id = capture.node.id();
-            if processed_nodes.contains(&node_id) {
-                continue;
-            }
-
-            match capture_name {
-                "field_name" | "field_name_untyped" => {
-                    processed_nodes.insert(node_id);
-                    if node_text == variable_name {
-                        field_name_node = Some(capture.node);
-                        found_target = true;
+            if let Ok(node_text) = capture.node.utf8_text(source.as_bytes()) {
+                if node_text == variable_name {
+                    // Found our target field, now extract type efficiently
+                    if let Some(field_decl) = find_ancestor_of_kind(&capture.node, "field_declaration") {
+                        // Look for explicit type
+                        if let Some(type_node) = field_decl.child_by_field_name("type") {
+                            if let Ok(type_text) = type_node.utf8_text(source.as_bytes()) {
+                                return Some(type_text.to_string());
+                            }
+                        }
+                        // Fallback: infer from field name for Spring beans
+                        return infer_type_from_field_name(variable_name);
                     }
-                }
-                "field_type" => {
-                    field_type = Some(node_text.to_string());
-                }
-                _ => {}
-            }
-        }
-
-        // Early termination: if we found our target field, process it immediately
-        if found_target {
-            if let Some(type_name) = field_type {
-                return Some(type_name);
-            } else {
-                // For Spring-injected fields, try to infer type from field name
-                let inferred_type = infer_type_from_field_name(variable_name);
-                if let Some(type_name) = inferred_type {
-                    return Some(type_name);
                 }
             }
         }
@@ -294,57 +284,57 @@ fn find_field_declaration_type(variable_name: &str, tree: &Tree, source: &str) -
     None
 }
 
-fn find_variable_declaration_type(variable_name: &str, tree: &Tree, source: &str, current_position: &Node) -> Option<String> {
+/// Fast ancestor lookup with early termination
+fn find_ancestor_of_kind<'a>(node: &Node<'a>, kind: &str) -> Option<Node<'a>> {
+    let mut current = Some(*node);
+    let mut depth = 0;
     
+    while let Some(n) = current {
+        if n.kind() == kind {
+            return Some(n);
+        }
+        current = n.parent();
+        depth += 1;
+        
+        // Safety: prevent infinite loops in malformed trees
+        if depth > 10 {
+            break;
+        }
+    }
+    None
+}
+
+fn find_variable_declaration_type(variable_name: &str, tree: &Tree, source: &str, current_position: &Node) -> Option<String> {
+    // Optimized: Single query with immediate processing
     let query_text = r#"
         (variable_declaration 
-          type: (type_identifier) @var_type
           declarator: (variable_declarator 
             name: (identifier) @var_name))
-        
-        (variable_declaration 
-          declarator: (variable_declarator 
-            name: (identifier) @var_name_untyped))
     "#;
 
-    let query = Query::new(&tree.language(), query_text).ok()?;
+    let query = get_or_create_query(query_text, &tree.language())?;
     let mut cursor = QueryCursor::new();
 
     let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
     
     while let Some(query_match) = matches.next() {
-        let mut var_name = None;
-        let mut var_type = None;
-        let mut found_target = false;
-
         for capture in query_match.captures {
-            let capture_name = query.capture_names()[capture.index as usize];
-            let node_text = capture.node.utf8_text(source.as_bytes()).unwrap_or("");
-
-            match capture_name {
-                "var_name" | "var_name_untyped" => {
-                    if node_text == variable_name {
-                        var_name = Some(capture.node);
-                        found_target = true;
-                    }
-                }
-                "var_type" => {
-                    var_type = Some(node_text.to_string());
-                }
-                _ => {}
-            }
-        }
-
-        // Early termination: if we found our target variable, process it immediately
-        if found_target {
-            if let Some(name_node) = var_name {
-                if is_variable_in_scope(&name_node, current_position) {
-                    if let Some(type_name) = var_type {
-                        return Some(type_name);
-                    } else {
-                        // Try to infer from initializer
-                        if let Some(inferred_type) = infer_type_from_initializer(&name_node, source) {
-                            return Some(inferred_type);
+            if let Ok(node_text) = capture.node.utf8_text(source.as_bytes()) {
+                if node_text == variable_name {
+                    // Check scope first (fast check)
+                    if is_variable_in_scope(&capture.node, current_position) {
+                        // Found in scope, now get the type
+                        if let Some(var_decl) = find_ancestor_of_kind(&capture.node, "variable_declaration") {
+                            // Look for explicit type
+                            if let Some(type_node) = var_decl.child_by_field_name("type") {
+                                if let Ok(type_text) = type_node.utf8_text(source.as_bytes()) {
+                                    return Some(type_text.to_string());
+                                }
+                            }
+                            // Try to infer from initializer
+                            if let Some(inferred_type) = infer_type_from_initializer(&capture.node, source) {
+                                return Some(inferred_type);
+                            }
                         }
                     }
                 }
@@ -365,7 +355,7 @@ fn find_parameter_type(variable_name: &str, tree: &Tree, source: &str, current_p
           name: (identifier) @param_name_untyped)
     "#;
 
-    let query = Query::new(&tree.language(), query_text).ok()?;
+    let query = get_or_create_query(query_text, &tree.language())?;
     let mut cursor = QueryCursor::new();
 
     let mut result = None;
@@ -418,7 +408,7 @@ fn infer_from_assignment(variable_name: &str, tree: &Tree, source: &str, current
           right: (method_invocation) @method_call)
     "#;
 
-    let query = Query::new(&tree.language(), query_text).ok()?;
+    let query = get_or_create_query(query_text, &tree.language())?;
     let mut cursor = QueryCursor::new();
 
     let mut result = None;
@@ -655,13 +645,15 @@ fn resolve_through_wildcard_imports(
     // Get all possible FQNs for this class name in the project
     let possible_fqns = dependency_cache.find_symbols_by_class_name(project_root, symbol_name);
     
-    // Check if any of the possible FQNs match any wildcard import
+    // Optimized: Pre-compute prefixes and use faster matching
+    let prefixes: Vec<String> = wildcard_packages.iter()
+        .map(|pkg| format!("{}.", pkg))
+        .collect();
+    
+    // Check if any FQN matches any wildcard prefix  
     for fqn in possible_fqns {
-        for wildcard_package in &wildcard_packages {
-            let expected_prefix = format!("{}.", wildcard_package);
-            if fqn.starts_with(&expected_prefix) {
-                return Some((project_root.clone(), fqn));
-            }
+        if prefixes.iter().any(|prefix| fqn.starts_with(prefix)) {
+            return Some((project_root.clone(), fqn));
         }
     }
     
@@ -716,38 +708,30 @@ pub fn set_start_position(source: &str, usage_node: &Node, file_uri: &str) -> Op
 
     let other_source = fs::read_to_string(uri_to_path(file_uri)?).ok()?;
 
-    let query_text = r#"
-      (identifier) @name 
-    "#;
+    let query_text = r#"(identifier) @name"#;
 
     let language = tree_sitter_groovy::language();
-    let query = Query::new(&language, query_text).ok()?;
+    let query = get_or_create_query(query_text, &language)?;
 
     let mut parser = Parser::new();
     parser.set_language(&language).ok()?;
     let tree = parser.parse(&other_source, None)?;
 
     let mut cursor = QueryCursor::new();
-    let mut result = None;
-
-    cursor
-        .matches(&query, tree.root_node(), other_source.as_bytes())
-        .for_each(|query_match| {
-            if result.is_some() {
-                // Already found a match
-                return;
+    
+    // Optimized: Use while loop with early termination
+    let mut matches = cursor.matches(&query, tree.root_node(), other_source.as_bytes());
+    while let Some(query_match) = matches.next() {
+        for capture in query_match.captures {
+            if let Ok(name) = capture.node.utf8_text(other_source.as_bytes()) {
+                if name == symbol_name {
+                    return node_to_lsp_location(&capture.node, file_uri);
+                }
             }
+        }
+    }
 
-            for capture in query_match.captures {
-                if let Ok(name) = capture.node.utf8_text(other_source.as_bytes()) {
-                    if name == symbol_name {
-                        result = node_to_lsp_location(&capture.node, file_uri)
-                    }
-                };
-            }
-        });
-
-    result
+    None
 }
 
 fn resolve_same_package(

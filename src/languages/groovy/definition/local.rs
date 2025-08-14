@@ -9,7 +9,7 @@ use crate::{
     languages::LanguageSupport,
 };
 
-use super::utils::{find_definition_candidates, get_declaration_query_for_symbol_type};
+use super::utils::{find_definition_candidates, get_declaration_query_for_symbol_type, get_or_create_query};
 
 #[tracing::instrument(skip_all)]
 pub fn find_local(
@@ -447,7 +447,7 @@ fn find_best_method_match<'a>(
     let call_signature = extract_call_signature(usage_node, source)?;
 
     let query_text = r#"(method_declaration name: (identifier) @name)"#;
-    let query = Query::new(&tree.language(), query_text).ok()?;
+    let query = get_or_create_query(query_text, &tree.language())?;
     let mut cursor = QueryCursor::new();
 
     let mut best_match = None;

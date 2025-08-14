@@ -151,26 +151,86 @@ pub async fn execute_gradle_dependencies(
 
     let start = tokio::time::Instant::now();
 
-    for config in &["compileClasspath", "testCompileClasspath"] {
-        let output = tokio::time::timeout(
-            std::time::Duration::from_secs(60),
-            Command::new(gradle_command)
-                .args(&["dependencies", "--configuration", config, "--quiet"])
-                .current_dir(project_root)
-                .output(),
-        )
-        .await??;
+    // Optimized: Run both configurations in a single command when possible
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(45), // Reduced timeout
+        Command::new(gradle_command)
+            .args(&[
+                "dependencies", 
+                "--configuration", "compileClasspath",
+                "--configuration", "testCompileClasspath", 
+                "--quiet",
+                "--no-daemon", // Avoid daemon startup overhead for individual calls
+            ])
+            .current_dir(project_root)
+            .output(),
+    )
+    .await??;
 
-
-        if !output.status.success() {
-            continue;
-        }
-
+    if output.status.success() {
         let output_text = String::from_utf8(output.stdout)?;
-        results.insert(config.to_string(), output_text);
+        // Split output by configuration sections
+        let sections = parse_multi_configuration_output(&output_text);
+        for (config, content) in sections {
+            results.insert(config, content);
+        }
+    } else {
+        // Fallback: Run configurations separately if combined command fails
+        for config in &["compileClasspath", "testCompileClasspath"] {
+            let output = tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                Command::new(gradle_command)
+                    .args(&["dependencies", "--configuration", config, "--quiet", "--no-daemon"])
+                    .current_dir(project_root)
+                    .output(),
+            )
+            .await??;
+
+            if output.status.success() {
+                let output_text = String::from_utf8(output.stdout)?;
+                results.insert(config.to_string(), output_text);
+            }
+        }
     }
 
     Ok(results)
+}
+
+/// Parse output that contains multiple configuration sections
+fn parse_multi_configuration_output(output: &str) -> HashMap<String, String> {
+    let mut sections = HashMap::new();
+    let mut current_config = None;
+    let mut current_content = String::new();
+
+    for line in output.lines() {
+        if line.contains("compileClasspath - ") {
+            if let Some(config) = current_config.take() {
+                sections.insert(config, current_content.clone());
+            }
+            current_config = Some("compileClasspath".to_string());
+            current_content.clear();
+            current_content.push_str(line);
+            current_content.push('\n');
+        } else if line.contains("testCompileClasspath - ") {
+            if let Some(config) = current_config.take() {
+                sections.insert(config, current_content.clone());
+            }
+            current_config = Some("testCompileClasspath".to_string());
+            current_content.clear();
+            current_content.push_str(line);
+            current_content.push('\n');
+        } else if current_config.is_some() {
+            current_content.push_str(line);
+            current_content.push('\n');
+        }
+    }
+
+    // Add the last section
+    if let Some(config) = current_config {
+        sections.insert(config, current_content);
+    }
+
+    sections
 }
 
 #[tracing::instrument(skip_all)]

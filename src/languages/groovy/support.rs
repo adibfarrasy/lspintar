@@ -7,8 +7,11 @@ use tracing::debug;
 use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator, Tree};
 
 use crate::constants::LSP_NAME;
-use crate::core::dependency_cache::DependencyCache;
-use crate::core::symbols::SymbolType;
+use crate::core::{
+    dependency_cache::DependencyCache,
+    symbols::SymbolType,
+    utils::{uri_to_path, find_project_root, path_to_file_uri},
+};
 use crate::languages::traits::LanguageSupport;
 
 use super::definition::external::find_external;
@@ -297,6 +300,21 @@ impl LanguageSupport for GroovySupport {
         file_uri: &str,
         usage_node: &Node,
     ) -> Result<Location> {
+        // Optimized: Fast-path for common local cases
+        let symbol_type = self.determine_symbol_type_from_context(tree, usage_node, source).ok();
+        
+        // For simple local symbols, try local resolution first (fastest)
+        if let Some(symbol_type) = symbol_type {
+            if matches!(symbol_type, 
+                SymbolType::VariableUsage | 
+                SymbolType::ParameterDeclaration |
+                SymbolType::MethodCall
+            ) {
+                if let Some(local_location) = self.find_local(tree, source, file_uri, usage_node) {
+                    return Ok(local_location);
+                }
+            }
+        }
         
         // Check if this is a static method call pattern first
         if let Some((class_name, method_name)) = super::definition::utils::extract_static_method_context(usage_node, source) {
@@ -314,13 +332,12 @@ impl LanguageSupport for GroovySupport {
             }
         }
 
-        // Fallback to regular resolution chain
-        // For local resolution, don't use set_start_position as it may override our precise method matching
+        // Try local resolution again if not in fast-path
         if let Some(local_location) = self.find_local(tree, source, file_uri, usage_node) {
             return Ok(local_location);
         }
         
-        // For non-local resolution, continue with the chain and apply set_start_position
+        // Continue with cross-file resolution chain
         self.find_in_project(source, file_uri, usage_node, dependency_cache.clone())
             .or_else(|| {
                 self.find_in_workspace(source, file_uri, usage_node, dependency_cache.clone())
@@ -473,8 +490,8 @@ impl GroovySupport {
         
         // Use the existing utility functions to resolve the class name
         // This leverages all the existing import resolution, wildcard resolution, etc.
-        let current_file_path = crate::core::utils::uri_to_path(file_uri)?;
-        let project_root = crate::core::utils::find_project_root(&current_file_path)?;
+        let current_file_path = uri_to_path(file_uri)?;
+        let project_root = find_project_root(&current_file_path)?;
         
         // Try to resolve using the existing prepare_symbol_lookup_key_with_wildcard_support
         // We create a mock usage node by finding any identifier in the tree with the class name
@@ -487,7 +504,7 @@ impl GroovySupport {
                 // Look up the class in the symbol index
                 let symbol_key = (project_root.clone(), fqn.clone());
                 if let Some(file_location) = dependency_cache.symbol_index.get(&symbol_key) {
-                    let class_uri = crate::core::utils::path_to_file_uri(&file_location)?;
+                    let class_uri = path_to_file_uri(&file_location)?;
                     return Some(Location {
                         uri: tower_lsp::lsp_types::Url::parse(&class_uri).ok()?,
                         range: tower_lsp::lsp_types::Range::default(),
@@ -510,7 +527,7 @@ impl GroovySupport {
                     
                     let symbol_key = (other_project, fqn.clone());
                     if let Some(file_location) = dependency_cache.symbol_index.get(&symbol_key) {
-                        let class_uri = crate::core::utils::path_to_file_uri(&file_location)?;
+                        let class_uri = path_to_file_uri(&file_location)?;
                         return Some(Location {
                             uri: tower_lsp::lsp_types::Url::parse(&class_uri).ok()?,
                             range: tower_lsp::lsp_types::Range::default(),
