@@ -81,7 +81,6 @@ impl ProjectMapper {
         cache: Arc<DependencyCache>,
     ) -> Result<()> {
         let project_map = parse_settings_gradle(&project_root).await?;
-        debug!("Found {} projects in settings.gradle", project_map.len());
 
         let mut all_gradle_results = HashMap::new();
         for (project_name, subproject_path) in project_map.iter() {
@@ -100,12 +99,6 @@ impl ProjectMapper {
         let mut all_parsed_deps = HashMap::new();
         for (project_name, gradle_result) in &all_gradle_results {
             let parsed_deps = parse_gradle_dependencies_output(gradle_result)?;
-            debug!(
-                "Project {} - parsed {} external deps, {} project deps",
-                project_name,
-                parsed_deps.external_dependencies.len(),
-                parsed_deps.project_dependencies.len()
-            );
             all_parsed_deps.insert(
                 project_name.clone(),
                 (
@@ -121,16 +114,8 @@ impl ProjectMapper {
                 project_root.clone()
             } else {
                 match project_map.get(project_name) {
-                    Some(path) => {
-                        debug!("Processing project {} -> {:?}", project_name, path);
-                        path.clone()
-                    }
+                    Some(path) => path.clone(),
                     None => {
-                        debug!(
-                            "Project path not found for {}, available keys: {:?}",
-                            project_name,
-                            project_map.keys().collect::<Vec<_>>()
-                        );
                         return Err(anyhow!("Project path not found for {}", project_name));
                     }
                 }
@@ -166,13 +151,6 @@ impl ProjectMapper {
                 }
 
                 metadata.indexing_status = IndexingStatus::Completed;
-
-                debug!(
-                    "Updated metadata for project {}: {} external classes, {} project deps",
-                    project_name,
-                    metadata.external_dep_names.len(),
-                    metadata.inter_project_deps.len()
-                );
             }
         }
 
@@ -202,17 +180,13 @@ impl ProjectMapper {
                         if let Ok(classes) = extract_class_names_from_jar(&jar_path) {
                             chunk_classes.extend(classes.clone());
 
-                            if let Err(e) = index_jar_sources(
+                            let _ = index_jar_sources(
                                 &jar_path,
                                 &project_path,
                                 cache.clone(),
                                 &classes,
                                 &dep,
-                            ) {
-                                debug!("JAR source indexing failed for {:?}: {}", jar_path, e);
-                            } else {
-                                debug!("JAR source indexing completed for {:?}", jar_path);
-                            }
+                            );
                         }
                     }
                 }
@@ -227,11 +201,6 @@ impl ProjectMapper {
             }
         }
 
-        debug!(
-            "Resolved {} external class names for project {:?}",
-            all_class_names.len(),
-            project_path
-        );
         Ok(all_class_names)
     }
 }

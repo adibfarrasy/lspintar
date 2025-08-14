@@ -23,7 +23,7 @@ use crate::{
     lsp_warning,
 };
 
-use super::utils::search_definition;
+use super::utils::{prepare_symbol_lookup_key_with_wildcard_support, search_definition};
 
 // FIXME: currently accidentally work because the tree-sitter node names overlap
 // betweeen java and groovy.
@@ -40,6 +40,7 @@ pub fn find_external(
 
     find_project_external(
         source,
+        file_uri,
         usage_node,
         current_project,
         dependency_cache.clone(),
@@ -49,17 +50,27 @@ pub fn find_external(
 #[tracing::instrument(skip_all)]
 fn find_project_external(
     source: &str,
+    file_uri: &str,
     usage_node: &Node,
     current_project: PathBuf,
     dependency_cache: Arc<DependencyCache>,
 ) -> Option<Location> {
     let symbol_name = usage_node.utf8_text(source.as_bytes()).ok()?.to_string();
 
-    let project_key = (current_project, symbol_name.clone());
+    // Try to resolve the symbol through imports (including wildcard imports)
+    let resolved_symbol = if let Some((_, fully_qualified_name)) = 
+        prepare_symbol_lookup_key_with_wildcard_support(usage_node, source, file_uri, Some(current_project.clone()), &dependency_cache) {
+        // Extract just the class name from the FQN for external lookup
+        fully_qualified_name.split('.').last().unwrap_or(&symbol_name).to_string()
+    } else {
+        symbol_name.clone()
+    };
+
+    let project_key = (current_project, resolved_symbol.clone());
     if let Some(external_info) = dependency_cache.project_external_infos.get(&project_key) {
         return search_external_definition_and_convert(&symbol_name, external_info.value().clone());
     }
-    if let Some(external_info) = dependency_cache.builtin_infos.get(&symbol_name) {
+    if let Some(external_info) = dependency_cache.builtin_infos.get(&resolved_symbol) {
         return search_external_definition_and_convert(&symbol_name, external_info.value().clone());
     }
 

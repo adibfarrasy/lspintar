@@ -166,7 +166,7 @@ impl LanguageSupport for GroovySupport {
 
         let mut found = false;
 
-        let mut result = Err(anyhow!("[determine_symbol_type_from_context] invalid data"));
+        let mut result = Ok(SymbolType::Type); // Default to Type for unmatched contexts
 
         cursor
             .matches(&query, tree.root_node(), source.as_bytes())

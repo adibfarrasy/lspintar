@@ -1,0 +1,1 @@
+- instead of running `cargo check` run `just b`

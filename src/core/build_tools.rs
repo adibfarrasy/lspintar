@@ -36,7 +36,6 @@ pub fn detect_build_tool(project_root: &Path) -> Option<BuildTool> {
 pub async fn parse_settings_gradle(project_root: &PathBuf) -> Result<HashMap<String, PathBuf>> {
     let settings_file = project_root.join("settings.gradle");
     if !settings_file.exists() {
-        debug!("settings.gradle not found");
         return Ok(HashMap::new());
     }
 
@@ -125,16 +124,10 @@ pub async fn run_gradle_build(project_root: &PathBuf) -> anyhow::Result<()> {
     .await
     .context("Gradle build timed out after 5 minutes")??;
 
-    if output.status.success() {
-        debug!("Gradle build completed successfully");
-    } else {
+    if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
 
-        debug!(
-            "Gradle build failed.\nstdout: {}\nstderr: {}",
-            stdout, stderr
-        );
 
         return Err(anyhow::anyhow!("Gradle build failed. See logs for detail."));
     }
@@ -168,18 +161,8 @@ pub async fn execute_gradle_dependencies(
         )
         .await??;
 
-        let duration = start.elapsed();
-        debug!(
-            "`gradle :{:#?}:dependencies --configuration {} --quiet` command took: {:?}",
-            project_root, config, duration
-        );
 
         if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            debug!(
-                "`gradle :{:#?}:dependencies --configuration {} --quiet` command failed: {:?}",
-                project_root, config, stderr
-            );
             continue;
         }
 
@@ -318,7 +301,7 @@ pub struct ParsedGradleDependencies {
     pub project_dependencies: Vec<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ExternalDependency {
     pub group: String,
     pub artifact: String,
@@ -343,7 +326,6 @@ pub fn find_sources_jar_in_gradle_cache(dep: &ExternalDependency) -> Option<Path
             .join(&dep.version);
 
         if !artifact_dir.exists() {
-            debug!("Gradle cache directory not found: {:?}", artifact_dir);
             return None;
         }
     }
@@ -362,10 +344,6 @@ pub fn find_sources_jar_in_gradle_cache(dep: &ExternalDependency) -> Option<Path
         }
     }
 
-    debug!(
-        "JAR not found for dependency: {}:{}:{}",
-        dep.group, dep.artifact, dep.version
-    );
     None
 }
 
@@ -485,32 +463,27 @@ pub fn index_jar_sources(
 
         let mut content = String::new();
         if file.read_to_string(&mut content).is_err() {
-            debug!("failed to read content for file {}", file_name);
             continue;
         }
 
         let package_name = extract_package_name(&content);
 
         if package_name.is_none() {
-            debug!("package_name not found");
             continue;
         }
 
         if !class_fqn_names.contains(&format!("{}.{}", package_name.unwrap(), class_name)) {
-            debug!("class_names does not contain {}", file_name);
             continue;
         }
 
-        if let Err(e) = parse_and_cache_project_external(
+        let _ = parse_and_cache_project_external(
             class_name,
             project_path,
             jar_path.clone(),
             Some(file_name.clone()),
             dependency,
             cache.clone(),
-        ) {
-            debug!("Failed to parse external source {}: {}", class_name, e);
-        }
+        );
     }
 
     Ok(())

@@ -12,7 +12,7 @@ use crate::{
     languages::LanguageSupport,
 };
 
-use super::utils::{prepare_symbol_lookup_key, search_definition_in_project};
+use super::utils::{prepare_symbol_lookup_key_with_wildcard_support, search_definition_in_project};
 
 #[tracing::instrument(skip_all)]
 pub fn find_in_workspace(
@@ -54,7 +54,7 @@ fn find_in_project_dependencies(
 ) -> Option<Location> {
     let project_meta = dependency_cache.project_metadata.get(current_project)?;
 
-    let symbol_key = prepare_symbol_lookup_key(usage_node, source, file_uri, None)?;
+    let symbol_key = prepare_symbol_lookup_key_with_wildcard_support(usage_node, source, file_uri, None, &dependency_cache)?;
     let (_, fully_qualified_name) = symbol_key;
 
     // Search in each project that this project depends on
@@ -107,19 +107,48 @@ fn fallback_impl(
             continue;
         }
 
-        let symbol_key =
-            prepare_symbol_lookup_key(usage_node, source, file_uri, Some(project_root.clone()))?;
+        let symbol_name = usage_node.utf8_text(source.as_bytes()).ok()?.to_string();
+        
+        // First try to resolve the symbol using import resolution for this project
+        let symbol_key_from_imports = crate::languages::groovy::definition::utils::prepare_symbol_lookup_key_with_wildcard_support(
+            usage_node, source, file_uri, Some(project_root.clone()), &dependency_cache
+        );
+        
+        if let Some((_, fqn)) = symbol_key_from_imports {
+            let symbol_key = (project_root.clone(), fqn.clone());
+            
+            if let Some(file_location) = dependency_cache.symbol_index.get(&symbol_key) {
+                let other_uri = path_to_file_uri(&file_location)?;
 
-        if let Some(file_location) = dependency_cache.symbol_index.get(&symbol_key) {
-            let other_uri = path_to_file_uri(&file_location)?;
+                return search_definition_in_project(
+                    file_uri,
+                    source,
+                    usage_node,
+                    &other_uri,
+                    language_support,
+                );
+            }
+        }
+        
+        // Also try wildcard imports (for backward compatibility with OrderService case)
+        let wildcard_packages = crate::languages::groovy::definition::utils::get_wildcard_imports_from_source(source);
+        if let Some(packages) = wildcard_packages {
+            for package in packages {
+                let candidate_fqn = format!("{}.{}", package, symbol_name);
+                let symbol_key = (project_root.clone(), candidate_fqn.clone());
+                
+                if let Some(file_location) = dependency_cache.symbol_index.get(&symbol_key) {
+                    let other_uri = path_to_file_uri(&file_location)?;
 
-            return search_definition_in_project(
-                file_uri,
-                source,
-                usage_node,
-                &other_uri,
-                language_support,
-            );
+                    return search_definition_in_project(
+                        file_uri,
+                        source,
+                        usage_node,
+                        &other_uri,
+                        language_support,
+                    );
+                }
+            }
         }
     }
 

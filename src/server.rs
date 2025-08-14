@@ -72,7 +72,7 @@ impl LanguageServer for LspServer {
 
         let effective_root = self.find_true_workspace_root(&client_root.unwrap()).await;
 
-        *self.workspace_root.write().await = Some(effective_root);
+        *self.workspace_root.write().await = Some(effective_root.clone());
 
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
@@ -400,14 +400,12 @@ impl LspServer {
             if let Some(gradle_cache) = obj.get(GRADLE_CACHE_DIR) {
                 if let Some(cache_dir) = gradle_cache.as_str() {
                     state_manager::set_global(GRADLE_CACHE_DIR, cache_dir);
-                    debug!("Custom Gradle cache directory configured: {}", cache_dir);
                 }
             }
 
             if let Some(run_build) = obj.get(BUILD_ON_INIT) {
                 if let Some(build_flag) = run_build.as_bool() {
                     state_manager::set_global(BUILD_ON_INIT, build_flag);
-                    debug!("Gradle build on init: {}", build_flag);
                 }
             }
         }
@@ -452,18 +450,37 @@ impl LspServer {
 
     async fn update_cache(&self, path: Option<PathBuf>) {
         if let Some(dir) = path {
-            if is_external_dependency(&dir) {
-                if let Err(error) = self
-                    .dependency_cache
-                    .clone()
-                    .index_external_dependency(dir)
-                    .await
-                {
-                    lsp_error!("{}", error.to_string())
+            // Try to load from persistent cache first
+            let loaded_from_cache = if !is_external_dependency(&dir) {
+                match self.dependency_cache.load_from_disk(&dir).await {
+                    Ok(true) => {
+                        // Set indexing completed flag when loading from cache
+                        use crate::core::state_manager::set_global;
+                        set_global("is_indexing_completed", true);
+                        true
+                    },
+                    Ok(false) => false,
+                    Err(_) => false,
                 }
             } else {
-                if let Err(error) = self.dependency_cache.clone().index_workspace(dir).await {
-                    lsp_error!("{}", error.to_string())
+                false // Don't use persistence for external dependencies
+            };
+            
+            // If cache wasn't loaded, rebuild it
+            if !loaded_from_cache {
+                if is_external_dependency(&dir) {
+                    if let Err(error) = self
+                        .dependency_cache
+                        .clone()
+                        .index_external_dependency(dir)
+                        .await
+                    {
+                        lsp_error!("{}", error.to_string())
+                    }
+                } else {
+                    if let Err(error) = self.dependency_cache.clone().index_workspace(dir).await {
+                        lsp_error!("{}", error.to_string())
+                    }
                 }
             }
 

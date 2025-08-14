@@ -9,7 +9,7 @@ use crate::{
     languages::LanguageSupport,
 };
 
-use super::utils::{prepare_symbol_lookup_key, search_definition_in_project};
+use super::utils::{prepare_symbol_lookup_key_with_wildcard_support, search_definition_in_project};
 
 #[tracing::instrument(skip_all)]
 pub fn find_in_project(
@@ -19,7 +19,7 @@ pub fn find_in_project(
     dependency_cache: Arc<DependencyCache>,
     language_support: &dyn LanguageSupport,
 ) -> Option<Location> {
-    let symbol_key = prepare_symbol_lookup_key(usage_node, source, file_uri, None)?;
+    let symbol_key = prepare_symbol_lookup_key_with_wildcard_support(usage_node, source, file_uri, None, &dependency_cache)?;
 
     let file_location = dependency_cache.symbol_index.get(&symbol_key)?;
 
