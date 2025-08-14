@@ -19,6 +19,8 @@ use crate::{
     languages::LanguageSupport,
 };
 
+use super::method_resolution::{extract_call_signature_from_context, find_method_with_signature};
+
 #[tracing::instrument(skip_all)]
 pub fn get_declaration_query_for_symbol_type(symbol_type: &SymbolType) -> Option<&'static str> {
     match symbol_type {
@@ -104,9 +106,444 @@ pub fn search_definition_in_project(
     let other_path = uri_to_path(other_file_uri)?;
     let other_source = read_to_string(other_path).ok()?;
 
-    let definition_node = search_definition(&other_tree, &other_source, symbol_name, symbol_type)?;
+    let definition_node = if symbol_type == SymbolType::MethodCall {
+        // For method calls, try signature-based matching first
+        if let Some(call_signature) = extract_call_signature_from_context(usage_node, current_source) {
+            find_method_with_signature(&other_tree, &other_source, symbol_name, &call_signature)
+        } else {
+            // Fallback to regular method search
+            search_definition(&other_tree, &other_source, symbol_name, symbol_type)
+        }
+    } else {
+        search_definition(&other_tree, &other_source, symbol_name, symbol_type)
+    }?;
 
     return node_to_lsp_location(&definition_node, &other_file_uri);
+}
+
+/// Enhanced method resolution for static method calls like ObjectTransferUtil.transferObject()
+pub fn search_static_method_definition_in_project(
+    current_file_uri: &str,
+    current_source: &str,
+    usage_node: &Node,
+    other_file_uri: &str,
+    language_support: &dyn LanguageSupport,
+) -> Option<Location> {
+    let current_tree = uri_to_tree(current_file_uri)?;
+    let symbol_name = usage_node.utf8_text(current_source.as_bytes()).ok()?;
+    
+    // Get the method invocation parent to extract call signature
+    let method_invocation = find_parent_method_invocation_node(usage_node)?;
+    let call_signature = extract_call_signature_from_context(usage_node, current_source)?;
+
+    let other_tree = uri_to_tree(other_file_uri)?;
+    let other_path = uri_to_path(other_file_uri)?;
+    let other_source = read_to_string(other_path).ok()?;
+
+    // Use signature-based method matching
+    let definition_node = find_method_with_signature(&other_tree, &other_source, symbol_name, &call_signature)?;
+
+    return node_to_lsp_location(&definition_node, &other_file_uri);
+}
+
+fn find_parent_method_invocation_node<'a>(node: &Node<'a>) -> Option<Node<'a>> {
+    let mut current = node.parent();
+    while let Some(parent) = current {
+        if parent.kind() == "method_invocation" {
+            return Some(parent);
+        }
+        current = parent.parent();
+    }
+    None
+}
+
+/// Detect if a method call is static and extract the class name
+pub fn extract_static_method_context(usage_node: &Node, source: &str) -> Option<(String, String)> {
+    let method_invocation = find_parent_method_invocation_node(usage_node)?;
+    
+    // Check if this method invocation has an object field (static method pattern)
+    let object_node = method_invocation.child_by_field_name("object")?;
+    let method_name_node = method_invocation.child_by_field_name("name")?;
+    
+    let class_name = object_node.utf8_text(source.as_bytes()).ok()?.to_string();
+    let method_name = method_name_node.utf8_text(source.as_bytes()).ok()?.to_string();
+    
+    // Verify that the usage_node is the method name part
+    let usage_text = usage_node.utf8_text(source.as_bytes()).ok()?;
+    if usage_text == method_name {
+        Some((class_name, method_name))
+    } else {
+        None
+    }
+}
+
+/// Detect if a method call is on an instance and extract the variable name
+pub fn extract_instance_method_context(usage_node: &Node, source: &str) -> Option<(String, String)> {
+    let method_invocation = find_parent_method_invocation_node(usage_node)?;
+    
+    // Check if this method invocation has an object field (instance method pattern)
+    let object_node = method_invocation.child_by_field_name("object")?;
+    let method_name_node = method_invocation.child_by_field_name("name")?;
+    
+    let variable_name = object_node.utf8_text(source.as_bytes()).ok()?.to_string();
+    let method_name = method_name_node.utf8_text(source.as_bytes()).ok()?.to_string();
+    
+    // Verify that the usage_node is the method name part
+    let usage_text = usage_node.utf8_text(source.as_bytes()).ok()?;
+    if usage_text == method_name {
+        // Check if the object looks like a variable (lowercase first letter) vs class (uppercase first letter)
+        if variable_name.chars().next()?.is_lowercase() {
+            Some((variable_name, method_name))
+        } else {
+            None // This looks like a static method call
+        }
+    } else {
+        None
+    }
+}
+
+/// Resolve a variable to find its type/class name
+pub fn resolve_variable_type(variable_name: &str, tree: &Tree, source: &str, current_position: &Node) -> Option<String> {
+    
+    // Look for field declarations (class properties)
+    if let Some(field_type) = find_field_declaration_type(variable_name, tree, source) {
+        return Some(field_type);
+    }
+    
+    // Look for variable declarations in scope
+    if let Some(var_type) = find_variable_declaration_type(variable_name, tree, source, current_position) {
+        return Some(var_type);
+    }
+    
+    // Try to infer from method parameters
+    if let Some(param_type) = find_parameter_type(variable_name, tree, source, current_position) {
+        return Some(param_type);
+    }
+    
+    // Try to infer from assignment expressions
+    if let Some(assignment_type) = infer_from_assignment(variable_name, tree, source, current_position) {
+        return Some(assignment_type);
+    }
+    
+    None
+}
+
+fn find_field_declaration_type(variable_name: &str, tree: &Tree, source: &str) -> Option<String> {
+    
+    let query_text = r#"
+        (field_declaration 
+          type: (type_identifier) @field_type
+          declarator: (variable_declarator 
+            name: (identifier) @field_name))
+        
+        (field_declaration 
+          declarator: (variable_declarator 
+            name: (identifier) @field_name_untyped))
+    "#;
+
+    let query = Query::new(&tree.language(), query_text).ok()?;
+    let mut cursor = QueryCursor::new();
+
+    let mut processed_nodes = std::collections::HashSet::new();
+    let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
+    
+    while let Some(query_match) = matches.next() {
+        let mut field_name_node = None;
+        let mut field_type = None;
+        let mut found_target = false;
+
+        for capture in query_match.captures {
+            let capture_name = query.capture_names()[capture.index as usize];
+            let node_text = capture.node.utf8_text(source.as_bytes()).unwrap_or("");
+
+            // Skip if we've already processed this node
+            let node_id = capture.node.id();
+            if processed_nodes.contains(&node_id) {
+                continue;
+            }
+
+            match capture_name {
+                "field_name" | "field_name_untyped" => {
+                    processed_nodes.insert(node_id);
+                    if node_text == variable_name {
+                        field_name_node = Some(capture.node);
+                        found_target = true;
+                    }
+                }
+                "field_type" => {
+                    field_type = Some(node_text.to_string());
+                }
+                _ => {}
+            }
+        }
+
+        // Early termination: if we found our target field, process it immediately
+        if found_target {
+            if let Some(type_name) = field_type {
+                return Some(type_name);
+            } else {
+                // For Spring-injected fields, try to infer type from field name
+                let inferred_type = infer_type_from_field_name(variable_name);
+                if let Some(type_name) = inferred_type {
+                    return Some(type_name);
+                }
+            }
+        }
+    }
+
+    None
+}
+
+fn find_variable_declaration_type(variable_name: &str, tree: &Tree, source: &str, current_position: &Node) -> Option<String> {
+    
+    let query_text = r#"
+        (variable_declaration 
+          type: (type_identifier) @var_type
+          declarator: (variable_declarator 
+            name: (identifier) @var_name))
+        
+        (variable_declaration 
+          declarator: (variable_declarator 
+            name: (identifier) @var_name_untyped))
+    "#;
+
+    let query = Query::new(&tree.language(), query_text).ok()?;
+    let mut cursor = QueryCursor::new();
+
+    let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
+    
+    while let Some(query_match) = matches.next() {
+        let mut var_name = None;
+        let mut var_type = None;
+        let mut found_target = false;
+
+        for capture in query_match.captures {
+            let capture_name = query.capture_names()[capture.index as usize];
+            let node_text = capture.node.utf8_text(source.as_bytes()).unwrap_or("");
+
+            match capture_name {
+                "var_name" | "var_name_untyped" => {
+                    if node_text == variable_name {
+                        var_name = Some(capture.node);
+                        found_target = true;
+                    }
+                }
+                "var_type" => {
+                    var_type = Some(node_text.to_string());
+                }
+                _ => {}
+            }
+        }
+
+        // Early termination: if we found our target variable, process it immediately
+        if found_target {
+            if let Some(name_node) = var_name {
+                if is_variable_in_scope(&name_node, current_position) {
+                    if let Some(type_name) = var_type {
+                        return Some(type_name);
+                    } else {
+                        // Try to infer from initializer
+                        if let Some(inferred_type) = infer_type_from_initializer(&name_node, source) {
+                            return Some(inferred_type);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+fn find_parameter_type(variable_name: &str, tree: &Tree, source: &str, current_position: &Node) -> Option<String> {
+    let query_text = r#"
+        (formal_parameter 
+          type: (type_identifier) @param_type
+          name: (identifier) @param_name)
+        
+        (formal_parameter 
+          name: (identifier) @param_name_untyped)
+    "#;
+
+    let query = Query::new(&tree.language(), query_text).ok()?;
+    let mut cursor = QueryCursor::new();
+
+    let mut result = None;
+    cursor
+        .matches(&query, tree.root_node(), source.as_bytes())
+        .for_each(|query_match| {
+            let mut param_name = None;
+            let mut param_type = None;
+
+            for capture in query_match.captures {
+                let capture_name = query.capture_names()[capture.index as usize];
+                let node_text = capture.node.utf8_text(source.as_bytes()).unwrap_or("");
+
+                match capture_name {
+                    "param_name" | "param_name_untyped" => {
+                        if node_text == variable_name {
+                            param_name = Some(capture.node);
+                        }
+                    }
+                    "param_type" => {
+                        param_type = Some(node_text.to_string());
+                    }
+                    _ => {}
+                }
+            }
+
+            // Check if this parameter is in the same method as current position
+            if let Some(name_node) = param_name {
+                if is_in_same_method(&name_node, current_position) {
+                    if let Some(type_name) = param_type {
+                        result = Some(type_name);
+                        return;
+                    }
+                }
+            }
+        });
+
+    result
+}
+
+fn infer_from_assignment(variable_name: &str, tree: &Tree, source: &str, current_position: &Node) -> Option<String> {
+    let query_text = r#"
+        (assignment_expression 
+          left: (identifier) @var_name
+          right: (object_creation_expression 
+            type: (type_identifier) @assigned_type))
+            
+        (assignment_expression 
+          left: (identifier) @var_name
+          right: (method_invocation) @method_call)
+    "#;
+
+    let query = Query::new(&tree.language(), query_text).ok()?;
+    let mut cursor = QueryCursor::new();
+
+    let mut result = None;
+    cursor
+        .matches(&query, tree.root_node(), source.as_bytes())
+        .for_each(|query_match| {
+            let mut var_name = None;
+            let mut assigned_type = None;
+
+            for capture in query_match.captures {
+                let capture_name = query.capture_names()[capture.index as usize];
+                let node_text = capture.node.utf8_text(source.as_bytes()).unwrap_or("");
+
+                match capture_name {
+                    "var_name" => {
+                        if node_text == variable_name {
+                            var_name = Some(capture.node);
+                        }
+                    }
+                    "assigned_type" => {
+                        assigned_type = Some(node_text.to_string());
+                    }
+                    "method_call" => {
+                        // Could try to infer return type, but that's complex
+                        // For now, skip method calls
+                    }
+                    _ => {}
+                }
+            }
+
+            // Check if this assignment is before current position and in scope
+            if let Some(name_node) = var_name {
+                if is_assignment_before_position(&name_node, current_position) {
+                    if let Some(type_name) = assigned_type {
+                        result = Some(type_name);
+                        return;
+                    }
+                }
+            }
+        });
+
+    result
+}
+
+fn infer_type_from_initializer(var_node: &Node, source: &str) -> Option<String> {
+    // Look for variable declarator with initializer
+    let var_declarator = var_node.parent()?;
+    if var_declarator.kind() != "variable_declarator" {
+        return None;
+    }
+
+    let initializer = var_declarator.child_by_field_name("value")?;
+    
+    match initializer.kind() {
+        "object_creation_expression" => {
+            if let Some(type_node) = initializer.child_by_field_name("type") {
+                let type_text = type_node.utf8_text(source.as_bytes()).ok()?;
+                Some(type_text.to_string())
+            } else {
+                None
+            }
+        }
+        "string_literal" => Some("String".to_string()),
+        "decimal_integer_literal" => Some("Integer".to_string()),
+        "decimal_floating_point_literal" => Some("Double".to_string()),
+        "true" | "false" => Some("Boolean".to_string()),
+        _ => None
+    }
+}
+
+fn is_variable_in_scope(var_node: &Node, current_position: &Node) -> bool {
+    // Simple check: variable declaration should come before current position
+    var_node.start_position() < current_position.start_position()
+}
+
+fn is_in_same_method(param_node: &Node, current_position: &Node) -> bool {
+    let param_method = find_containing_method_node(param_node);
+    let current_method = find_containing_method_node(current_position);
+    
+    match (param_method, current_method) {
+        (Some(p_method), Some(c_method)) => p_method.id() == c_method.id(),
+        _ => false
+    }
+}
+
+fn is_assignment_before_position(assignment_node: &Node, current_position: &Node) -> bool {
+    assignment_node.start_position() < current_position.start_position()
+}
+
+fn infer_type_from_field_name(field_name: &str) -> Option<String> {
+    // Convert camelCase field name to PascalCase class name
+    // Examples:
+    // apiOrderTransfer -> ApiOrderTransfer
+    // userService -> UserService
+    // orderRepository -> OrderRepository
+    
+    if field_name.is_empty() {
+        return None;
+    }
+    
+    let mut result = String::new();
+    let mut chars = field_name.chars();
+    
+    // Capitalize the first character
+    if let Some(first_char) = chars.next() {
+        result.push(first_char.to_uppercase().next().unwrap_or(first_char));
+    }
+    
+    // Add the rest of the characters
+    for ch in chars {
+        result.push(ch);
+    }
+    
+    Some(result)
+}
+
+fn find_containing_method_node<'a>(node: &Node<'a>) -> Option<Node<'a>> {
+    let mut current = node.parent();
+    while let Some(parent) = current {
+        if parent.kind() == "method_declaration" {
+            return Some(parent);
+        }
+        current = parent.parent();
+    }
+    None
 }
 
 #[tracing::instrument(skip_all)]
