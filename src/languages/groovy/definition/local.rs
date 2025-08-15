@@ -9,7 +9,9 @@ use crate::{
     languages::LanguageSupport,
 };
 
-use super::utils::{find_definition_candidates, get_declaration_query_for_symbol_type, get_or_create_query};
+use super::utils::{
+    find_definition_candidates, get_declaration_query_for_symbol_type, get_or_create_query,
+};
 
 #[tracing::instrument(skip_all)]
 pub fn find_local(
@@ -37,20 +39,45 @@ pub fn search_local_definitions<'a>(
         .determine_symbol_type_from_context(tree, usage_node, source)
         .ok()?;
 
-    let query_text = get_declaration_query_for_symbol_type(&symbol_type)?;
-    let candidates = find_definition_candidates(tree, source, &symbol_name, query_text)?;
 
     if symbol_type.is_declaration() {
         return None;
     }
 
     match symbol_type {
-        SymbolType::VariableUsage => find_closest_declaration(usage_node, &candidates),
-
         SymbolType::MethodCall | SymbolType::FunctionCall => {
+            // Use specialized method resolution for method calls
             find_best_method_match(tree, source, usage_node, symbol_name)
         }
-        _ => candidates.into_iter().next(),
+        SymbolType::VariableUsage => {
+            // Get candidates for variable usage
+            let query_text = get_declaration_query_for_symbol_type(&symbol_type)?;
+            let candidates = find_definition_candidates(tree, source, &symbol_name, query_text)?;
+            
+            if let Some(var_result) = find_closest_declaration(usage_node, &candidates) {
+                Some(var_result)
+            } else {
+                // Not found as variable, try as field
+                find_as_field(tree, source, symbol_name)
+            }
+        }
+
+        SymbolType::FieldUsage => {
+            // Get candidates for field usage
+            let query_text = get_declaration_query_for_symbol_type(&symbol_type)?;
+            let candidates = find_definition_candidates(tree, source, &symbol_name, query_text)?;
+            
+            // For field usage (like autowired properties), find the field declaration
+            // Fields are class-level, so we don't need closest scope logic
+            candidates.into_iter().next()
+        }
+        
+        _ => {
+            // For other symbol types, use the general candidate finding approach
+            let query_text = get_declaration_query_for_symbol_type(&symbol_type)?;
+            let candidates = find_definition_candidates(tree, source, &symbol_name, query_text)?;
+            candidates.into_iter().next()
+        }
     }
 }
 
@@ -444,33 +471,61 @@ fn find_best_method_match<'a>(
     usage_node: &Node<'a>,
     symbol_name: &str,
 ) -> Option<Node<'a>> {
-    let call_signature = extract_call_signature(usage_node, source)?;
-
     let query_text = r#"(method_declaration name: (identifier) @name)"#;
     let query = get_or_create_query(query_text, &tree.language())?;
     let mut cursor = QueryCursor::new();
 
     let mut best_match = None;
+    let call_signature = extract_call_signature(usage_node, source);
 
     let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
-    
+
     'outer: while let Some(query_match) = matches.next() {
         for capture in query_match.captures {
             let name_node = capture.node;
             let name_text = name_node.utf8_text(source.as_bytes()).unwrap_or("");
 
             if name_text == symbol_name {
-                if let Some(method_decl) = name_node.parent() {
-                    if let Some(method_sig) = extract_method_signature(&method_decl, source) {
-                        if signatures_match(&call_signature, &method_sig) {
-                            best_match = Some(name_node);
-                            break 'outer;
+                // If we have a call signature, try to match by signature
+                if let Some(ref call_sig) = call_signature {
+                    if let Some(method_decl) = name_node.parent() {
+                        if let Some(method_sig) = extract_method_signature(&method_decl, source) {
+                            if signatures_match(call_sig, &method_sig) {
+                                best_match = Some(name_node);
+                                break 'outer;
+                            }
                         }
                     }
+                } else {
+                    // Fallback: if we can't extract call signature, just match by name
+                    best_match = Some(name_node);
+                    break 'outer;
                 }
             }
         }
     }
 
     best_match
+}
+
+/// Try to find a symbol as a field declaration in the current class
+fn find_as_field<'a>(tree: &'a Tree, source: &str, symbol_name: &str) -> Option<Node<'a>> {
+    let field_query_text =
+        r#"(field_declaration declarator: (variable_declarator name: (identifier) @name))"#;
+    let query = get_or_create_query(field_query_text, &tree.language())?;
+    let mut cursor = QueryCursor::new();
+
+    let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
+
+    while let Some(query_match) = matches.next() {
+        for capture in query_match.captures {
+            if let Ok(node_text) = capture.node.utf8_text(source.as_bytes()) {
+                if node_text == symbol_name {
+                    return Some(capture.node);
+                }
+            }
+        }
+    }
+
+    None
 }

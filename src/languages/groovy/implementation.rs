@@ -39,6 +39,9 @@ pub fn handle(
         SymbolType::InterfaceDeclaration | SymbolType::ClassDeclaration | SymbolType::Type => {
             futures::executor::block_on(find_implementations(symbol_name, &dependency_cache))
         }
+        SymbolType::MethodCall => {
+            handle_method_call_implementation(tree, source, position, dependency_cache, language_support)
+        }
         SymbolType::MethodDeclaration => futures::executor::block_on(async {
             // TODO: currently only handle interfaces.
             // implement abstract class handling next.
@@ -226,4 +229,123 @@ fn get_interface_declaration_query() -> &'static Option<Query> {
             .inspect_err(|error| debug!("[get_interface_declaration_query] {error}"))
             .ok()
     })
+}
+
+/// Handle go-to-implementation for method calls like someService.method()
+fn handle_method_call_implementation(
+    tree: &Tree,
+    source: &str,
+    position: Position,
+    dependency_cache: Arc<DependencyCache>,
+    language_support: &dyn LanguageSupport,
+) -> Result<Vec<Location>> {
+    let identifier_node = find_identifier_at_position(tree, source, position)?;
+    
+    // Step 1: Check if this is an instance method call and get the variable/method info
+    let instance_context = super::definition::utils::extract_instance_method_context(&identifier_node, source);
+    
+    if let Some((variable_name, method_name)) = instance_context {
+        // Step 2: Resolve the variable type to get the interface/class name  
+        let variable_type = super::definition::utils::resolve_variable_type(&variable_name, tree, source, &identifier_node);
+        
+        if let Some(class_name) = variable_type {
+            // Step 3: Find implementations of this class/interface and look for the method
+            return futures::executor::block_on(find_interface_method_implementations(
+                &class_name,
+                &method_name,
+                &dependency_cache
+            ));
+        } else {
+            return Err(anyhow::anyhow!("Cannot resolve variable type for go-to-implementation"));
+        }
+    } else {
+        return Err(anyhow::anyhow!("Go-to-implementation only supports instance method calls"));
+    }
+}
+
+/// Find a node at a specific position in the tree
+fn find_node_at_position(tree: &Tree, position: Position) -> Option<tree_sitter::Node> {
+    let point = tree_sitter::Point {
+        row: position.line as usize,
+        column: position.character as usize,
+    };
+    
+    tree.root_node().descendant_for_point_range(point, point)
+}
+
+/// Check if a node is contained within an interface declaration
+fn find_containing_interface(mut node: tree_sitter::Node) -> Option<tree_sitter::Node> {
+    while let Some(parent) = node.parent() {
+        if parent.kind() == "interface_declaration" {
+            return Some(parent);
+        }
+        node = parent;
+    }
+    None
+}
+
+/// Find implementations of a specific interface method
+async fn find_interface_method_implementations(
+    interface_name: &str,
+    method_name: &str,
+    dependency_cache: &DependencyCache,
+) -> Result<Vec<Location>> {
+    // First find all implementations of the interface
+    let interface_implementations = find_implementations(interface_name, dependency_cache).await?;
+    
+    let mut method_implementations = Vec::new();
+    
+    // For each implementation, look for the specific method
+    for implementation_location in interface_implementations {
+        if let Some(method_location) = find_method_in_class(&implementation_location, method_name).await? {
+            method_implementations.push(method_location);
+        }
+    }
+    
+    Ok(method_implementations)
+}
+
+/// Find a specific method in a class file
+async fn find_method_in_class(
+    class_location: &Location,
+    method_name: &str,
+) -> Result<Option<Location>> {
+    let file_path = class_location.uri.to_file_path()
+        .map_err(|_| anyhow::anyhow!("Invalid class file URI"))?;
+    
+    let source = fs::read_to_string(&file_path).await
+        .with_context(|| format!("Failed to read class file: {:?}", file_path))?;
+    
+    // Parse and search for the method
+    let mut parser = tree_sitter::Parser::new();
+    parser.set_language(&tree_sitter_groovy::language())?;
+    
+    let tree = parser.parse(&source, None)
+        .context("Failed to parse class file")?;
+    
+    // Use a query to find method declarations with the specific name
+    let query_text = r#"
+        (method_declaration
+            name: (identifier) @method_name)
+    "#;
+    
+    let query = Query::new(&tree_sitter_groovy::language(), query_text)?;
+    let mut cursor = tree_sitter::QueryCursor::new();
+    
+    let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
+    while let Some(query_match) = matches.next() {
+        for capture in query_match.captures {
+            if let Ok(capture_text) = capture.node.utf8_text(source.as_bytes()) {
+                if capture_text == method_name {
+                    // Found the method, return its location (use the method name node for precise positioning)
+                    let uri_string = class_location.uri.to_string();
+                    if let Some(location) = node_to_lsp_location(&capture.node, &uri_string) {
+                        return Ok(Some(location));
+                    }
+                }
+            }
+        }
+    }
+    
+    Ok(None)
 }

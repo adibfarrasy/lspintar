@@ -26,6 +26,7 @@ pub fn find_method_with_signature<'a>(
 
     let mut best_match = None;
     let mut best_score = 0;
+    let mut fallback_match = None; // For name-only matching when signature fails
 
     cursor
         .matches(&query, tree.root_node(), source.as_bytes())
@@ -35,12 +36,17 @@ pub fn find_method_with_signature<'a>(
                 let name_text = name_node.utf8_text(source.as_bytes()).unwrap_or("");
 
                 if name_text == method_name {
+                    // Always keep the first name match as fallback
+                    if fallback_match.is_none() {
+                        fallback_match = Some(name_node);
+                    }
+                    
                     if let Some(method_decl) = name_node.parent() {
                         if let Some(method_sig) = extract_method_signature(&method_decl, source) {
                             let score = calculate_signature_match_score(call_signature, &method_sig);
                             if score > best_score {
                                 best_score = score;
-                                best_match = Some(method_decl);
+                                best_match = Some(name_node);
                             }
                         }
                     }
@@ -48,7 +54,12 @@ pub fn find_method_with_signature<'a>(
             }
         });
 
-    best_match
+    // If we have a signature match, use it; otherwise fall back to name match
+    if best_score > 0 {
+        best_match
+    } else {
+        fallback_match
+    }
 }
 
 /// Extract call signature from method invocation context

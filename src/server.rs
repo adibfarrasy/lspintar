@@ -272,18 +272,50 @@ impl LanguageServer for LspServer {
             .to_string();
         let position = params.text_document_position_params.position;
 
-        let location = self.find_definition(uri.clone(), position).await?;
+        // Try to find definition first for remote hover
+        debug!("hover: attempting find_definition");
+        match self.find_definition(uri.clone(), position).await {
+            Ok(location) => {
+                debug!("hover: found definition at {}", location.uri);
+                let other_uri = location.uri.to_string();
+                let (content, tree) = self.get_content_and_tree(&other_uri).await?;
 
-        let other_uri = location.uri.to_string();
-        let (content, tree) = self.get_content_and_tree(&other_uri).await?;
+                let language_support = self
+                    .language_registry
+                    .detect_language(&other_uri)
+                    .ok_or(tower_lsp::jsonrpc::Error::internal_error())?;
 
+                debug!("hover: calling provide_hover on target file");
+                if let Some(hover) = language_support.provide_hover(&tree, &content, location) {
+                    debug!("hover: successfully got hover from target file");
+                    return Ok(Some(hover));
+                } else {
+                    debug!("hover: provide_hover returned None for target file");
+                }
+            }
+            Err(e) => {
+                debug!("hover: find_definition failed with error: {}", e);
+            }
+        }
+
+        // Fallback: provide local hover if definition finding fails
+        let (content, tree) = self.get_content_and_tree(&uri).await?;
         let language_support = self
             .language_registry
-            .detect_language(&other_uri)
+            .detect_language(&uri)
             .ok_or(tower_lsp::jsonrpc::Error::internal_error())?;
 
+        // Create a location from the current position for local hover
+        let local_location = Location {
+            uri: tower_lsp::lsp_types::Url::parse(&uri).map_err(|_| tower_lsp::jsonrpc::Error::invalid_params("Invalid URI".to_string()))?,
+            range: tower_lsp::lsp_types::Range {
+                start: position,
+                end: position,
+            },
+        };
+
         language_support
-            .provide_hover(&tree, &content, location)
+            .provide_hover(&tree, &content, local_location)
             .ok_or(tower_lsp::jsonrpc::Error::invalid_request())
             .map(Some)
     }

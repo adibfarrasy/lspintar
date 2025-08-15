@@ -21,10 +21,8 @@ use crate::{
 
 use super::method_resolution::{extract_call_signature_from_context, find_method_with_signature};
 
-/// Get or create a compiled query (simplified without caching for now)
+/// Get or create a compiled query
 pub fn get_or_create_query(query_text: &str, language: &tree_sitter::Language) -> Option<Query> {
-    // For now, just create the query each time
-    // Tree-sitter Query compilation is actually quite fast
     Query::new(language, query_text).ok()
 }
 
@@ -49,6 +47,7 @@ pub fn get_declaration_query_for_symbol_type(symbol_type: &SymbolType) -> Option
             r#"
             (variable_declaration declarator: (variable_declarator name: (identifier) @name))
             (formal_parameter name: (identifier) @name)
+            (field_declaration declarator: (variable_declarator name: (identifier) @name))
         "#,
         ),
         _ => None,
@@ -78,20 +77,23 @@ pub fn find_definition_candidates<'a>(
                 }
             }
         }
-        
+
         // Early termination for single-result queries (local scope)
         if !candidates.is_empty() && is_local_scope_query(query_text) {
             break;
         }
     }
 
-    if candidates.is_empty() { None } else { Some(candidates) }
+    if candidates.is_empty() {
+        None
+    } else {
+        Some(candidates)
+    }
 }
 
 /// Check if this is a query that should terminate early for local scope
 fn is_local_scope_query(query_text: &str) -> bool {
-    query_text.contains("formal_parameter") || 
-    query_text.contains("variable_declaration")
+    query_text.contains("formal_parameter") || query_text.contains("variable_declaration")
 }
 
 #[tracing::instrument(skip_all)]
@@ -102,9 +104,7 @@ pub fn search_definition<'a>(
     symbol_type: SymbolType,
 ) -> Option<Node<'a>> {
     let query_text = get_declaration_query_for_symbol_type(&symbol_type)?;
-
     let candidates = find_definition_candidates(tree, source, symbol_name, query_text)?;
-
     candidates.into_iter().next()
 }
 
@@ -128,7 +128,9 @@ pub fn search_definition_in_project(
 
     let definition_node = if symbol_type == SymbolType::MethodCall {
         // For method calls, try signature-based matching first
-        if let Some(call_signature) = extract_call_signature_from_context(usage_node, current_source) {
+        if let Some(call_signature) =
+            extract_call_signature_from_context(usage_node, current_source)
+        {
             find_method_with_signature(&other_tree, &other_source, symbol_name, &call_signature)
         } else {
             // Fallback to regular method search
@@ -151,7 +153,7 @@ pub fn search_static_method_definition_in_project(
 ) -> Option<Location> {
     let current_tree = uri_to_tree(current_file_uri)?;
     let symbol_name = usage_node.utf8_text(current_source.as_bytes()).ok()?;
-    
+
     // Get the method invocation parent to extract call signature
     let method_invocation = find_parent_method_invocation_node(usage_node)?;
     let call_signature = extract_call_signature_from_context(usage_node, current_source)?;
@@ -161,7 +163,8 @@ pub fn search_static_method_definition_in_project(
     let other_source = read_to_string(other_path).ok()?;
 
     // Use signature-based method matching
-    let definition_node = find_method_with_signature(&other_tree, &other_source, symbol_name, &call_signature)?;
+    let definition_node =
+        find_method_with_signature(&other_tree, &other_source, symbol_name, &call_signature)?;
 
     return node_to_lsp_location(&definition_node, &other_file_uri);
 }
@@ -179,104 +182,177 @@ fn find_parent_method_invocation_node<'a>(node: &Node<'a>) -> Option<Node<'a>> {
 
 /// Detect if a method call is static and extract the class name
 pub fn extract_static_method_context(usage_node: &Node, source: &str) -> Option<(String, String)> {
-    let method_invocation = find_parent_method_invocation_node(usage_node)?;
+    let usage_text = usage_node.utf8_text(source.as_bytes()).unwrap_or("");
+    debug!("extract_static_method_context: analyzing node '{}' of kind '{}'", usage_text, usage_node.kind());
     
+    let method_invocation = find_parent_method_invocation_node(usage_node);
+    if method_invocation.is_none() {
+        debug!("extract_static_method_context: no method_invocation parent found");
+        return None;
+    }
+    let method_invocation = method_invocation.unwrap();
+    debug!("extract_static_method_context: found method_invocation parent");
+
     // Check if this method invocation has an object field (static method pattern)
     let object_node = method_invocation.child_by_field_name("object")?;
     let method_name_node = method_invocation.child_by_field_name("name")?;
-    
+
     let class_name = object_node.utf8_text(source.as_bytes()).ok()?.to_string();
-    let method_name = method_name_node.utf8_text(source.as_bytes()).ok()?.to_string();
-    
-    // Verify that the usage_node is the method name part
-    let usage_text = usage_node.utf8_text(source.as_bytes()).ok()?;
-    if usage_text == method_name {
-        Some((class_name, method_name))
+    let method_name = method_name_node
+        .utf8_text(source.as_bytes())
+        .ok()?
+        .to_string();
+
+    debug!("extract_static_method_context: found class_name='{}', method_name='{}', usage_text='{}'", 
+           class_name, method_name, usage_text);
+
+    // Only return Some for actual static method calls (class name starts with uppercase)
+    if class_name.chars().next().map_or(false, |c| c.is_uppercase()) {
+        // This looks like a static method call (ClassName.method)
+        if usage_text == method_name {
+            debug!("extract_static_method_context: usage_node matches method name - static method call detected");
+            Some((class_name, method_name))
+        } else if usage_text == class_name {
+            debug!("extract_static_method_context: usage_node matches class name - returning static method context anyway");
+            Some((class_name, method_name))
+        } else {
+            debug!("extract_static_method_context: usage_node '{}' matches neither class '{}' nor method '{}'", 
+                   usage_text, class_name, method_name);
+            None
+        }
     } else {
+        // This looks like an instance method call (variable.method) - not a static method call
+        debug!("extract_static_method_context: object '{}' looks like a variable (lowercase) - not a static method call", class_name);
         None
     }
 }
 
 /// Detect if a method call is on an instance and extract the variable name
-pub fn extract_instance_method_context(usage_node: &Node, source: &str) -> Option<(String, String)> {
-    let method_invocation = find_parent_method_invocation_node(usage_node)?;
+pub fn extract_instance_method_context(
+    usage_node: &Node,
+    source: &str,
+) -> Option<(String, String)> {
+    let usage_text = usage_node.utf8_text(source.as_bytes()).unwrap_or("");
+    debug!("extract_instance_method_context: analyzing node '{}' of kind '{}'", usage_text, usage_node.kind());
     
+    let method_invocation = find_parent_method_invocation_node(usage_node);
+    if method_invocation.is_none() {
+        debug!("extract_instance_method_context: no method_invocation parent found");
+        return None;
+    }
+    let method_invocation = method_invocation.unwrap();
+    debug!("extract_instance_method_context: found method_invocation parent");
+
     // Check if this method invocation has an object field (instance method pattern)
     let object_node = method_invocation.child_by_field_name("object")?;
     let method_name_node = method_invocation.child_by_field_name("name")?;
-    
+
     let variable_name = object_node.utf8_text(source.as_bytes()).ok()?.to_string();
-    let method_name = method_name_node.utf8_text(source.as_bytes()).ok()?.to_string();
-    
+    let method_name = method_name_node
+        .utf8_text(source.as_bytes())
+        .ok()?
+        .to_string();
+
+    debug!("extract_instance_method_context: found variable_name='{}', method_name='{}', usage_text='{}'", 
+           variable_name, method_name, usage_text);
+
     // Verify that the usage_node is the method name part
-    let usage_text = usage_node.utf8_text(source.as_bytes()).ok()?;
     if usage_text == method_name {
         // Check if the object looks like a variable (lowercase first letter) vs class (uppercase first letter)
         if variable_name.chars().next()?.is_lowercase() {
+            debug!("extract_instance_method_context: usage_node matches method name and object is lowercase - instance method call detected");
             Some((variable_name, method_name))
         } else {
+            debug!("extract_instance_method_context: object '{}' looks like a class name (uppercase) - not an instance method call", variable_name);
             None // This looks like a static method call
         }
     } else {
+        debug!("extract_instance_method_context: usage_node '{}' doesn't match method name '{}'", usage_text, method_name);
         None
     }
 }
 
 /// Resolve a variable to find its type/class name
-pub fn resolve_variable_type(variable_name: &str, tree: &Tree, source: &str, current_position: &Node) -> Option<String> {
-    
+pub fn resolve_variable_type(
+    variable_name: &str,
+    tree: &Tree,
+    source: &str,
+    current_position: &Node,
+) -> Option<String> {
     // Look for field declarations (class properties)
     if let Some(field_type) = find_field_declaration_type(variable_name, tree, source) {
         return Some(field_type);
     }
-    
+
     // Look for variable declarations in scope
-    if let Some(var_type) = find_variable_declaration_type(variable_name, tree, source, current_position) {
+    if let Some(var_type) =
+        find_variable_declaration_type(variable_name, tree, source, current_position)
+    {
         return Some(var_type);
     }
-    
+
     // Try to infer from method parameters
     if let Some(param_type) = find_parameter_type(variable_name, tree, source, current_position) {
         return Some(param_type);
     }
-    
+
     // Try to infer from assignment expressions
-    if let Some(assignment_type) = infer_from_assignment(variable_name, tree, source, current_position) {
+    if let Some(assignment_type) =
+        infer_from_assignment(variable_name, tree, source, current_position)
+    {
         return Some(assignment_type);
     }
-    
+
     None
 }
 
 fn find_field_declaration_type(variable_name: &str, tree: &Tree, source: &str) -> Option<String> {
-    // Optimized: Use a simpler, more targeted query
+    // Enhanced query to handle annotated fields with explicit types
     let query_text = r#"
         (field_declaration 
+          (modifiers)?
+          type: (type_identifier) @field_type
           declarator: (variable_declarator 
             name: (identifier) @field_name))
+            
+        (field_declaration 
+          declarator: (variable_declarator 
+            name: (identifier) @field_name_no_type))
     "#;
 
     let query = get_or_create_query(query_text, &tree.language())?;
     let mut cursor = QueryCursor::new();
 
     let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
-    
+
     while let Some(query_match) = matches.next() {
+        let mut found_field_name = false;
+        let mut explicit_type = None;
+
         for capture in query_match.captures {
-            if let Ok(node_text) = capture.node.utf8_text(source.as_bytes()) {
-                if node_text == variable_name {
-                    // Found our target field, now extract type efficiently
-                    if let Some(field_decl) = find_ancestor_of_kind(&capture.node, "field_declaration") {
-                        // Look for explicit type
-                        if let Some(type_node) = field_decl.child_by_field_name("type") {
-                            if let Ok(type_text) = type_node.utf8_text(source.as_bytes()) {
-                                return Some(type_text.to_string());
-                            }
-                        }
-                        // Fallback: infer from field name for Spring beans
-                        return infer_type_from_field_name(variable_name);
+            let capture_name = query.capture_names()[capture.index as usize];
+            let node_text = capture.node.utf8_text(source.as_bytes()).unwrap_or("");
+
+            match capture_name {
+                "field_name" | "field_name_no_type" => {
+                    if node_text == variable_name {
+                        found_field_name = true;
                     }
                 }
+                "field_type" => {
+                    explicit_type = Some(node_text.to_string());
+                }
+                _ => {}
+            }
+        }
+
+        if found_field_name {
+            if let Some(type_text) = explicit_type {
+                // Found explicit type annotation
+                return Some(type_text);
+            } else {
+                // No explicit type, fall back to field name inference
+                return infer_type_from_field_name(variable_name);
             }
         }
     }
@@ -288,14 +364,14 @@ fn find_field_declaration_type(variable_name: &str, tree: &Tree, source: &str) -
 fn find_ancestor_of_kind<'a>(node: &Node<'a>, kind: &str) -> Option<Node<'a>> {
     let mut current = Some(*node);
     let mut depth = 0;
-    
+
     while let Some(n) = current {
         if n.kind() == kind {
             return Some(n);
         }
         current = n.parent();
         depth += 1;
-        
+
         // Safety: prevent infinite loops in malformed trees
         if depth > 10 {
             break;
@@ -304,7 +380,12 @@ fn find_ancestor_of_kind<'a>(node: &Node<'a>, kind: &str) -> Option<Node<'a>> {
     None
 }
 
-fn find_variable_declaration_type(variable_name: &str, tree: &Tree, source: &str, current_position: &Node) -> Option<String> {
+fn find_variable_declaration_type(
+    variable_name: &str,
+    tree: &Tree,
+    source: &str,
+    current_position: &Node,
+) -> Option<String> {
     // Optimized: Single query with immediate processing
     let query_text = r#"
         (variable_declaration 
@@ -316,7 +397,7 @@ fn find_variable_declaration_type(variable_name: &str, tree: &Tree, source: &str
     let mut cursor = QueryCursor::new();
 
     let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
-    
+
     while let Some(query_match) = matches.next() {
         for capture in query_match.captures {
             if let Ok(node_text) = capture.node.utf8_text(source.as_bytes()) {
@@ -324,7 +405,9 @@ fn find_variable_declaration_type(variable_name: &str, tree: &Tree, source: &str
                     // Check scope first (fast check)
                     if is_variable_in_scope(&capture.node, current_position) {
                         // Found in scope, now get the type
-                        if let Some(var_decl) = find_ancestor_of_kind(&capture.node, "variable_declaration") {
+                        if let Some(var_decl) =
+                            find_ancestor_of_kind(&capture.node, "variable_declaration")
+                        {
                             // Look for explicit type
                             if let Some(type_node) = var_decl.child_by_field_name("type") {
                                 if let Ok(type_text) = type_node.utf8_text(source.as_bytes()) {
@@ -332,7 +415,9 @@ fn find_variable_declaration_type(variable_name: &str, tree: &Tree, source: &str
                                 }
                             }
                             // Try to infer from initializer
-                            if let Some(inferred_type) = infer_type_from_initializer(&capture.node, source) {
+                            if let Some(inferred_type) =
+                                infer_type_from_initializer(&capture.node, source)
+                            {
                                 return Some(inferred_type);
                             }
                         }
@@ -345,7 +430,12 @@ fn find_variable_declaration_type(variable_name: &str, tree: &Tree, source: &str
     None
 }
 
-fn find_parameter_type(variable_name: &str, tree: &Tree, source: &str, current_position: &Node) -> Option<String> {
+fn find_parameter_type(
+    variable_name: &str,
+    tree: &Tree,
+    source: &str,
+    current_position: &Node,
+) -> Option<String> {
     let query_text = r#"
         (formal_parameter 
           type: (type_identifier) @param_type
@@ -396,7 +486,12 @@ fn find_parameter_type(variable_name: &str, tree: &Tree, source: &str, current_p
     result
 }
 
-fn infer_from_assignment(variable_name: &str, tree: &Tree, source: &str, current_position: &Node) -> Option<String> {
+fn infer_from_assignment(
+    variable_name: &str,
+    tree: &Tree,
+    source: &str,
+    current_position: &Node,
+) -> Option<String> {
     let query_text = r#"
         (assignment_expression 
           left: (identifier) @var_name
@@ -461,7 +556,7 @@ fn infer_type_from_initializer(var_node: &Node, source: &str) -> Option<String> 
     }
 
     let initializer = var_declarator.child_by_field_name("value")?;
-    
+
     match initializer.kind() {
         "object_creation_expression" => {
             if let Some(type_node) = initializer.child_by_field_name("type") {
@@ -475,7 +570,7 @@ fn infer_type_from_initializer(var_node: &Node, source: &str) -> Option<String> 
         "decimal_integer_literal" => Some("Integer".to_string()),
         "decimal_floating_point_literal" => Some("Double".to_string()),
         "true" | "false" => Some("Boolean".to_string()),
-        _ => None
+        _ => None,
     }
 }
 
@@ -487,10 +582,10 @@ fn is_variable_in_scope(var_node: &Node, current_position: &Node) -> bool {
 fn is_in_same_method(param_node: &Node, current_position: &Node) -> bool {
     let param_method = find_containing_method_node(param_node);
     let current_method = find_containing_method_node(current_position);
-    
+
     match (param_method, current_method) {
         (Some(p_method), Some(c_method)) => p_method.id() == c_method.id(),
-        _ => false
+        _ => false,
     }
 }
 
@@ -504,24 +599,24 @@ fn infer_type_from_field_name(field_name: &str) -> Option<String> {
     // apiOrderTransfer -> ApiOrderTransfer
     // userService -> UserService
     // orderRepository -> OrderRepository
-    
+
     if field_name.is_empty() {
         return None;
     }
-    
+
     let mut result = String::new();
     let mut chars = field_name.chars();
-    
+
     // Capitalize the first character
     if let Some(first_char) = chars.next() {
         result.push(first_char.to_uppercase().next().unwrap_or(first_char));
     }
-    
+
     // Add the rest of the characters
     for ch in chars {
         result.push(ch);
     }
-    
+
     Some(result)
 }
 
@@ -579,8 +674,9 @@ pub fn prepare_symbol_lookup_key_with_wildcard_support(
     if let Some(result) = &specific_import_result {
         return Some(result.clone());
     }
-    
-    let same_package_result = resolve_same_package(&symbol_name, source, &project_root, dependency_cache);
+
+    let same_package_result =
+        resolve_same_package(&symbol_name, source, &project_root, dependency_cache);
     if let Some(result) = &same_package_result {
         return Some(result.clone());
     }
@@ -619,7 +715,7 @@ fn resolve_through_imports(
                         .trim()
                         .trim_end_matches(';')
                         .trim();
-                    
+
                     // Only handle specific imports here - wildcard imports are handled in resolve_through_wildcard_imports
                     if import_text.ends_with(&format!(".{}", symbol_name)) {
                         specific_import = Some((project_root.clone(), import_text.to_string()));
@@ -641,22 +737,23 @@ fn resolve_through_wildcard_imports(
 ) -> Option<(PathBuf, String)> {
     // Get all wildcard imports from the source
     let wildcard_packages = get_wildcard_imports(source)?;
-    
+
     // Get all possible FQNs for this class name in the project
     let possible_fqns = dependency_cache.find_symbols_by_class_name(project_root, symbol_name);
-    
+
     // Optimized: Pre-compute prefixes and use faster matching
-    let prefixes: Vec<String> = wildcard_packages.iter()
+    let prefixes: Vec<String> = wildcard_packages
+        .iter()
         .map(|pkg| format!("{}.", pkg))
         .collect();
-    
-    // Check if any FQN matches any wildcard prefix  
+
+    // Check if any FQN matches any wildcard prefix
     for fqn in possible_fqns {
         if prefixes.iter().any(|prefix| fqn.starts_with(prefix)) {
             return Some((project_root.clone(), fqn));
         }
     }
-    
+
     None
 }
 
@@ -690,7 +787,7 @@ fn get_wildcard_imports(source: &str) -> Option<Vec<String>> {
                         .trim()
                         .trim_end_matches(';')
                         .trim();
-                    
+
                     if import_text.ends_with("*") {
                         let package_name = import_text.strip_suffix("*").unwrap_or(import_text);
                         let package_name = package_name.trim_end_matches('.');
@@ -718,7 +815,7 @@ pub fn set_start_position(source: &str, usage_node: &Node, file_uri: &str) -> Op
     let tree = parser.parse(&other_source, None)?;
 
     let mut cursor = QueryCursor::new();
-    
+
     // Optimized: Use while loop with early termination
     let mut matches = cursor.matches(&query, tree.root_node(), other_source.as_bytes());
     while let Some(query_match) = matches.next() {
@@ -767,7 +864,7 @@ fn resolve_same_package(
             for capture in query_match.captures {
                 if let Ok(package_name) = capture.node.utf8_text(source.as_bytes()) {
                     let fqn = format!("{}.{}", package_name, symbol_name);
-                    
+
                     // Only return the same-package result if the symbol actually exists in the cache
                     let symbol_key = (project_root.clone(), fqn.clone());
                     if dependency_cache.symbol_index.get(&symbol_key).is_some() {
