@@ -4,9 +4,15 @@ use anyhow::Result;
 use tower_lsp::lsp_types::{Diagnostic, Hover, Location, Position};
 use tree_sitter::{Node, Parser, Tree};
 
-use crate::core::{dependency_cache::DependencyCache, symbols::SymbolType};
+use crate::core::{
+    dependency_cache::DependencyCache,
+    symbols::SymbolType,
+    definition::queries::QueryProvider,
+    cross_language::type_bridge::CrossLanguageTypeInfo,
+    registry::LanguageRegistry,
+};
 
-pub trait LanguageSupport: Send + Sync {
+pub trait LanguageSupport: Send + Sync + QueryProvider {
     fn language_id(&self) -> &'static str;
 
     fn file_extensions(&self) -> &[&'static str];
@@ -41,6 +47,23 @@ pub trait LanguageSupport: Send + Sync {
         source: &str,
     ) -> Result<SymbolType>;
 
+    // Cross-language support methods
+    fn extract_type_info(&self, tree: &Tree, source: &str, node: &Node) -> Option<CrossLanguageTypeInfo>;
+
+    fn find_cross_language_definition(
+        &self,
+        symbol: &str,
+        target_language: &str,
+        registry: &LanguageRegistry,
+        dependency_cache: Arc<DependencyCache>,
+    ) -> Option<Location>;
+
+    fn can_resolve_cross_language(&self, target_language: &str) -> bool {
+        // Default JVM language interop rules
+        let jvm_languages = ["java", "groovy", "kotlin"];
+        jvm_languages.contains(&self.language_id()) && jvm_languages.contains(&target_language)
+    }
+
     fn find_definition_chain(
         &self,
         tree: &Tree,
@@ -48,20 +71,7 @@ pub trait LanguageSupport: Send + Sync {
         dependency_cache: Arc<DependencyCache>,
         file_uri: &str,
         usage_node: &Node,
-    ) -> Result<Location> {
-        self.find_local(tree, source, file_uri, usage_node)
-            .or_else(|| {
-                self.find_in_project(source, file_uri, usage_node, dependency_cache.clone())
-            })
-            .or_else(|| {
-                self.find_in_workspace(source, file_uri, usage_node, dependency_cache.clone())
-            })
-            .or_else(|| self.find_external(source, file_uri, usage_node, dependency_cache.clone()))
-            .and_then(|location| {
-                self.set_start_position(source, usage_node, &location.uri.to_string())
-            })
-            .ok_or_else(|| anyhow::anyhow!("Definition not found"))
-    }
+    ) -> Result<Location>;
 
     fn find_local(
         &self,
@@ -69,9 +79,7 @@ pub trait LanguageSupport: Send + Sync {
         source: &str,
         file_uri: &str,
         usage_node: &Node,
-    ) -> Option<Location> {
-        None
-    }
+    ) -> Option<Location>;
 
     fn find_in_project(
         &self,
@@ -79,9 +87,7 @@ pub trait LanguageSupport: Send + Sync {
         file_uri: &str,
         usage_node: &Node,
         dependency_cache: Arc<DependencyCache>,
-    ) -> Option<Location> {
-        None
-    }
+    ) -> Option<Location>;
 
     fn find_in_workspace(
         &self,
@@ -89,9 +95,7 @@ pub trait LanguageSupport: Send + Sync {
         file_uri: &str,
         usage_node: &Node,
         dependency_cache: Arc<DependencyCache>,
-    ) -> Option<Location> {
-        None
-    }
+    ) -> Option<Location>;
 
     fn find_external(
         &self,
@@ -99,18 +103,14 @@ pub trait LanguageSupport: Send + Sync {
         file_uri: &str,
         usage_node: &Node,
         dependency_cache: Arc<DependencyCache>,
-    ) -> Option<Location> {
-        None
-    }
+    ) -> Option<Location>;
 
     fn set_start_position(
         &self,
         source: &str,
         usage_node: &Node,
         file_uri: &str,
-    ) -> Option<Location> {
-        None
-    }
+    ) -> Option<Location>;
 }
 
 #[cfg(test)]
@@ -172,6 +172,44 @@ mod tests {
         }
     }
 
+    impl QueryProvider for MockLanguageSupport {
+        fn variable_declaration_queries(&self) -> &[&'static str] {
+            &[]
+        }
+
+        fn method_declaration_queries(&self) -> &[&'static str] {
+            &[]
+        }
+
+        fn class_declaration_queries(&self) -> &[&'static str] {
+            &[]
+        }
+
+        fn interface_declaration_queries(&self) -> &[&'static str] {
+            &[]
+        }
+
+        fn parameter_queries(&self) -> &[&'static str] {
+            &[]
+        }
+
+        fn field_declaration_queries(&self) -> &[&'static str] {
+            &[]
+        }
+
+        fn symbol_type_detection_query(&self) -> &'static str {
+            ""
+        }
+
+        fn import_queries(&self) -> &[&'static str] {
+            &[]
+        }
+
+        fn package_queries(&self) -> &[&'static str] {
+            &[]
+        }
+    }
+
     impl LanguageSupport for MockLanguageSupport {
         fn language_id(&self) -> &'static str {
             self.language_id
@@ -223,6 +261,36 @@ mod tests {
             _source: &str,
         ) -> Result<SymbolType> {
             Ok(self.symbol_type.clone())
+        }
+
+        fn extract_type_info(&self, _tree: &Tree, _source: &str, _node: &Node) -> Option<CrossLanguageTypeInfo> {
+            None
+        }
+
+        fn find_cross_language_definition(
+            &self,
+            _symbol: &str,
+            _target_language: &str,
+            _registry: &LanguageRegistry,
+            _dependency_cache: Arc<DependencyCache>,
+        ) -> Option<Location> {
+            None
+        }
+
+        fn find_definition_chain(
+            &self,
+            tree: &Tree,
+            source: &str,
+            dependency_cache: Arc<DependencyCache>,
+            uri: &str,
+            usage_node: &Node,
+        ) -> Result<Location> {
+            self.find_local(tree, source, uri, usage_node)
+                .or_else(|| self.find_in_project(source, uri, usage_node, dependency_cache.clone()))
+                .or_else(|| self.find_in_workspace(source, uri, usage_node, dependency_cache.clone()))
+                .or_else(|| self.find_external(source, uri, usage_node, dependency_cache.clone()))
+                .and_then(|location| self.set_start_position(source, usage_node, &location.uri.to_string()))
+                .ok_or_else(|| anyhow::anyhow!("Definition not found"))
         }
 
         fn find_local(

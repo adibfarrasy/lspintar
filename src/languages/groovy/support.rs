@@ -11,6 +11,9 @@ use crate::core::{
     dependency_cache::DependencyCache,
     symbols::SymbolType,
     utils::{uri_to_path, find_project_root, path_to_file_uri},
+    definition::queries::QueryProvider,
+    cross_language::type_bridge::CrossLanguageTypeInfo,
+    registry::LanguageRegistry,
 };
 use crate::languages::traits::LanguageSupport;
 
@@ -29,6 +32,94 @@ pub struct GroovySupport;
 impl GroovySupport {
     pub fn new() -> Self {
         Self
+    }
+}
+
+impl QueryProvider for GroovySupport {
+    fn variable_declaration_queries(&self) -> &[&'static str] {
+        &[
+            r#"(variable_declaration) @decl"#,
+            r#"(local_variable_declaration) @local_decl"#,
+            r#"(expression_statement (identifier) @bare_id)"#,
+        ]
+    }
+
+    fn method_declaration_queries(&self) -> &[&'static str] {
+        &[
+            r#"(method_declaration) @method"#,
+            r#"(constructor_declaration) @constructor"#,
+        ]
+    }
+
+    fn class_declaration_queries(&self) -> &[&'static str] {
+        &[
+            r#"(class_declaration) @class"#,
+            r#"(enum_declaration) @enum"#,
+        ]
+    }
+
+    fn interface_declaration_queries(&self) -> &[&'static str] {
+        &[
+            r#"(interface_declaration) @interface"#,
+        ]
+    }
+
+    fn parameter_queries(&self) -> &[&'static str] {
+        &[
+            r#"(formal_parameter (identifier) @param)"#,
+        ]
+    }
+
+    fn field_declaration_queries(&self) -> &[&'static str] {
+        &[
+            r#"(field_declaration) @field"#,
+            r#"(property_declaration) @property"#,
+        ]
+    }
+
+    fn symbol_type_detection_query(&self) -> &'static str {
+        r#"
+        ; DECLARATIONS
+        ; Variable declarations
+        (variable_declaration
+          declarator: (variable_declarator
+            name: (identifier) @var_decl))
+        ; Field declarations  
+        (field_declaration
+          declarator: (variable_declarator
+            name: (identifier) @field_decl))
+        ; Method declarations
+        (method_declaration
+          name: (identifier) @method_decl)
+        ; Class declarations
+        (class_declaration
+          name: (identifier) @class_decl)
+        ; Interface declarations
+        (interface_declaration
+          name: (identifier) @interface_decl)
+
+        ; USAGES
+        ; Method calls
+        (method_invocation
+          name: (identifier) @method_call)
+        ; Field access
+        (field_access
+          field: (identifier) @field_usage)
+        ; Variable usage
+        (identifier) @variable_usage
+        "#
+    }
+
+    fn import_queries(&self) -> &[&'static str] {
+        &[
+            r#"(import_declaration) @import"#,
+        ]
+    }
+
+    fn package_queries(&self) -> &[&'static str] {
+        &[
+            r#"(package_declaration) @package"#,
+        ]
     }
 }
 
@@ -401,6 +492,22 @@ impl LanguageSupport for GroovySupport {
         // Sequential cross-file resolution to avoid race conditions
         self.find_cross_file_sequential(source, file_uri, usage_node, dependency_cache)
             .ok_or_else(|| anyhow::anyhow!("Definition not found"))
+    }
+
+    fn extract_type_info(&self, _tree: &Tree, _source: &str, _node: &Node) -> Option<CrossLanguageTypeInfo> {
+        // TODO: Implement type info extraction for Groovy
+        None
+    }
+
+    fn find_cross_language_definition(
+        &self,
+        _symbol: &str,
+        _target_language: &str,
+        _registry: &LanguageRegistry,
+        _dependency_cache: Arc<DependencyCache>,
+    ) -> Option<Location> {
+        // TODO: Implement cross-language definition finding for Groovy
+        None
     }
 
 }
