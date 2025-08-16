@@ -2,7 +2,7 @@
 src/core/dependency_cache/symbol_index.rs:192: Implement Java symbol extraction
 src/core/dependency_cache/symbol_index.rs:196: Implement Kotlin symbol extraction
 src/languages/groovy/support.rs:55: replace this with more sophisticated handling
-src/languages/groovy/definition/local.rs:408: Could enhance with variable type lookup
+src/languages/groovy/definition/local.rs:554: Could enhance with variable type lookup
 src/languages/groovy/definition/mod.rs:7: make this private?
 src/languages/groovy/implementation.rs:46: currently only handle interfaces.
 src/languages/groovy/implementation.rs:162: currently using naive implementation

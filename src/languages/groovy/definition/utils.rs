@@ -41,13 +41,13 @@ pub fn get_declaration_query_for_symbol_type(symbol_type: &SymbolType) -> Option
         SymbolType::SuperInterface => Some(r#"(interface_declaration name: (identifier) @name)"#),
         SymbolType::MethodCall => Some(r#"(method_declaration name: (identifier) @name)"#),
         SymbolType::FieldUsage => Some(
-            r#"(field_declaration declarator: (variable_declarator name: (identifier) @name))"#,
+            r#"(field_declaration declarator: (variable_declarator (identifier) @name))"#,
         ),
         SymbolType::VariableUsage => Some(
             r#"
-            (variable_declaration declarator: (variable_declarator name: (identifier) @name))
-            (formal_parameter name: (identifier) @name)
-            (field_declaration declarator: (variable_declarator name: (identifier) @name))
+            (variable_declaration declarator: (variable_declarator (identifier) @name))
+            (formal_parameter (identifier) @name)
+            (field_declaration declarator: (variable_declarator (identifier) @name))
         "#,
         ),
         _ => None,
@@ -78,8 +78,9 @@ pub fn find_definition_candidates<'a>(
             }
         }
 
-        // Early termination for single-result queries (local scope)
-        if !candidates.is_empty() && is_local_scope_query(query_text) {
+        // Early termination for single-result queries (local scope) - but not for variable declarations
+        // since we need to find the declaration that comes before usage, not just any assignment
+        if !candidates.is_empty() && is_local_scope_query(query_text) && !query_text.contains("variable_declaration") {
             break;
         }
     }

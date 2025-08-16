@@ -6,6 +6,7 @@ use serde_json::Value;
 use std::env;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
@@ -29,6 +30,7 @@ use crate::core::utils::uri_to_path;
 use crate::core::DiagnosticManager;
 use crate::core::Document;
 use crate::core::DocumentManager;
+use crate::core::symbols::SymbolType;
 use crate::core::{
     build_tools::{detect_build_tool, BuildTool},
     utils::find_project_root,
@@ -37,6 +39,85 @@ use crate::languages::LanguageRegistry;
 use crate::lsp_error;
 use crate::lsp_warning;
 
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+struct PositionKey {
+    line: u32,
+    character: u32,
+}
+
+impl From<Position> for PositionKey {
+    fn from(pos: Position) -> Self {
+        Self {
+            line: pos.line,
+            character: pos.character,
+        }
+    }
+}
+
+impl From<PositionKey> for Position {
+    fn from(key: PositionKey) -> Self {
+        Self {
+            line: key.line,
+            character: key.character,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+struct CacheKey {
+    uri: String,
+    position: PositionKey,
+}
+
+impl CacheKey {
+    fn new(uri: String, position: Position) -> Self {
+        Self {
+            uri,
+            position: position.into(),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct CachedSymbolInfo {
+    symbol_name: String,
+    symbol_type: SymbolType,
+    timestamp: Instant,
+}
+
+impl CachedSymbolInfo {
+    fn new(symbol_name: String, symbol_type: SymbolType) -> Self {
+        Self {
+            symbol_name,
+            symbol_type,
+            timestamp: Instant::now(),
+        }
+    }
+    
+    fn is_expired(&self, ttl: Duration) -> bool {
+        self.timestamp.elapsed() > ttl
+    }
+}
+
+#[derive(Clone)]
+struct CachedDefinition {
+    location: Location,
+    timestamp: Instant,
+}
+
+impl CachedDefinition {
+    fn new(location: Location) -> Self {
+        Self {
+            location,
+            timestamp: Instant::now(),
+        }
+    }
+    
+    fn is_expired(&self, ttl: Duration) -> bool {
+        self.timestamp.elapsed() > ttl
+    }
+}
+
 pub struct LspServer {
     documents: Arc<RwLock<DocumentManager>>,
     language_registry: Arc<LanguageRegistry>,
@@ -44,6 +125,10 @@ pub struct LspServer {
     dependency_cache: Arc<DependencyCache>,
     client: tower_lsp::Client,
     workspace_root: Arc<RwLock<Option<PathBuf>>>,
+    // Cache for expensive symbol-at-position resolution
+    position_symbol_cache: Arc<DashMap<CacheKey, CachedSymbolInfo>>,
+    // Cache for complete definition lookups
+    definition_cache: Arc<DashMap<CacheKey, CachedDefinition>>,
 }
 
 #[tower_lsp::async_trait]
@@ -170,6 +255,9 @@ impl LanguageServer for LspServer {
             }
         };
 
+        // Invalidate caches when document changes
+        self.invalidate_caches_for_uri(&uri);
+
         self.diagnostics
             .entry(uri.clone())
             .or_insert_with(|| {
@@ -185,6 +273,9 @@ impl LanguageServer for LspServer {
             let mut document = self.documents.write().await;
             document.remove(&uri);
         }
+
+        // Invalidate caches when document closes
+        self.invalidate_caches_for_uri(&uri);
 
         // Clear diagnostics
         self.client
@@ -354,10 +445,27 @@ impl LspServer {
             client,
             dependency_cache: Arc::new(DependencyCache::new()),
             workspace_root: Arc::new(RwLock::new(None)),
+            position_symbol_cache: Arc::new(DashMap::new()),
+            definition_cache: Arc::new(DashMap::new()),
         }
     }
 
     async fn find_definition(&self, uri: String, position: Position) -> Result<Location> {
+        const DEFINITION_CACHE_TTL: Duration = Duration::from_secs(30);
+        const SYMBOL_CACHE_TTL: Duration = Duration::from_secs(60);
+        
+        // Check definition cache first (fastest path)
+        let cache_key = CacheKey::new(uri.clone(), position);
+        if let Some(cached_def) = self.definition_cache.get(&cache_key) {
+            if !cached_def.is_expired(DEFINITION_CACHE_TTL) {
+                debug!("Definition cache hit for {}:{:?}", uri, position);
+                return Ok(cached_def.location.clone());
+            } else {
+                // Remove expired entry
+                self.definition_cache.remove(&cache_key);
+            }
+        }
+
         let (content, tree) = self.get_content_and_tree(&uri).await?;
         let cache = self.dependency_cache.clone();
 
@@ -366,12 +474,139 @@ impl LspServer {
             .detect_language(&uri)
             .ok_or(tower_lsp::jsonrpc::Error::internal_error())?;
 
-        tokio::task::spawn_blocking(move || {
-            language_support.find_definition(&tree, &content, position, &uri, cache)
+        // Check symbol cache for expensive symbol resolution
+        let symbol_info = if let Some(cached_symbol) = self.position_symbol_cache.get(&cache_key) {
+            if !cached_symbol.is_expired(SYMBOL_CACHE_TTL) {
+                debug!("Symbol cache hit for {}:{:?}", uri, position);
+                Some((cached_symbol.symbol_name.clone(), cached_symbol.symbol_type.clone()))
+            } else {
+                self.position_symbol_cache.remove(&cache_key);
+                None
+            }
+        } else {
+            None
+        };
+
+        let location = if let Some((symbol_name, symbol_type)) = symbol_info {
+            // Use cached symbol info for faster lookup
+            self.find_definition_with_cached_symbol(&tree, &content, &uri, &symbol_name, symbol_type, cache).await?
+        } else {
+            // Extract symbol info first (before moving language_support into closure)
+            let symbol_info_for_cache = if let Ok(identifier_node) = crate::languages::groovy::utils::find_identifier_at_position(&tree, &content, position) {
+                if let Ok(symbol_name) = identifier_node.utf8_text(content.as_bytes()) {
+                    if let Ok(symbol_type) = language_support.determine_symbol_type_from_context(&tree, &identifier_node, &content) {
+                        Some((symbol_name.to_string(), symbol_type))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            // Full resolution - extract symbol and cache it
+            let location = tokio::task::spawn_blocking({
+                let tree = tree.clone();
+                let content = content.clone();
+                let uri = uri.clone();
+                let cache = cache.clone();
+                move || {
+                    language_support.find_definition(&tree, &content, position, &uri, cache)
+                }
+            })
+            .await
+            .map_err(|error| tower_lsp::jsonrpc::Error::invalid_params(format!("{error}")))?
+            .map_err(|error| tower_lsp::jsonrpc::Error::invalid_params(format!("{error}")))?;
+
+            // Cache the symbol info for future use
+            if let Some((symbol_name, symbol_type)) = symbol_info_for_cache {
+                self.position_symbol_cache.insert(
+                    cache_key.clone(),
+                    CachedSymbolInfo::new(symbol_name, symbol_type)
+                );
+            }
+
+            location
+        };
+
+        // Cache the final result
+        self.definition_cache.insert(cache_key, CachedDefinition::new(location.clone()));
+        
+        Ok(location)
+    }
+    
+    async fn find_definition_with_cached_symbol(
+        &self,
+        tree: &Tree,
+        content: &str,
+        uri: &str,
+        symbol_name: &str,
+        symbol_type: SymbolType,
+        dependency_cache: Arc<DependencyCache>,
+    ) -> Result<Location> {
+        let language_support = self
+            .language_registry
+            .detect_language(uri)
+            .ok_or(tower_lsp::jsonrpc::Error::internal_error())?;
+            
+        // Use cached symbol info to bypass expensive tree-sitter queries
+        tokio::task::spawn_blocking({
+            let tree = tree.clone();
+            let content = content.to_string();
+            let uri = uri.to_string();
+            let symbol_name = symbol_name.to_string();
+            
+            move || {
+                // Try direct dependency cache lookup first for class/interface symbols
+                if matches!(symbol_type, SymbolType::ClassDeclaration | SymbolType::InterfaceDeclaration) {
+                    if let Some(project_root) = crate::core::utils::find_project_root(
+                        &crate::core::utils::uri_to_path(&uri).unwrap_or_default()
+                    ) {
+                        let cache_key = (project_root, symbol_name.clone());
+                        if let Some(file_path) = dependency_cache.symbol_index.get(&cache_key) {
+                            if let Some(location) = crate::core::utils::node_to_lsp_location(
+                                &tree.root_node(),
+                                &crate::core::utils::path_to_file_uri(&file_path)
+                                    .unwrap_or_default()
+                            ) {
+                                return Ok(location);
+                            }
+                        }
+                    }
+                }
+                
+                // Fallback to language-specific resolution with tree traversal
+                // This is still faster than full symbol extraction since we know the symbol name
+                language_support.find_definition_chain(&tree, &content, dependency_cache, &uri, &tree.root_node())
+            }
         })
         .await
         .map_err(|error| tower_lsp::jsonrpc::Error::invalid_params(format!("{error}")))?
         .map_err(|error| tower_lsp::jsonrpc::Error::invalid_params(format!("{error}")))
+    }
+    
+    fn invalidate_caches_for_uri(&self, uri: &str) {
+        // Remove all cache entries for this URI
+        self.position_symbol_cache.retain(|cache_key, _| cache_key.uri != uri);
+        self.definition_cache.retain(|cache_key, _| cache_key.uri != uri);
+    }
+    
+    fn cleanup_expired_caches(&self) {
+        const CLEANUP_INTERVAL: Duration = Duration::from_secs(300); // 5 minutes
+        const DEFINITION_CACHE_TTL: Duration = Duration::from_secs(30);
+        const SYMBOL_CACHE_TTL: Duration = Duration::from_secs(60);
+        
+        // Clean up expired definition cache entries
+        self.definition_cache.retain(|_, cached_def| {
+            !cached_def.is_expired(DEFINITION_CACHE_TTL)
+        });
+        
+        // Clean up expired symbol cache entries
+        self.position_symbol_cache.retain(|_, cached_symbol| {
+            !cached_symbol.is_expired(SYMBOL_CACHE_TTL)
+        });
     }
 
     async fn get_content_and_tree(&self, uri: &str) -> Result<(String, Tree)> {

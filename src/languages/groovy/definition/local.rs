@@ -1,8 +1,7 @@
 use std::usize;
 
 use tower_lsp::lsp_types::Location;
-use tracing::debug;
-use tree_sitter::{Node, Query, QueryCursor, StreamingIterator, Tree};
+use tree_sitter::{Node, QueryCursor, StreamingIterator, Tree};
 
 use crate::{
     core::{symbols::SymbolType, utils::node_to_lsp_location},
@@ -50,16 +49,18 @@ pub fn search_local_definitions<'a>(
             find_best_method_match(tree, source, usage_node, symbol_name)
         }
         SymbolType::VariableUsage => {
-            // Get candidates for variable usage
-            let query_text = get_declaration_query_for_symbol_type(&symbol_type)?;
-            let candidates = find_definition_candidates(tree, source, &symbol_name, query_text)?;
+            // Search for variable declarations in accessible scopes
+            let variable_candidates = find_variable_declarations_in_scope(tree, source, usage_node, &symbol_name);
             
-            if let Some(var_result) = find_closest_declaration(usage_node, &candidates) {
-                Some(var_result)
-            } else {
-                // Not found as variable, try as field
-                find_as_field(tree, source, symbol_name)
+            if !variable_candidates.is_empty() {
+                // Find the best match using scope distance
+                if let Some(best_match) = find_closest_declaration(usage_node, &variable_candidates) {
+                    return Some(best_match);
+                }
             }
+            
+            // Not found as variable, try as field
+            find_as_field(tree, source, symbol_name)
         }
 
         SymbolType::FieldUsage => {
@@ -81,12 +82,129 @@ pub fn search_local_definitions<'a>(
     }
 }
 
+/// Find variable declarations that are accessible from the usage point
+/// This includes:
+/// 1. Variable declarations in the same block that come before usage
+/// 2. Variable declarations in parent blocks
+/// 3. Method parameters
+fn find_variable_declarations_in_scope<'a>(
+    tree: &'a Tree,
+    source: &str,
+    usage_node: &Node<'a>,
+    symbol_name: &str,
+) -> Vec<Node<'a>> {
+    let mut candidates = Vec::new();
+    
+    // 1. Check method parameters first (highest priority)
+    if let Some(method) = find_containing_method(usage_node) {
+        let param_query = r#"(formal_parameter (identifier) @name)"#;
+        let language = tree.language();
+        
+        if let Some(query) = get_or_create_query(param_query, &language) {
+            let mut cursor = tree_sitter::QueryCursor::new();
+            let mut matches = cursor.matches(&query, method, source.as_bytes());
+            
+            while let Some(query_match) = matches.next() {
+                for capture in query_match.captures {
+                    if let Ok(param_text) = capture.node.utf8_text(source.as_bytes()) {
+                        if param_text == symbol_name {
+                            candidates.push(capture.node);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // 2. Walk up from usage node to find variable declarations in accessible scopes
+    let mut current_node = Some(*usage_node);
+    
+    while let Some(node) = current_node {
+        // For each ancestor node, check its children for variable declarations
+        // that come before the usage position
+        if matches!(node.kind(), "block" | "method_declaration" | "class_declaration") {
+            // Try multiple query patterns for different declaration types
+            let queries = vec![
+                r#"(variable_declaration) @decl"#,  // Standard variable declarations with type
+                r#"(local_variable_declaration) @local_decl"#,  // Local variable declarations
+                r#"(expression_statement (identifier) @bare_id)"#,  // Bare declarations like "ApiAbundantOrder abundantOrder"
+            ];
+            
+            let language = tree.language();
+            
+            for query_text in queries {
+                if let Some(query) = get_or_create_query(query_text, &language) {
+                    let mut cursor = tree_sitter::QueryCursor::new();
+                    let mut matches = cursor.matches(&query, node, source.as_bytes());
+                    
+                    while let Some(query_match) = matches.next() {
+                        for capture in query_match.captures {
+                            let var_decl = capture.node;
+                            
+                            // Check if this declaration contains our symbol
+                            if let Ok(decl_text) = var_decl.utf8_text(source.as_bytes()) {
+                                if decl_text.contains(symbol_name) {
+                                    // Make sure declaration comes before usage (for same block)
+                                    // or is in a parent block
+                                    if var_decl.start_position() < usage_node.start_position() {
+                                        // Handle different types of declarations
+                                        if var_decl.kind() == "identifier" && decl_text == symbol_name {
+                                            // For bare identifier declarations (expression_statement containing identifier)
+                                            candidates.push(var_decl);
+                                        } else {
+                                            // Find the actual identifier node within the declaration
+                                            if let Some(identifier) = find_identifier_in_declaration(&var_decl, source, symbol_name) {
+                                                candidates.push(identifier);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        current_node = node.parent();
+    }
+    
+    candidates
+}
+
+/// Find the identifier node within a variable declaration that matches the symbol name
+fn find_identifier_in_declaration<'a>(
+    var_decl: &Node<'a>,
+    source: &str,
+    symbol_name: &str,
+) -> Option<Node<'a>> {
+    let mut cursor = var_decl.walk();
+    
+    for child in var_decl.children(&mut cursor) {
+        if child.kind() == "variable_declarator" {
+            // Look for the identifier in the variable declarator
+            let mut declarator_cursor = child.walk();
+            for declarator_child in child.children(&mut declarator_cursor) {
+                if declarator_child.kind() == "identifier" {
+                    if let Ok(id_text) = declarator_child.utf8_text(source.as_bytes()) {
+                        if id_text == symbol_name {
+                            return Some(declarator_child);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    None
+}
+
 #[tracing::instrument(skip_all)]
 fn find_closest_declaration<'a>(usage_node: &Node, candidates: &[Node<'a>]) -> Option<Node<'a>> {
     let mut best_candidate = None;
     let mut best_scope_distance = usize::MAX;
 
-    for candidate in candidates {
+    for candidate in candidates.iter() {
         if let Some(distance) = calculate_scope_distance(usage_node, candidate) {
             if distance < best_scope_distance {
                 best_scope_distance = distance;
@@ -114,19 +232,47 @@ fn calculate_scope_distance(usage_node: &Node, declaration_node: &Node) -> Optio
 }
 
 fn is_in_scope(usage_node: &Node, declaration_node: &Node) -> bool {
+    let decl_method = find_containing_method(declaration_node);
+    let usage_method = find_containing_method(usage_node);
+    let decl_block = find_containing_block(declaration_node);
+    let usage_block = find_containing_block(usage_node);
+    
     // For formal parameters, check if usage is in the same method
-    if let Some(decl_method) = find_containing_method(declaration_node) {
-        if let Some(usage_method) = find_containing_method(usage_node) {
+    if let Some(decl_method) = decl_method {
+        if let Some(usage_method) = usage_method {
             return decl_method.id() == usage_method.id();
         }
     }
 
     // For local variables, check if declaration comes before usage in same block
-    if let Some(decl_block) = find_containing_block(declaration_node) {
-        if let Some(usage_block) = find_containing_block(usage_node) {
+    if let Some(decl_block) = decl_block {
+        if let Some(usage_block) = usage_block {
             if decl_block.id() == usage_block.id() {
-                // Check if declaration comes before usage
                 return declaration_node.start_position() < usage_node.start_position();
+            }
+        }
+    }
+
+    // Handle top-level declarations: if declaration has no containing block,
+    // it's accessible from any nested scope as long as it comes before usage
+    if decl_block.is_none() {
+        // Declaration is at top level, check if it comes before usage
+        if declaration_node.start_position() < usage_node.start_position() {
+            // Additional check: make sure they're in the same top-level context
+            if let Some(usage_method) = usage_method {
+                // Usage is inside a method, declaration should be either:
+                // 1. A parameter of the same method, or
+                // 2. A top-level declaration accessible to that method
+                if let Some(decl_method) = find_containing_method(declaration_node) {
+                    // Both are in methods - must be same method for parameters
+                    return decl_method.id() == usage_method.id();
+                } else {
+                    // Declaration is at class/file level, usage is in method - accessible
+                    return true;
+                }
+            } else {
+                // Both are at the same level (class/file level)
+                return true;
             }
         }
     }
@@ -528,4 +674,175 @@ fn find_as_field<'a>(tree: &'a Tree, source: &str, symbol_name: &str) -> Option<
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::symbols::SymbolType;
+    use crate::core::utils::create_parser_for_language;
+    use crate::languages::groovy::support::GroovySupport;
+    use tower_lsp::lsp_types::Position;
+    use tree_sitter::Tree;
+
+    struct VariableDefinitionTestCase {
+        name: &'static str,
+        source_code: &'static str,
+        usage_position: Position, // Position of variable usage
+        expected_declaration_text: &'static str, // Expected text of declaration
+        should_find_definition: bool,
+    }
+
+    fn create_test_tree(source: &str) -> Tree {
+        let mut parser = create_parser_for_language("groovy").unwrap();
+        parser.parse(source, None).unwrap()
+    }
+
+    fn find_node_at_position<'a>(tree: &'a Tree, source: &str, position: Position) -> Option<tree_sitter::Node<'a>> {
+        let target_byte = position_to_byte_offset(source, position)?;
+        let mut current = tree.root_node();
+
+        loop {
+            let mut found_child = None;
+            let mut cursor = current.walk();
+
+            for child in current.children(&mut cursor) {
+                if child.start_byte() <= target_byte && target_byte <= child.end_byte() {
+                    found_child = Some(child);
+                    break;
+                }
+            }
+
+            match found_child {
+                Some(child) => current = child,
+                None => break,
+            }
+        }
+
+        Some(current)
+    }
+
+    fn position_to_byte_offset(source: &str, position: Position) -> Option<usize> {
+        let mut byte_offset = 0;
+        let mut line = 0;
+        let mut column = 0;
+
+        for ch in source.chars() {
+            if line == position.line as usize && column == position.character as usize {
+                return Some(byte_offset);
+            }
+
+            if ch == '\n' {
+                line += 1;
+                column = 0;
+            } else {
+                column += 1;
+            }
+
+            byte_offset += ch.len_utf8();
+        }
+
+        None
+    }
+
+    #[test]
+    fn test_variable_declaration_resolution() {
+        let test_cases = vec![
+            VariableDefinitionTestCase {
+                name: "simple variable declaration with custom type",
+                source_code: r#"ApiAbundantOrder abundantOrder
+if (true) {
+    abundantOrder = toAbundantOrder(order)
+}"#,
+                usage_position: Position { line: 2, character: 4 }, // abundantOrder usage
+                expected_declaration_text: "abundantOrder",
+                should_find_definition: true,
+            },
+            VariableDefinitionTestCase {
+                name: "variable declaration with assignment",
+                source_code: r#"String name = "test"
+println(name)"#,
+                usage_position: Position { line: 1, character: 9 }, // name usage in println
+                expected_declaration_text: "name",
+                should_find_definition: true,
+            },
+        ];
+
+        let language_support = GroovySupport::new();
+
+        for test_case in test_cases {
+            println!("Running test: {}", test_case.name);
+            
+            let tree = create_test_tree(test_case.source_code);
+            let usage_node = find_node_at_position(&tree, test_case.source_code, test_case.usage_position);
+            
+            assert!(usage_node.is_some(), "Test '{}': Could not find usage node at position", test_case.name);
+            let usage_node = usage_node.unwrap();
+
+            // Find the identifier node if we're not already on one
+            let identifier_node = if usage_node.kind() == "identifier" {
+                usage_node
+            } else {
+                // Look for identifier child
+                let mut found_identifier = None;
+                let mut cursor = usage_node.walk();
+                for child in usage_node.children(&mut cursor) {
+                    if child.kind() == "identifier" {
+                        found_identifier = Some(child);
+                        break;
+                    }
+                }
+                found_identifier.unwrap_or(usage_node)
+            };
+
+            let result = search_local_definitions(&tree, test_case.source_code, &identifier_node, &language_support);
+
+            if test_case.should_find_definition {
+                assert!(result.is_some(), "Test '{}': Expected to find definition", test_case.name);
+                
+                let definition_node = result.unwrap();
+                
+                // Verify the definition contains the expected variable name
+                let definition_text = definition_node.utf8_text(test_case.source_code.as_bytes())
+                    .unwrap_or("");
+                
+                assert!(
+                    definition_text.contains(test_case.expected_declaration_text),
+                    "Test '{}': Expected definition to contain '{}', got '{}'",
+                    test_case.name,
+                    test_case.expected_declaration_text,
+                    definition_text
+                );
+            } else {
+                assert!(result.is_none(), "Test '{}': Expected not to find definition", test_case.name);
+            }
+        }
+    }
+
+    #[test]
+    fn test_variable_query_pattern_matching() {
+        // Test that our updated query patterns work correctly
+        let test_source = r#"ApiAbundantOrder abundantOrder
+String name = "test""#;
+        
+        let tree = create_test_tree(test_source);
+        
+        // Test variable declaration query
+        let query_text = r#"
+            (variable_declaration declarator: (variable_declarator (identifier) @name))
+            (formal_parameter (identifier) @name)
+            (field_declaration declarator: (variable_declarator (identifier) @name))
+        "#;
+        
+        let candidates = super::super::utils::find_definition_candidates(&tree, test_source, "abundantOrder", query_text);
+        assert!(candidates.is_some(), "Should find candidates for abundantOrder");
+        
+        let candidates = candidates.unwrap();
+        assert!(!candidates.is_empty(), "Should have at least one candidate");
+        
+        // Verify the candidate is the variable_declarator node
+        let candidate = &candidates[0];
+        assert_eq!(candidate.kind(), "variable_declarator", "Candidate should be variable_declarator");
+    }
+
 }

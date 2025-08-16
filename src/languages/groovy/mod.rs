@@ -2,7 +2,7 @@ mod definition;
 mod diagnostics;
 mod hover;
 mod implementation;
-mod utils;
+pub mod utils;
 
 pub mod constants;
 pub mod support;
