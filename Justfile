@@ -21,7 +21,28 @@ note:
 cub:
     @cargo clean && cargo update && cargo build
 
+# Fast build with essential tests only
 b:
     @echo "RUSTFLAGS=-A warnings cargo build"
     @RUSTFLAGS="-A warnings" cargo build
+    @just test-quick
     @just note
+
+# Full build with all tests (slower)
+b-full:
+    @echo "RUSTFLAGS=-A warnings cargo build"
+    @RUSTFLAGS="-A warnings" cargo build
+    @just test
+    @just note
+
+# Run all tests
+test:
+    @echo "Running all tests..."
+    @cargo test
+
+# Quick test run (essential tests only) - much faster
+test-quick:
+    @echo "Running quick essential tests..."
+    @cargo test --quiet -- --test-threads=1 test_dependency_cache_creation
+    @cargo test --quiet -- --test-threads=1 test_symbol_type_is_declaration
+    @cargo test --quiet -- --test-threads=1 test_language_detection

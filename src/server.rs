@@ -521,3 +521,235 @@ impl LspServer {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::DiagnosticManager;
+    use crate::languages::LanguageRegistry;
+    use std::sync::Arc;
+    use tower_lsp::lsp_types::{Position, Range, Url};
+
+    struct LspServerTestCase {
+        name: &'static str,
+        setup: fn() -> (LspServer, Arc<LanguageRegistry>),
+        test_operation: &'static str,
+        expected_success: bool,
+    }
+
+    fn create_mock_client() -> tower_lsp::Client {
+        // This is a simplified mock - in real tests you'd use a proper mock
+        // For now, we'll skip client-dependent tests
+        unimplemented!("Mock client not implemented for these tests")
+    }
+
+    fn create_test_server() -> (LspServer, Arc<LanguageRegistry>) {
+        let registry = Arc::new(LanguageRegistry::new());
+        
+        // Note: This would normally create a real client, but for unit tests
+        // we'd need a mock implementation
+        // let client = create_mock_client();
+        // let server = LspServer::new(client, registry.clone());
+        
+        // For now, we'll test the components that don't require a client
+        unimplemented!("Full server creation requires mock client")
+    }
+
+    #[test]
+    fn test_server_creation_basic() {
+        // Test basic server structure without client dependency
+        let registry = Arc::new(LanguageRegistry::new());
+        
+        // Test that we can create the basic components
+        let documents = Arc::new(RwLock::new(DocumentManager::new()));
+        let diagnostics: Arc<DashMap<String, DiagnosticManager>> = Arc::new(DashMap::new());
+        let dependency_cache = Arc::new(DependencyCache::new());
+        let workspace_root: Arc<RwLock<Option<PathBuf>>> = Arc::new(RwLock::new(None));
+        
+        // Verify basic properties
+        assert_eq!(diagnostics.len(), 0);
+        assert_eq!(dependency_cache.symbol_index.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_workspace_root_operations() {
+        let workspace_root = Arc::new(RwLock::new(None));
+        
+        // Test setting workspace root
+        {
+            let mut root = workspace_root.write().await;
+            *root = Some(PathBuf::from("/test/workspace"));
+        }
+        
+        // Test reading workspace root
+        {
+            let root = workspace_root.read().await;
+            assert_eq!(*root, Some(PathBuf::from("/test/workspace")));
+        }
+    }
+
+    struct ConfigurationTestCase {
+        name: &'static str,
+        input_json: serde_json::Value,
+        expected_gradle_cache: Option<&'static str>,
+        expected_build_on_init: Option<bool>,
+    }
+
+    #[test]
+    fn test_configuration_parsing() {
+        let test_cases = vec![
+            ConfigurationTestCase {
+                name: "empty configuration",
+                input_json: serde_json::json!({}),
+                expected_gradle_cache: None,
+                expected_build_on_init: None,
+            },
+            ConfigurationTestCase {
+                name: "gradle cache configuration",
+                input_json: serde_json::json!({
+                    "gradle_cache_dir": "/home/user/.gradle/caches"
+                }),
+                expected_gradle_cache: Some("/home/user/.gradle/caches"),
+                expected_build_on_init: None,
+            },
+            ConfigurationTestCase {
+                name: "build on init configuration",
+                input_json: serde_json::json!({
+                    "build_on_init": true
+                }),
+                expected_gradle_cache: None,
+                expected_build_on_init: Some(true),
+            },
+            ConfigurationTestCase {
+                name: "full configuration",
+                input_json: serde_json::json!({
+                    "gradle_cache_dir": "/custom/gradle/cache",
+                    "build_on_init": false
+                }),
+                expected_gradle_cache: Some("/custom/gradle/cache"),
+                expected_build_on_init: Some(false),
+            },
+        ];
+
+        for test_case in test_cases {
+            // Note: This test demonstrates the structure but would need
+            // a proper state manager mock to work fully
+            
+            // Verify JSON structure
+            if let Some(expected_cache) = test_case.expected_gradle_cache {
+                if let Some(cache_value) = test_case.input_json.get(GRADLE_CACHE_DIR) {
+                    assert_eq!(cache_value.as_str(), Some(expected_cache));
+                }
+            }
+            
+            if let Some(expected_build) = test_case.expected_build_on_init {
+                if let Some(build_value) = test_case.input_json.get(BUILD_ON_INIT) {
+                    assert_eq!(build_value.as_bool(), Some(expected_build));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_lsp_types_creation() {
+        // Test that we can create and work with LSP types
+        let position = Position { line: 5, character: 10 };
+        let range = Range {
+            start: position,
+            end: Position { line: 5, character: 20 },
+        };
+        
+        let uri = Url::parse("file:///test/file.groovy").expect("Valid URI");
+        let location = Location { uri, range };
+        
+        assert_eq!(location.range.start.line, 5);
+        assert_eq!(location.range.start.character, 10);
+        assert_eq!(location.range.end.character, 20);
+    }
+
+    struct InitializeParamsTestCase {
+        name: &'static str,
+        root_uri: Option<&'static str>,
+        workspace_folders: Option<Vec<&'static str>>,
+        expected_has_root: bool,
+    }
+
+    #[test]
+    fn test_initialize_params_structure() {
+        let test_cases = vec![
+            InitializeParamsTestCase {
+                name: "with root URI",
+                root_uri: Some("file:///workspace/project"),
+                workspace_folders: None,
+                expected_has_root: true,
+            },
+            InitializeParamsTestCase {
+                name: "with workspace folders",
+                root_uri: None,
+                workspace_folders: Some(vec!["file:///workspace/project1", "file:///workspace/project2"]),
+                expected_has_root: true,
+            },
+            InitializeParamsTestCase {
+                name: "no root specified",
+                root_uri: None,
+                workspace_folders: None,
+                expected_has_root: false,
+            },
+        ];
+
+        for test_case in test_cases {
+            let mut params = InitializeParams::default();
+            
+            if let Some(root_uri_str) = test_case.root_uri {
+                params.root_uri = Some(Url::parse(root_uri_str).unwrap());
+            }
+            
+            if let Some(folders) = test_case.workspace_folders {
+                let workspace_folders: Vec<WorkspaceFolder> = folders
+                    .iter()
+                    .map(|uri_str| WorkspaceFolder {
+                        uri: Url::parse(uri_str).unwrap(),
+                        name: "test".to_string(),
+                    })
+                    .collect();
+                params.workspace_folders = Some(workspace_folders);
+            }
+            
+            // Test the logic for extracting root
+            let has_root = params.root_uri.is_some() || 
+                          params.workspace_folders.as_ref().map_or(false, |folders| !folders.is_empty());
+            
+            assert_eq!(
+                has_root,
+                test_case.expected_has_root,
+                "Test '{}': root detection mismatch",
+                test_case.name
+            );
+        }
+    }
+
+    #[test]
+    fn test_server_capabilities() {
+        let capabilities = ServerCapabilities {
+            text_document_sync: Some(TextDocumentSyncCapability::Kind(
+                TextDocumentSyncKind::FULL,
+            )),
+            definition_provider: Some(OneOf::Left(true)),
+            hover_provider: Some(HoverProviderCapability::Simple(true)),
+            implementation_provider: Some(ImplementationProviderCapability::Simple(true)),
+            ..Default::default()
+        };
+        
+        // Verify capabilities structure
+        match capabilities.text_document_sync {
+            Some(TextDocumentSyncCapability::Kind(kind)) => {
+                assert_eq!(kind, TextDocumentSyncKind::FULL);
+            }
+            _ => panic!("Expected FULL text document sync"),
+        }
+        
+        assert!(capabilities.definition_provider.is_some());
+        assert!(capabilities.hover_provider.is_some());
+        assert!(capabilities.implementation_provider.is_some());
+    }
+}

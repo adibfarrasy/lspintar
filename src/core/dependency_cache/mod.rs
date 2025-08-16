@@ -364,3 +364,244 @@ impl DependencyCache {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::symbols::SymbolType;
+    use std::path::PathBuf;
+
+    struct DependencyCacheTestCase {
+        name: &'static str,
+        setup: fn() -> DependencyCache,
+        input: DependencyCacheTestInput,
+        expected: DependencyCacheTestExpected,
+    }
+
+    struct DependencyCacheTestInput {
+        project_root: PathBuf,
+        class_name: String,
+        fqn: String,
+        file_path: PathBuf,
+    }
+
+    struct DependencyCacheTestExpected {
+        should_find_symbol: bool,
+        should_find_class_name: bool,
+        class_name_count: usize,
+    }
+
+    #[tokio::test]
+    async fn test_dependency_cache_operations() {
+        let test_cases = vec![
+            DependencyCacheTestCase {
+                name: "empty cache returns no symbols",
+                setup: || DependencyCache::new(),
+                input: DependencyCacheTestInput {
+                    project_root: PathBuf::from("/test/project"),
+                    class_name: "TestClass".to_string(),
+                    fqn: "com.example.TestClass".to_string(),
+                    file_path: PathBuf::from("/test/project/TestClass.groovy"),
+                },
+                expected: DependencyCacheTestExpected {
+                    should_find_symbol: false,
+                    should_find_class_name: false,
+                    class_name_count: 0,
+                },
+            },
+            DependencyCacheTestCase {
+                name: "finds symbol after insertion",
+                setup: || {
+                    let cache = DependencyCache::new();
+                    let project_root = PathBuf::from("/test/project");
+                    let fqn = "com.example.TestClass".to_string();
+                    let file_path = PathBuf::from("/test/project/TestClass.groovy");
+                    
+                    cache.symbol_index.insert((project_root.clone(), fqn.clone()), file_path);
+                    cache.class_name_index.entry((project_root, "TestClass".to_string()))
+                        .or_insert_with(Vec::new)
+                        .push(fqn);
+                    cache
+                },
+                input: DependencyCacheTestInput {
+                    project_root: PathBuf::from("/test/project"),
+                    class_name: "TestClass".to_string(),
+                    fqn: "com.example.TestClass".to_string(),
+                    file_path: PathBuf::from("/test/project/TestClass.groovy"),
+                },
+                expected: DependencyCacheTestExpected {
+                    should_find_symbol: true,
+                    should_find_class_name: true,
+                    class_name_count: 1,
+                },
+            },
+            DependencyCacheTestCase {
+                name: "handles multiple classes with same name",
+                setup: || {
+                    let cache = DependencyCache::new();
+                    let project_root = PathBuf::from("/test/project");
+                    
+                    // Insert two classes with same simple name but different packages
+                    let fqn1 = "com.example.util.Helper".to_string();
+                    let fqn2 = "com.other.Helper".to_string();
+                    let file1 = PathBuf::from("/test/project/util/Helper.groovy");
+                    let file2 = PathBuf::from("/test/project/other/Helper.groovy");
+                    
+                    cache.symbol_index.insert((project_root.clone(), fqn1.clone()), file1);
+                    cache.symbol_index.insert((project_root.clone(), fqn2.clone()), file2);
+                    
+                    let mut helpers = vec![fqn1, fqn2];
+                    cache.class_name_index.insert((project_root, "Helper".to_string()), helpers);
+                    cache
+                },
+                input: DependencyCacheTestInput {
+                    project_root: PathBuf::from("/test/project"),
+                    class_name: "Helper".to_string(),
+                    fqn: "com.example.util.Helper".to_string(),
+                    file_path: PathBuf::from("/test/project/util/Helper.groovy"),
+                },
+                expected: DependencyCacheTestExpected {
+                    should_find_symbol: true,
+                    should_find_class_name: true,
+                    class_name_count: 2,
+                },
+            },
+        ];
+
+        for test_case in test_cases {
+            println!("Running test: {}", test_case.name);
+            
+            let cache = (test_case.setup)();
+            let input = &test_case.input;
+            let expected = &test_case.expected;
+
+            // Test symbol lookup
+            let symbol_key = (input.project_root.clone(), input.fqn.clone());
+            let found_symbol = cache.symbol_index.get(&symbol_key).is_some();
+            assert_eq!(
+                found_symbol, 
+                expected.should_find_symbol,
+                "Test '{}': symbol lookup failed", 
+                test_case.name
+            );
+
+            // Test class name lookup
+            let class_names = cache.find_symbols_by_class_name(&input.project_root, &input.class_name);
+            let found_class_name = !class_names.is_empty();
+            assert_eq!(
+                found_class_name, 
+                expected.should_find_class_name,
+                "Test '{}': class name lookup failed", 
+                test_case.name
+            );
+            assert_eq!(
+                class_names.len(), 
+                expected.class_name_count,
+                "Test '{}': class name count mismatch", 
+                test_case.name
+            );
+        }
+    }
+
+    #[test]
+    fn test_dependency_cache_creation() {
+        let cache = DependencyCache::new();
+        
+        assert_eq!(cache.symbol_index.len(), 0);
+        assert_eq!(cache.class_name_index.len(), 0);
+        assert_eq!(cache.builtin_infos.len(), 0);
+        assert_eq!(cache.inheritance_index.len(), 0);
+        assert_eq!(cache.project_external_infos.len(), 0);
+        assert_eq!(cache.project_metadata.len(), 0);
+    }
+
+    struct InheritanceTestCase {
+        name: &'static str,
+        symbol: SymbolDefinition,
+        expected_inheritance_entries: usize,
+    }
+
+    #[test]
+    fn test_inheritance_indexing() {
+        let test_cases = vec![
+            InheritanceTestCase {
+                name: "class with no inheritance",
+                symbol: SymbolDefinition {
+                    name: "SimpleClass".to_string(),
+                    fully_qualified_name: "com.example.SimpleClass".to_string(),
+                    symbol_type: SymbolType::ClassDeclaration,
+                    source_file: PathBuf::from("/test/SimpleClass.groovy"),
+                    line: 1,
+                    column: 0,
+                    extends: None,
+                    implements: vec![],
+                },
+                expected_inheritance_entries: 0,
+            },
+            InheritanceTestCase {
+                name: "class with superclass only",
+                symbol: SymbolDefinition {
+                    name: "ChildClass".to_string(),
+                    fully_qualified_name: "com.example.ChildClass".to_string(),
+                    symbol_type: SymbolType::ClassDeclaration,
+                    source_file: PathBuf::from("/test/ChildClass.groovy"),
+                    line: 1,
+                    column: 0,
+                    extends: Some("com.example.BaseClass".to_string()),
+                    implements: vec![],
+                },
+                expected_inheritance_entries: 1,
+            },
+            InheritanceTestCase {
+                name: "class with interfaces only",
+                symbol: SymbolDefinition {
+                    name: "ImplClass".to_string(),
+                    fully_qualified_name: "com.example.ImplClass".to_string(),
+                    symbol_type: SymbolType::ClassDeclaration,
+                    source_file: PathBuf::from("/test/ImplClass.groovy"),
+                    line: 1,
+                    column: 0,
+                    extends: None,
+                    implements: vec![
+                        "com.example.Interface1".to_string(),
+                        "com.example.Interface2".to_string(),
+                    ],
+                },
+                expected_inheritance_entries: 2,
+            },
+            InheritanceTestCase {
+                name: "class with both superclass and interfaces",
+                symbol: SymbolDefinition {
+                    name: "ComplexClass".to_string(),
+                    fully_qualified_name: "com.example.ComplexClass".to_string(),
+                    symbol_type: SymbolType::ClassDeclaration,
+                    source_file: PathBuf::from("/test/ComplexClass.groovy"),
+                    line: 1,
+                    column: 0,
+                    extends: Some("com.example.BaseClass".to_string()),
+                    implements: vec![
+                        "com.example.Interface1".to_string(),
+                        "com.example.Interface2".to_string(),
+                    ],
+                },
+                expected_inheritance_entries: 3,
+            },
+        ];
+
+        for test_case in test_cases {
+            println!("Running inheritance test: {}", test_case.name);
+            
+            let cache = DependencyCache::new();
+            let project_root = PathBuf::from("/test/project");
+            
+            cache.index_inheritance(&project_root, &test_case.symbol);
+            
+            assert_eq!(
+                cache.inheritance_index.len(),
+                test_case.expected_inheritance_entries,
+                "Test '{}': inheritance entry count mismatch",
+                test_case.name
+            );
+        }
+    }
+}

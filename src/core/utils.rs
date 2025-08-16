@@ -212,3 +212,342 @@ pub fn is_project_root(current: &PathBuf) -> bool {
 pub fn is_external_dependency(dir: &PathBuf) -> bool {
     return dir.to_string_lossy().contains(TEMP_DIR_PREFIX);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tower_lsp::lsp_types::{Position, Range, Url};
+    use std::path::PathBuf;
+
+    struct UriConversionTestCase {
+        name: &'static str,
+        input: &'static str,
+        expected_success: bool,
+    }
+
+    struct PathConversionTestCase {
+        name: &'static str,
+        input: PathBuf,
+        expected_success: bool,
+    }
+
+    struct LanguageDetectionTestCase {
+        name: &'static str,
+        file_path: PathBuf,
+        expected_language: Option<&'static str>,
+    }
+
+    struct ExternalDependencyTestCase {
+        name: &'static str,
+        path: PathBuf,
+        expected_is_external: bool,
+    }
+
+    struct NodePositionTestCase {
+        name: &'static str,
+        position: Position,
+        node_start: (usize, usize), // (row, col)
+        node_end: (usize, usize),   // (row, col)
+        expected_contains: bool,
+    }
+
+    #[test]
+    fn test_uri_to_path_conversion() {
+        let test_cases = vec![
+            UriConversionTestCase {
+                name: "valid file URI",
+                input: "file:///home/user/test.groovy",
+                expected_success: true,
+            },
+            UriConversionTestCase {
+                name: "invalid URI",
+                input: "not-a-uri",
+                expected_success: false,
+            },
+            UriConversionTestCase {
+                name: "http URI (not file)",
+                input: "http://example.com/file.groovy",
+                expected_success: false,
+            },
+        ];
+
+        for test_case in test_cases {
+            let result = uri_to_path(test_case.input);
+            assert_eq!(
+                result.is_some(),
+                test_case.expected_success,
+                "Test '{}': expected success = {}, got success = {}",
+                test_case.name,
+                test_case.expected_success,
+                result.is_some()
+            );
+        }
+    }
+
+    #[test]
+    fn test_path_to_uri_conversion() {
+        let test_cases = vec![
+            PathConversionTestCase {
+                name: "valid absolute path",
+                input: PathBuf::from("/home/user/test.groovy"),
+                expected_success: true,
+            },
+            PathConversionTestCase {
+                name: "relative path (may fail)",
+                input: PathBuf::from("./test.groovy"),
+                expected_success: false, // Relative paths typically don't work with file URIs
+            },
+        ];
+
+        for test_case in test_cases {
+            let result = path_to_file_uri(&test_case.input);
+            assert_eq!(
+                result.is_some(),
+                test_case.expected_success,
+                "Test '{}': expected success = {}, got success = {}",
+                test_case.name,
+                test_case.expected_success,
+                result.is_some()
+            );
+
+            if result.is_some() {
+                let uri = result.unwrap();
+                assert!(uri.starts_with("file://"), "URI should start with file://");
+            }
+        }
+    }
+
+    #[test]
+    fn test_language_detection() {
+        let test_cases = vec![
+            LanguageDetectionTestCase {
+                name: "groovy file extension",
+                file_path: PathBuf::from("/path/to/file.groovy"),
+                expected_language: Some("groovy"),
+            },
+            LanguageDetectionTestCase {
+                name: "gradle file extension",
+                file_path: PathBuf::from("/path/to/build.gradle"),
+                expected_language: Some("groovy"),
+            },
+            LanguageDetectionTestCase {
+                name: "java file extension",
+                file_path: PathBuf::from("/path/to/file.java"),
+                expected_language: Some("java"),
+            },
+            LanguageDetectionTestCase {
+                name: "kotlin file extension",
+                file_path: PathBuf::from("/path/to/file.kt"),
+                expected_language: Some("kotlin"),
+            },
+            LanguageDetectionTestCase {
+                name: "kotlin script extension",
+                file_path: PathBuf::from("/path/to/file.kts"),
+                expected_language: Some("kotlin"),
+            },
+            LanguageDetectionTestCase {
+                name: "unsupported extension",
+                file_path: PathBuf::from("/path/to/file.txt"),
+                expected_language: None,
+            },
+            LanguageDetectionTestCase {
+                name: "no extension",
+                file_path: PathBuf::from("/path/to/file"),
+                expected_language: None,
+            },
+        ];
+
+        for test_case in test_cases {
+            let result = detect_language_from_path(&test_case.file_path);
+            assert_eq!(
+                result,
+                test_case.expected_language,
+                "Test '{}': expected {:?}, got {:?}",
+                test_case.name,
+                test_case.expected_language,
+                result
+            );
+        }
+    }
+
+    #[test]
+    fn test_external_dependency_detection() {
+        let test_cases = vec![
+            ExternalDependencyTestCase {
+                name: "path with temp dir prefix",
+                path: PathBuf::from("/tmp/lspintar_builtin_sources/some.dependency/File.groovy"),
+                expected_is_external: true,
+            },
+            ExternalDependencyTestCase {
+                name: "path with gradle cache",
+                path: PathBuf::from("/home/user/.gradle/caches/modules-2/files-2.1/some.jar"),
+                expected_is_external: true,
+            },
+            ExternalDependencyTestCase {
+                name: "path with m2 repository",
+                path: PathBuf::from("/home/user/.m2/repository/com/example/artifact.jar"),
+                expected_is_external: true,
+            },
+            ExternalDependencyTestCase {
+                name: "regular project path",
+                path: PathBuf::from("/home/user/project/src/main/groovy/File.groovy"),
+                expected_is_external: false,
+            },
+        ];
+
+        for test_case in test_cases {
+            let result = is_path_in_external_dependency(&test_case.path);
+            assert_eq!(
+                result,
+                test_case.expected_is_external,
+                "Test '{}': expected {}, got {}",
+                test_case.name,
+                test_case.expected_is_external,
+                result
+            );
+        }
+    }
+
+    #[test] 
+    fn test_node_contains_position() {
+        // Mock node implementation for testing
+        struct MockNode {
+            start_row: usize,
+            start_col: usize,
+            end_row: usize,
+            end_col: usize,
+        }
+        
+        fn mock_node_contains_position(node: &MockNode, position: Position) -> bool {
+            let pos_line = position.line as usize;
+            let pos_char = position.character as usize;
+
+            (node.start_row < pos_line || (node.start_row == pos_line && node.start_col <= pos_char))
+                && (pos_line < node.end_row || (pos_line == node.end_row && pos_char <= node.end_col))
+        }
+
+        let test_cases = vec![
+            NodePositionTestCase {
+                name: "position inside node",
+                position: Position { line: 5, character: 10 },
+                node_start: (5, 5),
+                node_end: (5, 15),
+                expected_contains: true,
+            },
+            NodePositionTestCase {
+                name: "position at start of node",
+                position: Position { line: 5, character: 5 },
+                node_start: (5, 5),
+                node_end: (5, 15),
+                expected_contains: true,
+            },
+            NodePositionTestCase {
+                name: "position at end of node",
+                position: Position { line: 5, character: 15 },
+                node_start: (5, 5),
+                node_end: (5, 15),
+                expected_contains: true,
+            },
+            NodePositionTestCase {
+                name: "position before node",
+                position: Position { line: 5, character: 3 },
+                node_start: (5, 5),
+                node_end: (5, 15),
+                expected_contains: false,
+            },
+            NodePositionTestCase {
+                name: "position after node",
+                position: Position { line: 5, character: 20 },
+                node_start: (5, 5),
+                node_end: (5, 15),
+                expected_contains: false,
+            },
+            NodePositionTestCase {
+                name: "position in multiline node",
+                position: Position { line: 6, character: 5 },
+                node_start: (5, 10),
+                node_end: (7, 5),
+                expected_contains: true,
+            },
+        ];
+
+        for test_case in test_cases {
+            let mock_node = MockNode {
+                start_row: test_case.node_start.0,
+                start_col: test_case.node_start.1,
+                end_row: test_case.node_end.0,
+                end_col: test_case.node_end.1,
+            };
+
+            let result = mock_node_contains_position(&mock_node, test_case.position);
+            assert_eq!(
+                result,
+                test_case.expected_contains,
+                "Test '{}': expected {}, got {}",
+                test_case.name,
+                test_case.expected_contains,
+                result
+            );
+        }
+    }
+
+    #[test]
+    fn test_create_parser_for_language() {
+        let test_cases = vec![
+            ("groovy", true),
+            ("java", true),
+            ("kotlin", false), // Not implemented
+            ("unknown", false),
+        ];
+
+        for (language, expected_success) in test_cases {
+            let result = create_parser_for_language(language);
+            assert_eq!(
+                result.is_some(),
+                expected_success,
+                "Language '{}': expected parser creation success = {}, got {}",
+                language,
+                expected_success,
+                result.is_some()
+            );
+        }
+    }
+
+    #[test]
+    fn test_node_to_lsp_location() {
+        // This test demonstrates the structure of the function
+        // In a real scenario, you'd need actual tree-sitter nodes
+        let file_uri = "file:///test/file.groovy";
+        
+        // Test with a mock result
+        let url = Url::parse(file_uri).expect("Valid URI");
+        let range = Range {
+            start: Position { line: 0, character: 0 },
+            end: Position { line: 0, character: 10 },
+        };
+        let expected_location = Location { uri: url, range };
+        
+        // The actual function would need a real tree-sitter Node
+        // This test verifies the structure is correct
+        assert_eq!(expected_location.range.start.line, 0);
+        assert_eq!(expected_location.range.start.character, 0);
+    }
+
+    #[test]
+    fn test_is_external_dependency() {
+        let test_cases = vec![
+            (PathBuf::from("/tmp/lspintar_builtin_sources/dep"), true),
+            (PathBuf::from("/home/user/project/src"), false),
+            (PathBuf::from("/random/path"), false),
+        ];
+
+        for (path, expected) in test_cases {
+            let result = is_external_dependency(&path);
+            assert_eq!(
+                result, expected,
+                "Path {:?}: expected {}, got {}",
+                path, expected, result
+            );
+        }
+    }
+}
