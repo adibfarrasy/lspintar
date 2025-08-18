@@ -117,6 +117,87 @@ pub fn detect_language_from_path(file_path: &PathBuf) -> Option<&'static str> {
     }
 }
 
+/// Get the appropriate language support for a given file path
+pub fn get_language_support_for_file(file_path: &PathBuf) -> Option<Box<dyn crate::languages::LanguageSupport>> {
+    match detect_language_from_path(file_path)? {
+        "java" => Some(Box::new(crate::languages::java::JavaSupport::new())),
+        "groovy" => Some(Box::new(crate::languages::groovy::GroovySupport::new())),
+        "kotlin" => Some(Box::new(crate::languages::kotlin::KotlinSupport::new())),
+        _ => None,
+    }
+}
+
+/// Centralized cross-language search_definition_in_project dispatcher
+/// Automatically detects the target file's language and calls the appropriate language's search function
+pub fn search_definition_in_project_cross_language(
+    current_file_uri: &str,
+    current_source: &str,
+    usage_node: &tree_sitter::Node,
+    target_file_uri: &str,
+    fallback_language_support: &dyn crate::languages::LanguageSupport,
+) -> Option<tower_lsp::lsp_types::Location> {
+    use tracing::debug;
+    
+    // Detect target file language
+    let target_file_path = uri_to_path(target_file_uri)?;
+    let target_language = detect_language_from_path(&target_file_path).unwrap_or("java");
+    
+    debug!("Core: Cross-language search dispatching to {} for target file: {}", target_language, target_file_uri);
+    
+    // Get the appropriate language support for the target file
+    let target_language_support = get_language_support_for_file(&target_file_path)?;
+    
+    // Dispatch to the appropriate language's search function
+    match target_language {
+        "groovy" => {
+            debug!("Core: Calling Groovy search_definition_in_project");
+            crate::languages::groovy::definition::utils::search_definition_in_project(
+                current_file_uri,
+                current_source,
+                usage_node,
+                target_file_uri,
+                target_language_support.as_ref(),
+            )
+        }
+        "java" => {
+            debug!("Core: Calling Java search_definition_in_project");
+            crate::languages::java::definition::utils::search_definition_in_project(
+                current_file_uri,
+                current_source,
+                usage_node,
+                target_file_uri,
+                target_language_support.as_ref(),
+            )
+        }
+        "kotlin" => {
+            debug!("Core: Kotlin search_definition_in_project not implemented, using fallback");
+            // TODO: Implement Kotlin search_definition_in_project
+            None
+        }
+        _ => {
+            debug!("Core: Unknown language {}, using fallback language support", target_language);
+            // Fallback to the provided language support (usually the current file's language)
+            match fallback_language_support.language_id() {
+                "java" => crate::languages::java::definition::utils::search_definition_in_project(
+                    current_file_uri,
+                    current_source,
+                    usage_node,
+                    target_file_uri,
+                    fallback_language_support,
+                ),
+                "groovy" => crate::languages::groovy::definition::utils::search_definition_in_project(
+                    current_file_uri,
+                    current_source,
+                    usage_node,
+                    target_file_uri,
+                    fallback_language_support,
+                ),
+                _ => None,
+            }
+        }
+    }
+}
+
 #[tracing::instrument(skip_all)]
 pub fn uri_to_tree(uri: &str) -> Option<Tree> {
     let file_path = uri_to_path(uri)?;
@@ -211,6 +292,53 @@ pub fn is_project_root(current: &PathBuf) -> bool {
 
 pub fn is_external_dependency(dir: &PathBuf) -> bool {
     return dir.to_string_lossy().contains(TEMP_DIR_PREFIX);
+}
+
+/// Sets the correct start position for a definition by searching for the symbol in the target file
+/// This function works for any language by accepting a language parameter
+#[tracing::instrument(skip_all)]
+pub fn set_start_position_for_language(
+    source: &str, 
+    usage_node: &Node, 
+    file_uri: &str, 
+    language: &str
+) -> Option<Location> {
+    use tree_sitter::{QueryCursor, Parser, StreamingIterator};
+    
+    let symbol_name = usage_node.utf8_text(source.as_bytes()).ok()?;
+
+    let other_source = read_to_string(uri_to_path(file_uri)?).ok()?;
+
+    let query_text = r#"(identifier) @name"#;
+
+    // Create parser for the specified language
+    let mut parser = create_parser_for_language(language)?;
+    let tree = parser.parse(&other_source, None)?;
+    
+    // Get the query for the language - we need to get the language object
+    let language_obj = match language {
+        "groovy" => tree_sitter_groovy::language(),
+        "java" => tree_sitter_java::LANGUAGE.into(),
+        _ => return None,
+    };
+    
+    let query = tree_sitter::Query::new(&language_obj, query_text).ok()?;
+
+    let mut cursor = QueryCursor::new();
+
+    // Search for the symbol in the target file
+    let mut matches = cursor.matches(&query, tree.root_node(), other_source.as_bytes());
+    while let Some(query_match) = matches.next() {
+        for capture in query_match.captures {
+            if let Ok(name) = capture.node.utf8_text(other_source.as_bytes()) {
+                if name == symbol_name {
+                    return node_to_lsp_location(&capture.node, file_uri);
+                }
+            }
+        }
+    }
+
+    None
 }
 
 #[cfg(test)]

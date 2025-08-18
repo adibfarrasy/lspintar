@@ -48,6 +48,7 @@ impl ProjectMapper {
         project_root: PathBuf,
         cache: Arc<DependencyCache>,
     ) -> Result<()> {
+        debug!("ProjectMapper: index_project_dependencies called for: {:?} with build tool: {:?}", project_root, self.build_tool);
         cache.project_metadata.insert(
             project_root.clone(),
             ProjectMetadata {
@@ -59,6 +60,7 @@ impl ProjectMapper {
 
         let result = match self.build_tool {
             BuildTool::Gradle => {
+                debug!("ProjectMapper: Calling index_project_dependencies_gradle");
                 self.index_project_dependencies_gradle(project_root.clone(), cache.clone())
                     .await
             }
@@ -80,10 +82,14 @@ impl ProjectMapper {
         project_root: PathBuf,
         cache: Arc<DependencyCache>,
     ) -> Result<()> {
+        debug!("ProjectMapper: index_project_dependencies_gradle starting for: {:?}", project_root);
         let project_map = parse_settings_gradle(&project_root).await?;
+        debug!("ProjectMapper: Parsed settings.gradle, found {} projects", project_map.len());
 
-        // Optimized parallel dependency resolution
-        let all_gradle_results = self.execute_gradle_dependencies_optimized(&project_root, &project_map).await?;
+        // Synchronous dependency resolution
+        debug!("ProjectMapper: Executing gradle dependencies for all projects synchronously");
+        let all_gradle_results = self.execute_gradle_dependencies_synchronous(&project_root, &project_map).await?;
+        debug!("ProjectMapper: Got gradle results for {} projects", all_gradle_results.len());
 
         let mut all_parsed_deps = HashMap::new();
         for (project_name, gradle_result) in &all_gradle_results {
@@ -193,6 +199,59 @@ impl ProjectMapper {
         Ok(all_class_names)
     }
 
+    /// Synchronous Gradle dependency resolution - more reliable than parallel
+    #[tracing::instrument(skip_all)]
+    async fn execute_gradle_dependencies_synchronous(
+        &self,
+        project_root: &PathBuf,
+        project_map: &HashMap<String, PathBuf>,
+    ) -> Result<HashMap<String, GradleDependenciesResult>> {
+        let mut all_gradle_results = HashMap::new();
+        
+        // Process root project first
+        debug!("ProjectMapper: Processing root project");
+        match execute_gradle_dependencies(project_root).await {
+            Ok(gradle_result) => {
+                if !gradle_result.is_empty() {
+                    debug!("ProjectMapper: Root project succeeded with {} configurations", gradle_result.configurations.len());
+                    all_gradle_results.insert("".to_string(), gradle_result);
+                } else {
+                    debug!("ProjectMapper: Root project had empty result");
+                }
+            }
+            Err(e) => {
+                debug!("ProjectMapper: Root project failed with error: {}", e);
+                debug!("ProjectMapper: This may indicate a Gradle configuration issue in the root project");
+            }
+        }
+        
+        // Process each subproject sequentially
+        for (project_name, project_path) in project_map {
+            debug!("ProjectMapper: Processing project '{}' at {:?}", project_name, project_path);
+            match execute_gradle_dependencies(project_path).await {
+                Ok(gradle_result) => {
+                    if !gradle_result.is_empty() {
+                        debug!("ProjectMapper: Project '{}' succeeded with {} configurations", project_name, gradle_result.configurations.len());
+                        all_gradle_results.insert(project_name.clone(), gradle_result);
+                    } else {
+                        debug!("ProjectMapper: Project '{}' had empty result", project_name);
+                    }
+                }
+                Err(e) => {
+                    debug!("ProjectMapper: Project '{}' at {:?} failed with error: {}", project_name, project_path, e);
+                    debug!("ProjectMapper: This may indicate a Gradle configuration issue in project '{}'", project_name);
+                }
+            }
+        }
+        
+        if all_gradle_results.is_empty() {
+            return Err(anyhow!("Failed to resolve dependencies for any project"));
+        }
+        
+        debug!("ProjectMapper: Synchronous execution completed with {} successful projects", all_gradle_results.len());
+        Ok(all_gradle_results)
+    }
+
     /// Optimized parallel Gradle dependency resolution with batching and resource management
     #[tracing::instrument(skip_all)]
     async fn execute_gradle_dependencies_optimized(
@@ -204,9 +263,11 @@ impl ProjectMapper {
         use std::sync::Arc;
 
         // Strategy 1: Try single multi-project command first (fastest if it works)
-        if let Ok(result) = self.try_single_gradle_command(project_root).await {
-            return Ok(result);
-        }
+        // TEMPORARILY DISABLED FOR DEBUGGING - the single command doesn't parse multi-project output correctly
+        debug!("ProjectMapper: Skipping single command approach to use parallel debugging");
+        // if let Ok(result) = self.try_single_gradle_command(project_root).await {
+        //     return Ok(result);
+        // }
 
         // Strategy 2: Controlled parallel execution with resource limits
         let max_concurrent = std::cmp::min(3, std::cmp::max(1, num_cpus::get() / 2)); // Conservative limit
@@ -218,6 +279,11 @@ impl ProjectMapper {
         // Add all subprojects
         for (name, path) in project_map {
             all_projects.push((name.clone(), path.clone()));
+        }
+        
+        debug!("ProjectMapper: Will attempt Gradle execution for {} projects:", all_projects.len());
+        for (name, path) in &all_projects {
+            debug!("  Project '{}' at path: {:?}", name, path);
         }
 
         // Strategy 3: Batch execution - process projects in small groups
@@ -235,7 +301,16 @@ impl ProjectMapper {
                     // Add small delay to reduce resource contention
                     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                     
+                    debug!("ProjectMapper: Attempting Gradle execution for project '{}' at {:?}", project_name, project_path);
                     let result = execute_gradle_dependencies(&project_path).await;
+                    match &result {
+                        Ok(gradle_result) => {
+                            debug!("ProjectMapper: Gradle SUCCESS for project '{}' - got {} configurations", project_name, gradle_result.configurations.len());
+                        }
+                        Err(e) => {
+                            debug!("ProjectMapper: Gradle FAILED for project '{}': {}", project_name, e);
+                        }
+                    }
                     (project_name, result)
                 });
                 
@@ -253,19 +328,25 @@ impl ProjectMapper {
 
         // Collect all results
         let mut all_gradle_results = HashMap::new();
+        debug!("ProjectMapper: Collecting results from {} tasks", tasks.len());
         for task in tasks {
             if let Ok((project_name, result)) = task.await {
                 match result {
                     Ok(gradle_result) => {
                         if !gradle_result.is_empty() {
+                            debug!("ProjectMapper: Adding project '{}' to results (has {} configurations)", project_name, gradle_result.configurations.len());
                             all_gradle_results.insert(project_name, gradle_result);
+                        } else {
+                            debug!("ProjectMapper: Project '{}' had empty Gradle result, skipping", project_name);
                         }
                     }
                     Err(e) => {
-                        debug!("Failed to get dependencies for project {}: {}", project_name, e);
+                        debug!("ProjectMapper: Failed to get dependencies for project '{}': {}", project_name, e);
                         // Continue with other projects instead of failing completely
                     }
                 }
+            } else {
+                debug!("ProjectMapper: Task join failed for a project");
             }
         }
 
@@ -283,6 +364,8 @@ impl ProjectMapper {
     ) -> Result<HashMap<String, GradleDependenciesResult>> {
         use tokio::process::Command;
 
+        debug!("ProjectMapper: try_single_gradle_command starting for: {:?}", project_root);
+
         let gradle_command = if project_root.join("gradlew").exists() {
             "./gradlew"
         } else if project_root.join("gradlew.bat").exists() {
@@ -290,6 +373,8 @@ impl ProjectMapper {
         } else {
             "gradle"
         };
+
+        debug!("ProjectMapper: Using gradle command: {}", gradle_command);
 
         // Try to get all dependencies with a single command
         // This uses Gradle's ability to run tasks on all subprojects
@@ -310,6 +395,7 @@ impl ProjectMapper {
 
         if output.status.success() {
             let output_text = String::from_utf8(output.stdout)?;
+            
             let mut result = GradleDependenciesResult::new();
             result.insert("compileClasspath".to_string(), output_text);
             
@@ -317,6 +403,8 @@ impl ProjectMapper {
             let mut results = HashMap::new();
             results.insert("".to_string(), result);
             return Ok(results);
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
         }
 
         Err(anyhow!("Single command approach failed"))

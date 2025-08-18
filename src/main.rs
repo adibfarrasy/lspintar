@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::languages::{groovy::GroovySupport, LanguageRegistry};
+use crate::languages::{groovy::GroovySupport, java::JavaSupport, LanguageRegistry};
 use server::LspServer;
 use tokio::io::{stdin, stdout};
 use tower_lsp::{LspService, Server};
@@ -22,10 +22,10 @@ async fn main() {
 
     let mut registry = LanguageRegistry::new();
     registry.register("groovy", Box::new(GroovySupport::new()));
+    registry.register("java", Box::new(JavaSupport::new()));
 
     // Future
     // registry.register("kotlin", Box::new(KotlinSupport::new()));
-    // registry.register("java", Box::new(JavaSupport::new()));
 
     let (service, socket) = LspService::new(|client| LspServer::new(client, Arc::new(registry)));
 

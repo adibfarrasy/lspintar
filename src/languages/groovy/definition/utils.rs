@@ -13,7 +13,7 @@ use crate::{
         symbols::SymbolType,
         utils::{
             find_external_dependency_root, find_project_root, node_to_lsp_location, uri_to_path,
-            uri_to_tree,
+            uri_to_tree, get_language_support_for_file,
         },
     },
     languages::LanguageSupport,
@@ -104,8 +104,11 @@ pub fn search_definition<'a>(
     symbol_name: &str,
     symbol_type: SymbolType,
 ) -> Option<Node<'a>> {
+    debug!("Groovy search_definition: symbol_name={}, symbol_type={:?}", symbol_name, symbol_type);
     let query_text = get_declaration_query_for_symbol_type(&symbol_type)?;
+    debug!("Groovy search_definition: query_text={}", query_text);
     let candidates = find_definition_candidates(tree, source, symbol_name, query_text)?;
+    debug!("Groovy search_definition: found {} candidates", candidates.len());
     candidates.into_iter().next()
 }
 
@@ -117,31 +120,54 @@ pub fn search_definition_in_project(
     other_file_uri: &str,
     language_support: &dyn LanguageSupport,
 ) -> Option<Location> {
+    debug!("Groovy search_definition_in_project: current_file_uri={}, other_file_uri={}", current_file_uri, other_file_uri);
+    
     let current_tree = uri_to_tree(current_file_uri)?;
     let symbol_name = usage_node.utf8_text(current_source.as_bytes()).ok()?;
-    let symbol_type = language_support
+    debug!("Groovy search_definition_in_project: symbol_name={}", symbol_name);
+    
+    // Get the appropriate language support for the current file (where the symbol usage is)
+    let current_file_path = uri_to_path(current_file_uri)?;
+    let current_language_support = get_language_support_for_file(&current_file_path)?;
+    debug!("Groovy search_definition_in_project: current file language support obtained");
+    
+    let symbol_type = current_language_support
         .determine_symbol_type_from_context(&current_tree, usage_node, current_source)
         .ok()?;
+    debug!("Groovy search_definition_in_project: symbol_type={:?}", symbol_type);
 
     let other_tree = uri_to_tree(other_file_uri)?;
+    debug!("Groovy search_definition_in_project: other_tree obtained");
+    
     let other_path = uri_to_path(other_file_uri)?;
     let other_source = read_to_string(other_path).ok()?;
+    debug!("Groovy search_definition_in_project: other_source read, length={}", other_source.len());
 
     let definition_node = if symbol_type == SymbolType::MethodCall {
+        debug!("Groovy search_definition_in_project: searching for method call");
         // For method calls, try signature-based matching first
         if let Some(call_signature) =
             extract_call_signature_from_context(usage_node, current_source)
         {
+            debug!("Groovy search_definition_in_project: using signature-based matching");
             find_method_with_signature(&other_tree, &other_source, symbol_name, &call_signature)
         } else {
+            debug!("Groovy search_definition_in_project: fallback to regular method search");
             // Fallback to regular method search
             search_definition(&other_tree, &other_source, symbol_name, symbol_type)
         }
     } else {
+        debug!("Groovy search_definition_in_project: searching for non-method symbol");
         search_definition(&other_tree, &other_source, symbol_name, symbol_type)
-    }?;
+    };
 
-    return node_to_lsp_location(&definition_node, &other_file_uri);
+    if let Some(node) = definition_node {
+        debug!("Groovy search_definition_in_project: definition_node found");
+        return node_to_lsp_location(&node, &other_file_uri);
+    } else {
+        debug!("Groovy search_definition_in_project: definition_node NOT found");
+        return None;
+    }
 }
 
 /// Enhanced method resolution for static method calls like ObjectTransferUtil.transferObject()
@@ -802,34 +828,8 @@ fn get_wildcard_imports(source: &str) -> Option<Vec<String>> {
 }
 
 pub fn set_start_position(source: &str, usage_node: &Node, file_uri: &str) -> Option<Location> {
-    let symbol_name = usage_node.utf8_text(source.as_bytes()).ok()?;
-
-    let other_source = fs::read_to_string(uri_to_path(file_uri)?).ok()?;
-
-    let query_text = r#"(identifier) @name"#;
-
-    let language = tree_sitter_groovy::language();
-    let query = get_or_create_query(query_text, &language)?;
-
-    let mut parser = Parser::new();
-    parser.set_language(&language).ok()?;
-    let tree = parser.parse(&other_source, None)?;
-
-    let mut cursor = QueryCursor::new();
-
-    // Optimized: Use while loop with early termination
-    let mut matches = cursor.matches(&query, tree.root_node(), other_source.as_bytes());
-    while let Some(query_match) = matches.next() {
-        for capture in query_match.captures {
-            if let Ok(name) = capture.node.utf8_text(other_source.as_bytes()) {
-                if name == symbol_name {
-                    return node_to_lsp_location(&capture.node, file_uri);
-                }
-            }
-        }
-    }
-
-    None
+    use crate::core::utils::set_start_position_for_language;
+    set_start_position_for_language(source, usage_node, file_uri, "groovy")
 }
 
 fn resolve_same_package(

@@ -1,4 +1,4 @@
-mod definition;
+pub mod definition;
 mod diagnostics;
 mod hover;
 mod implementation;

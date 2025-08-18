@@ -6,11 +6,11 @@ use crate::{
         symbols::SymbolType,
         utils::{create_parser_for_language, detect_language_from_path, find_project_root},
     },
-    languages::groovy::symbols::extract_groovy_symbols,
+    languages::{groovy::symbols::extract_groovy_symbols, java::symbols::extract_java_symbols},
 };
 use anyhow::{Context, Result};
 use tokio::{fs, task::spawn_blocking};
-use tracing::debug;
+use tracing::{debug, info};
 use tree_sitter::Tree;
 use walkdir::WalkDir;
 
@@ -186,21 +186,27 @@ pub async fn extract_symbol_definitions(
 fn extract_symbols_from_tree_by_language(
     parsed_file: &ParsedSourceFile,
 ) -> Result<Vec<SymbolDefinition>> {
-    match parsed_file.language.as_str() {
+    info!("Extracting symbols from {} file: {}", parsed_file.language, parsed_file.file_path.display());
+    let result = match parsed_file.language.as_str() {
         "groovy" => extract_groovy_symbols(parsed_file),
-        "java" => {
-            // TODO: Implement Java symbol extraction
-            Ok(vec![])
-        }
+        "java" => extract_java_symbols(parsed_file),
         "kotlin" => {
             // TODO: Implement Kotlin symbol extraction
             Ok(vec![])
         }
         _ => {
             // Unsupported language, skip
+            debug!("Unsupported language: {}", parsed_file.language);
             Ok(vec![])
         }
+    };
+    
+    match &result {
+        Ok(symbols) => info!("Extracted {} symbols from {}", symbols.len(), parsed_file.file_path.display()),
+        Err(e) => debug!("Failed to extract symbols from {}: {:?}", parsed_file.file_path.display(), e),
     }
+    
+    result
 }
 
 // Supporting types

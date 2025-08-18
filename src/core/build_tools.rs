@@ -128,7 +128,6 @@ pub async fn run_gradle_build(project_root: &PathBuf) -> anyhow::Result<()> {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
 
-
         return Err(anyhow::anyhow!("Gradle build failed. See logs for detail."));
     }
 
@@ -147,6 +146,15 @@ pub async fn execute_gradle_dependencies(
         "gradle"
     };
 
+    debug!(
+        "Executing Gradle dependencies command: {} in project: {:?}",
+        gradle_command, project_root
+    );
+    debug!(
+        "Full command: {} dependencies --configuration compileClasspath --quiet --no-daemon",
+        gradle_command
+    );
+
     let mut results = GradleDependenciesResult::new();
 
     let start = tokio::time::Instant::now();
@@ -156,9 +164,9 @@ pub async fn execute_gradle_dependencies(
         std::time::Duration::from_secs(45), // Reduced timeout
         Command::new(gradle_command)
             .args(&[
-                "dependencies", 
-                "--configuration", "compileClasspath",
-                "--configuration", "testCompileClasspath", 
+                "dependencies",
+                "--configuration",
+                "compileClasspath",
                 "--quiet",
                 "--no-daemon", // Avoid daemon startup overhead for individual calls
             ])
@@ -169,18 +177,53 @@ pub async fn execute_gradle_dependencies(
 
     if output.status.success() {
         let output_text = String::from_utf8(output.stdout)?;
+        debug!(
+            "Gradle command succeeded. Output length: {} chars",
+            output_text.len()
+        );
         // Split output by configuration sections
         let sections = parse_multi_configuration_output(&output_text);
+        debug!(
+            "Parsed {} configuration sections from Gradle output",
+            sections.len()
+        );
         for (config, content) in sections {
             results.insert(config, content);
         }
     } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        debug!(
+            "Gradle command failed for project {:?}. Exit code: {:?}",
+            project_root,
+            output.status.code()
+        );
+        debug!("Gradle command was: {} dependencies --configuration compileClasspath --quiet --no-daemon", gradle_command);
+        if !stderr.is_empty() {
+            debug!("Gradle stderr: {}", stderr);
+        }
+        if !stdout.is_empty() {
+            debug!("Gradle stdout: {}", stdout);
+        } else {
+            debug!("Gradle stdout was empty");
+        }
         // Fallback: Run configurations separately if combined command fails
+        debug!("Trying fallback: running configurations separately");
         for config in &["compileClasspath", "testCompileClasspath"] {
+            debug!(
+                "Running fallback Gradle command for configuration: {}",
+                config
+            );
             let output = tokio::time::timeout(
                 std::time::Duration::from_secs(30),
                 Command::new(gradle_command)
-                    .args(&["dependencies", "--configuration", config, "--quiet", "--no-daemon"])
+                    .args(&[
+                        "dependencies",
+                        "--configuration",
+                        config,
+                        "--quiet",
+                        "--no-daemon",
+                    ])
                     .current_dir(project_root)
                     .output(),
             )
@@ -188,7 +231,31 @@ pub async fn execute_gradle_dependencies(
 
             if output.status.success() {
                 let output_text = String::from_utf8(output.stdout)?;
+                debug!(
+                    "Fallback Gradle command for {} succeeded. Output length: {} chars",
+                    config,
+                    output_text.len()
+                );
                 results.insert(config.to_string(), output_text);
+            } else {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                debug!(
+                    "Fallback Gradle command for {} failed in project {:?}. Exit code: {:?}",
+                    config,
+                    project_root,
+                    output.status.code()
+                );
+                debug!(
+                    "Fallback command was: {} dependencies --configuration {} --quiet --no-daemon",
+                    gradle_command, config
+                );
+                if !stderr.is_empty() {
+                    debug!("Fallback stderr: {}", stderr);
+                }
+                if !stdout.is_empty() {
+                    debug!("Fallback stdout: {}", stdout);
+                }
             }
         }
     }
@@ -240,8 +307,20 @@ pub fn parse_gradle_dependencies_output(
     let mut external_deps = Vec::new();
     let mut project_deps = Vec::new();
 
+    debug!(
+        "Parsing Gradle dependencies output with {} configurations",
+        gradle_result.configurations.len()
+    );
+
     // Parse both compile and test configurations
-    for (_, output) in &gradle_result.configurations {
+    for (config_name, output) in &gradle_result.configurations {
+        debug!("Processing configuration: {}", config_name);
+        let lines: Vec<&str> = output.lines().collect();
+        debug!(
+            "Configuration {} has {} lines of output",
+            config_name,
+            lines.len()
+        );
         for line in output.lines() {
             let trimmed = line.trim();
 
@@ -257,6 +336,7 @@ pub fn parse_gradle_dependencies_output(
             }
 
             // Parse external dependencies: "+--- org.springframework:spring-core:5.3.21 -> 5.3.23"
+
             if let Some(external_dep) = extract_external_dependency(trimmed) {
                 if !external_deps.iter().any(|existing: &ExternalDependency| {
                     existing.group == external_dep.group
@@ -310,19 +390,23 @@ fn extract_external_dependency(line: &str) -> Option<ExternalDependency> {
         // Handle conflict resolution: "5.3.21 -> 5.3.23"
         let resolved_version = version_part[arrow_pos + 4..].trim().to_string();
 
-        Some(ExternalDependency {
-            group,
-            artifact,
+        let dep = ExternalDependency {
+            group: group.clone(),
+            artifact: artifact.clone(),
             version: resolved_version,
-        })
+        };
+
+        Some(dep)
     } else {
         let version = version_part.split_whitespace().next()?.to_string();
 
-        Some(ExternalDependency {
-            group,
-            artifact,
+        let dep = ExternalDependency {
+            group: group.clone(),
+            artifact: artifact.clone(),
             version,
-        })
+        };
+
+        Some(dep)
     }
 }
 
@@ -484,10 +568,36 @@ pub fn get_gradle_cache_base() -> Option<PathBuf> {
         }
     }
 
-    // 3. FALLBACK: Default user cache
-    dirs::home_dir()
+    // 3. SDKMAN Gradle cache (common when using SDKMAN to manage Gradle)
+    if let Some(home) = dirs::home_dir() {
+        let sdkman_gradle_cache = home.join(".sdkman/candidates/gradle");
+        if sdkman_gradle_cache.exists() {
+            // Try to find the most recent Gradle version in SDKMAN
+            if let Ok(entries) = std::fs::read_dir(&sdkman_gradle_cache) {
+                for entry in entries.flatten() {
+                    if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+                        let cache_path = entry.path().join("caches/modules-2/files-2.1");
+                        if cache_path.exists() {
+                            return Some(cache_path);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 4. FALLBACK: Default user cache
+    let fallback_path = dirs::home_dir()
         .map(|home| home.join(".gradle/caches/modules-2/files-2.1"))
-        .filter(|path| path.exists())
+        .filter(|path| path.exists());
+
+    if let Some(ref path) = fallback_path {
+        debug!("Using fallback Gradle cache path: {:?}", path);
+    } else {
+        debug!("No Gradle cache path found");
+    }
+
+    fallback_path
 }
 
 #[tracing::instrument(skip_all)]
@@ -532,12 +642,15 @@ pub fn index_jar_sources(
             continue;
         }
 
-        if !class_fqn_names.contains(&format!("{}.{}", package_name.unwrap(), class_name)) {
+        let package_name = package_name.unwrap();
+        let fully_qualified_name = format!("{}.{}", package_name, class_name);
+
+        if !class_fqn_names.contains(&fully_qualified_name) {
             continue;
         }
 
         let _ = parse_and_cache_project_external(
-            class_name,
+            &fully_qualified_name,
             project_path,
             jar_path.clone(),
             Some(file_name.clone()),
@@ -572,7 +685,7 @@ fn extract_package_name(content: &str) -> Option<String> {
 
 #[tracing::instrument(skip_all)]
 fn parse_and_cache_project_external(
-    class_name: &str,
+    fully_qualified_name: &str,
     project_path: &PathBuf,
     jar_path: PathBuf,
     zip_internal_path: Option<String>,
@@ -581,7 +694,7 @@ fn parse_and_cache_project_external(
 ) -> Result<()> {
     let external_info = SourceFileInfo::new(jar_path, zip_internal_path, Some(dependency.clone()));
 
-    let project_key = (project_path.clone(), class_name.to_string());
+    let project_key = (project_path.clone(), fully_qualified_name.to_string());
 
     cache
         .project_external_infos

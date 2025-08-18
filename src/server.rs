@@ -22,6 +22,7 @@ use crate::core::dependency_cache::DependencyCache;
 use crate::core::logging_service;
 use crate::core::state_manager;
 use crate::core::state_manager::{get_global, set_global};
+use crate::core::symbols::SymbolType;
 use crate::core::utils::find_external_dependency_root;
 use crate::core::utils::is_external_dependency;
 use crate::core::utils::is_path_in_external_dependency;
@@ -30,7 +31,6 @@ use crate::core::utils::uri_to_path;
 use crate::core::DiagnosticManager;
 use crate::core::Document;
 use crate::core::DocumentManager;
-use crate::core::symbols::SymbolType;
 use crate::core::{
     build_tools::{detect_build_tool, BuildTool},
     utils::find_project_root,
@@ -93,7 +93,7 @@ impl CachedSymbolInfo {
             timestamp: Instant::now(),
         }
     }
-    
+
     fn is_expired(&self, ttl: Duration) -> bool {
         self.timestamp.elapsed() > ttl
     }
@@ -112,7 +112,7 @@ impl CachedDefinition {
             timestamp: Instant::now(),
         }
     }
-    
+
     fn is_expired(&self, ttl: Duration) -> bool {
         self.timestamp.elapsed() > ttl
     }
@@ -398,7 +398,9 @@ impl LanguageServer for LspServer {
 
         // Create a location from the current position for local hover
         let local_location = Location {
-            uri: tower_lsp::lsp_types::Url::parse(&uri).map_err(|_| tower_lsp::jsonrpc::Error::invalid_params("Invalid URI".to_string()))?,
+            uri: tower_lsp::lsp_types::Url::parse(&uri).map_err(|_| {
+                tower_lsp::jsonrpc::Error::invalid_params("Invalid URI".to_string())
+            })?,
             range: tower_lsp::lsp_types::Range {
                 start: position,
                 end: position,
@@ -453,7 +455,7 @@ impl LspServer {
     async fn find_definition(&self, uri: String, position: Position) -> Result<Location> {
         const DEFINITION_CACHE_TTL: Duration = Duration::from_secs(30);
         const SYMBOL_CACHE_TTL: Duration = Duration::from_secs(60);
-        
+
         // Check definition cache first (fastest path)
         let cache_key = CacheKey::new(uri.clone(), position);
         if let Some(cached_def) = self.definition_cache.get(&cache_key) {
@@ -478,7 +480,10 @@ impl LspServer {
         let symbol_info = if let Some(cached_symbol) = self.position_symbol_cache.get(&cache_key) {
             if !cached_symbol.is_expired(SYMBOL_CACHE_TTL) {
                 debug!("Symbol cache hit for {}:{:?}", uri, position);
-                Some((cached_symbol.symbol_name.clone(), cached_symbol.symbol_type.clone()))
+                Some((
+                    cached_symbol.symbol_name.clone(),
+                    cached_symbol.symbol_type.clone(),
+                ))
             } else {
                 self.position_symbol_cache.remove(&cache_key);
                 None
@@ -487,56 +492,69 @@ impl LspServer {
             None
         };
 
-        let location = if let Some((symbol_name, symbol_type)) = symbol_info {
-            // Use cached symbol info for faster lookup
-            self.find_definition_with_cached_symbol(&tree, &content, &uri, &symbol_name, symbol_type, cache).await?
-        } else {
-            // Extract symbol info first (before moving language_support into closure)
-            let symbol_info_for_cache = if let Ok(identifier_node) = crate::languages::groovy::utils::find_identifier_at_position(&tree, &content, position) {
-                if let Ok(symbol_name) = identifier_node.utf8_text(content.as_bytes()) {
-                    if let Ok(symbol_type) = language_support.determine_symbol_type_from_context(&tree, &identifier_node, &content) {
-                        Some((symbol_name.to_string(), symbol_type))
+        let location =
+            if let Some((symbol_name, symbol_type)) = symbol_info {
+                // Use cached symbol info for faster lookup
+                self.find_definition_with_cached_symbol(
+                    &tree,
+                    &content,
+                    &uri,
+                    &symbol_name,
+                    symbol_type,
+                    cache,
+                )
+                .await?
+            } else {
+                // Extract symbol info first (before moving language_support into closure)
+                let symbol_info_for_cache = if let Ok(identifier_node) =
+                    crate::languages::groovy::utils::find_identifier_at_position(
+                        &tree, &content, position,
+                    ) {
+                    if let Ok(symbol_name) = identifier_node.utf8_text(content.as_bytes()) {
+                        if let Ok(symbol_type) = language_support
+                            .determine_symbol_type_from_context(&tree, &identifier_node, &content)
+                        {
+                            Some((symbol_name.to_string(), symbol_type))
+                        } else {
+                            None
+                        }
                     } else {
                         None
                     }
                 } else {
                     None
+                };
+
+                // Full resolution - extract symbol and cache it
+                let location = tokio::task::spawn_blocking({
+                    let tree = tree.clone();
+                    let content = content.clone();
+                    let uri = uri.clone();
+                    let cache = cache.clone();
+                    move || language_support.find_definition(&tree, &content, position, &uri, cache)
+                })
+                .await
+                .map_err(|error| tower_lsp::jsonrpc::Error::invalid_params(format!("{error}")))?
+                .map_err(|error| tower_lsp::jsonrpc::Error::invalid_params(format!("{error}")))?;
+
+                // Cache the symbol info for future use
+                if let Some((symbol_name, symbol_type)) = symbol_info_for_cache {
+                    self.position_symbol_cache.insert(
+                        cache_key.clone(),
+                        CachedSymbolInfo::new(symbol_name, symbol_type),
+                    );
                 }
-            } else {
-                None
+
+                location
             };
 
-            // Full resolution - extract symbol and cache it
-            let location = tokio::task::spawn_blocking({
-                let tree = tree.clone();
-                let content = content.clone();
-                let uri = uri.clone();
-                let cache = cache.clone();
-                move || {
-                    language_support.find_definition(&tree, &content, position, &uri, cache)
-                }
-            })
-            .await
-            .map_err(|error| tower_lsp::jsonrpc::Error::invalid_params(format!("{error}")))?
-            .map_err(|error| tower_lsp::jsonrpc::Error::invalid_params(format!("{error}")))?;
-
-            // Cache the symbol info for future use
-            if let Some((symbol_name, symbol_type)) = symbol_info_for_cache {
-                self.position_symbol_cache.insert(
-                    cache_key.clone(),
-                    CachedSymbolInfo::new(symbol_name, symbol_type)
-                );
-            }
-
-            location
-        };
-
         // Cache the final result
-        self.definition_cache.insert(cache_key, CachedDefinition::new(location.clone()));
-        
+        self.definition_cache
+            .insert(cache_key, CachedDefinition::new(location.clone()));
+
         Ok(location)
     }
-    
+
     async fn find_definition_with_cached_symbol(
         &self,
         tree: &Tree,
@@ -550,63 +568,72 @@ impl LspServer {
             .language_registry
             .detect_language(uri)
             .ok_or(tower_lsp::jsonrpc::Error::internal_error())?;
-            
+
         // Use cached symbol info to bypass expensive tree-sitter queries
         tokio::task::spawn_blocking({
             let tree = tree.clone();
             let content = content.to_string();
             let uri = uri.to_string();
             let symbol_name = symbol_name.to_string();
-            
+
             move || {
                 // Try direct dependency cache lookup first for class/interface symbols
-                if matches!(symbol_type, SymbolType::ClassDeclaration | SymbolType::InterfaceDeclaration) {
+                if matches!(
+                    symbol_type,
+                    SymbolType::ClassDeclaration | SymbolType::InterfaceDeclaration
+                ) {
                     if let Some(project_root) = crate::core::utils::find_project_root(
-                        &crate::core::utils::uri_to_path(&uri).unwrap_or_default()
+                        &crate::core::utils::uri_to_path(&uri).unwrap_or_default(),
                     ) {
                         let cache_key = (project_root, symbol_name.clone());
                         if let Some(file_path) = dependency_cache.symbol_index.get(&cache_key) {
                             if let Some(location) = crate::core::utils::node_to_lsp_location(
                                 &tree.root_node(),
                                 &crate::core::utils::path_to_file_uri(&file_path)
-                                    .unwrap_or_default()
+                                    .unwrap_or_default(),
                             ) {
                                 return Ok(location);
                             }
                         }
                     }
                 }
-                
+
                 // Fallback to language-specific resolution with tree traversal
                 // This is still faster than full symbol extraction since we know the symbol name
-                language_support.find_definition_chain(&tree, &content, dependency_cache, &uri, &tree.root_node())
+                language_support.find_definition_chain(
+                    &tree,
+                    &content,
+                    dependency_cache,
+                    &uri,
+                    &tree.root_node(),
+                )
             }
         })
         .await
         .map_err(|error| tower_lsp::jsonrpc::Error::invalid_params(format!("{error}")))?
         .map_err(|error| tower_lsp::jsonrpc::Error::invalid_params(format!("{error}")))
     }
-    
+
     fn invalidate_caches_for_uri(&self, uri: &str) {
         // Remove all cache entries for this URI
-        self.position_symbol_cache.retain(|cache_key, _| cache_key.uri != uri);
-        self.definition_cache.retain(|cache_key, _| cache_key.uri != uri);
+        self.position_symbol_cache
+            .retain(|cache_key, _| cache_key.uri != uri);
+        self.definition_cache
+            .retain(|cache_key, _| cache_key.uri != uri);
     }
-    
+
     fn cleanup_expired_caches(&self) {
         const CLEANUP_INTERVAL: Duration = Duration::from_secs(300); // 5 minutes
         const DEFINITION_CACHE_TTL: Duration = Duration::from_secs(30);
         const SYMBOL_CACHE_TTL: Duration = Duration::from_secs(60);
-        
+
         // Clean up expired definition cache entries
-        self.definition_cache.retain(|_, cached_def| {
-            !cached_def.is_expired(DEFINITION_CACHE_TTL)
-        });
-        
+        self.definition_cache
+            .retain(|_, cached_def| !cached_def.is_expired(DEFINITION_CACHE_TTL));
+
         // Clean up expired symbol cache entries
-        self.position_symbol_cache.retain(|_, cached_symbol| {
-            !cached_symbol.is_expired(SYMBOL_CACHE_TTL)
-        });
+        self.position_symbol_cache
+            .retain(|_, cached_symbol| !cached_symbol.is_expired(SYMBOL_CACHE_TTL));
     }
 
     async fn get_content_and_tree(&self, uri: &str) -> Result<(String, Tree)> {
@@ -628,9 +655,9 @@ impl LspServer {
             }
         }
 
-        let file_path = uri_to_path(uri).ok_or(
-            tower_lsp::jsonrpc::Error::invalid_params("Invalid URI".to_string()),
-        )?;
+        let file_path = uri_to_path(uri).ok_or(tower_lsp::jsonrpc::Error::invalid_params(
+            "Invalid URI".to_string(),
+        ))?;
 
         let content = tokio::fs::read_to_string(&file_path).await.map_err(|_| {
             tower_lsp::jsonrpc::Error::invalid_params(format!("Failed to read file: {}", uri))
@@ -724,14 +751,14 @@ impl LspServer {
                         // Set indexing completed flag when loading from cache
                         set_global("is_indexing_completed", true);
                         true
-                    },
+                    }
                     Ok(false) => false,
                     Err(_) => false,
                 }
             } else {
                 false // Don't use persistence for external dependencies
             };
-            
+
             // If cache wasn't loaded, rebuild it
             if !loaded_from_cache {
                 if is_external_dependency(&dir) {
@@ -780,12 +807,12 @@ mod tests {
 
     fn create_test_server() -> (LspServer, Arc<LanguageRegistry>) {
         let registry = Arc::new(LanguageRegistry::new());
-        
+
         // Note: This would normally create a real client, but for unit tests
         // we'd need a mock implementation
         // let client = create_mock_client();
         // let server = LspServer::new(client, registry.clone());
-        
+
         // For now, we'll test the components that don't require a client
         unimplemented!("Full server creation requires mock client")
     }
@@ -794,13 +821,13 @@ mod tests {
     fn test_server_creation_basic() {
         // Test basic server structure without client dependency
         let registry = Arc::new(LanguageRegistry::new());
-        
+
         // Test that we can create the basic components
         let documents = Arc::new(RwLock::new(DocumentManager::new()));
         let diagnostics: Arc<DashMap<String, DiagnosticManager>> = Arc::new(DashMap::new());
         let dependency_cache = Arc::new(DependencyCache::new());
         let workspace_root: Arc<RwLock<Option<PathBuf>>> = Arc::new(RwLock::new(None));
-        
+
         // Verify basic properties
         assert_eq!(diagnostics.len(), 0);
         assert_eq!(dependency_cache.symbol_index.len(), 0);
@@ -809,13 +836,13 @@ mod tests {
     #[tokio::test]
     async fn test_workspace_root_operations() {
         let workspace_root = Arc::new(RwLock::new(None));
-        
+
         // Test setting workspace root
         {
             let mut root = workspace_root.write().await;
             *root = Some(PathBuf::from("/test/workspace"));
         }
-        
+
         // Test reading workspace root
         {
             let root = workspace_root.read().await;
@@ -869,14 +896,14 @@ mod tests {
         for test_case in test_cases {
             // Note: This test demonstrates the structure but would need
             // a proper state manager mock to work fully
-            
+
             // Verify JSON structure
             if let Some(expected_cache) = test_case.expected_gradle_cache {
                 if let Some(cache_value) = test_case.input_json.get(GRADLE_CACHE_DIR) {
                     assert_eq!(cache_value.as_str(), Some(expected_cache));
                 }
             }
-            
+
             if let Some(expected_build) = test_case.expected_build_on_init {
                 if let Some(build_value) = test_case.input_json.get(BUILD_ON_INIT) {
                     assert_eq!(build_value.as_bool(), Some(expected_build));
@@ -888,15 +915,21 @@ mod tests {
     #[test]
     fn test_lsp_types_creation() {
         // Test that we can create and work with LSP types
-        let position = Position { line: 5, character: 10 };
+        let position = Position {
+            line: 5,
+            character: 10,
+        };
         let range = Range {
             start: position,
-            end: Position { line: 5, character: 20 },
+            end: Position {
+                line: 5,
+                character: 20,
+            },
         };
-        
+
         let uri = Url::parse("file:///test/file.groovy").expect("Valid URI");
         let location = Location { uri, range };
-        
+
         assert_eq!(location.range.start.line, 5);
         assert_eq!(location.range.start.character, 10);
         assert_eq!(location.range.end.character, 20);
@@ -921,7 +954,10 @@ mod tests {
             InitializeParamsTestCase {
                 name: "with workspace folders",
                 root_uri: None,
-                workspace_folders: Some(vec!["file:///workspace/project1", "file:///workspace/project2"]),
+                workspace_folders: Some(vec![
+                    "file:///workspace/project1",
+                    "file:///workspace/project2",
+                ]),
                 expected_has_root: true,
             },
             InitializeParamsTestCase {
@@ -934,11 +970,11 @@ mod tests {
 
         for test_case in test_cases {
             let mut params = InitializeParams::default();
-            
+
             if let Some(root_uri_str) = test_case.root_uri {
                 params.root_uri = Some(Url::parse(root_uri_str).unwrap());
             }
-            
+
             if let Some(folders) = test_case.workspace_folders {
                 let workspace_folders: Vec<WorkspaceFolder> = folders
                     .iter()
@@ -949,14 +985,16 @@ mod tests {
                     .collect();
                 params.workspace_folders = Some(workspace_folders);
             }
-            
+
             // Test the logic for extracting root
-            let has_root = params.root_uri.is_some() || 
-                          params.workspace_folders.as_ref().map_or(false, |folders| !folders.is_empty());
-            
+            let has_root = params.root_uri.is_some()
+                || params
+                    .workspace_folders
+                    .as_ref()
+                    .map_or(false, |folders| !folders.is_empty());
+
             assert_eq!(
-                has_root,
-                test_case.expected_has_root,
+                has_root, test_case.expected_has_root,
                 "Test '{}': root detection mismatch",
                 test_case.name
             );
@@ -966,15 +1004,13 @@ mod tests {
     #[test]
     fn test_server_capabilities() {
         let capabilities = ServerCapabilities {
-            text_document_sync: Some(TextDocumentSyncCapability::Kind(
-                TextDocumentSyncKind::FULL,
-            )),
+            text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)),
             definition_provider: Some(OneOf::Left(true)),
             hover_provider: Some(HoverProviderCapability::Simple(true)),
             implementation_provider: Some(ImplementationProviderCapability::Simple(true)),
             ..Default::default()
         };
-        
+
         // Verify capabilities structure
         match capabilities.text_document_sync {
             Some(TextDocumentSyncCapability::Kind(kind)) => {
@@ -982,9 +1018,10 @@ mod tests {
             }
             _ => panic!("Expected FULL text document sync"),
         }
-        
+
         assert!(capabilities.definition_provider.is_some());
         assert!(capabilities.hover_provider.is_some());
         assert!(capabilities.implementation_provider.is_some());
     }
 }
+

@@ -7,7 +7,7 @@ use tree_sitter::Node;
 use crate::{
     core::{
         dependency_cache::DependencyCache,
-        utils::{find_project_root, path_to_file_uri, uri_to_path},
+        utils::{find_project_root, path_to_file_uri, uri_to_path, search_definition_in_project_cross_language},
     },
     languages::LanguageSupport,
 };
@@ -64,8 +64,9 @@ fn find_in_project_dependencies(
 
         if let Some(file_location) = dependency_cache.symbol_index.get(&dep_symbol_key) {
             let other_uri = path_to_file_uri(&file_location)?;
-
-            if let Some(location) = search_definition_in_project(
+            
+            // Use the centralized cross-language dispatcher
+            if let Some(location) = search_definition_in_project_cross_language(
                 file_uri,
                 source,
                 usage_node,
@@ -120,8 +121,9 @@ fn fallback_impl(
             
             if let Some(file_location) = dependency_cache.symbol_index.get(&symbol_key) {
                 let other_uri = path_to_file_uri(&file_location)?;
-
-                return search_definition_in_project(
+                
+                // Use the centralized cross-language dispatcher
+                return search_definition_in_project_cross_language(
                     file_uri,
                     source,
                     usage_node,
@@ -140,8 +142,9 @@ fn fallback_impl(
                 
                 if let Some(file_location) = dependency_cache.symbol_index.get(&symbol_key) {
                     let other_uri = path_to_file_uri(&file_location)?;
-
-                    return search_definition_in_project(
+                    
+                    // Use the centralized cross-language dispatcher
+                    return search_definition_in_project_cross_language(
                         file_uri,
                         source,
                         usage_node,

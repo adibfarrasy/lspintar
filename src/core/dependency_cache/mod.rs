@@ -189,11 +189,14 @@ impl DependencyCache {
             .await
             .context("Failed to index external types")?;
 
+        debug!("Creating ProjectMapper for build tool: {:?}", build_tool);
         let project_mapper = project_deps::ProjectMapper::new(build_tool.clone());
+        debug!("Starting project dependencies indexing for: {:?}", project_root);
         project_mapper
             .index_project_dependencies(project_root.clone(), self.clone())
             .await
             .context("Failed to index project dependencies")?;
+        debug!("Project dependencies indexing completed");
 
         let total_time = start.elapsed();
         lsp_info!("Indexing completed in {:?}", total_time);

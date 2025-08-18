@@ -1,4 +1,6 @@
 pub mod groovy;
+pub mod java;
+pub mod kotlin;
 pub mod traits;
 
 use std::collections::HashMap;

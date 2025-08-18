@@ -21,7 +21,7 @@ just = "1.40.0"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 zip = "4.1.0"
-tree-sitter-java = "0.23.5"
+tree-sitter-java = { git = "https://github.com/adibfarrasy/tree-sitter-java" }
 rayon = "1.10.0"
 serde = { version = "1.0.219", features = ["derive"] }
 rusqlite = { version = "0.37.0", features = ["bundled"] }
