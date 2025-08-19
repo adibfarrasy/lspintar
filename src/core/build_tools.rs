@@ -194,14 +194,7 @@ pub async fn execute_gradle_dependencies(
             output.status.code()
         );
         debug!("Gradle command was: {} dependencies --configuration compileClasspath --quiet --no-daemon", gradle_command);
-        if !stderr.is_empty() {
-            debug!("Gradle stderr: {}", stderr);
-        }
-        if !stdout.is_empty() {
-            debug!("Gradle stdout: {}", stdout);
-        } else {
-            debug!("Gradle stdout was empty");
-        }
+        debug!("Gradle command failed with no detailed output captured");
         // Fallback: Run configurations separately if combined command fails
         debug!("Trying fallback: running configurations separately");
         for config in &["compileClasspath", "testCompileClasspath"] {

@@ -3,7 +3,7 @@ pub mod project_deps;
 pub mod source_file_info;
 pub mod symbol_index;
 
-use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Instant};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use anyhow::{Context, Result};
 use dashmap::DashMap;
@@ -196,8 +196,7 @@ impl DependencyCache {
             .context("Failed to index project dependencies")?;
         debug!("Project dependencies indexing completed");
 
-        let total_time = start.elapsed();
-        lsp_info!("Indexing completed in {:?}", total_time);
+        lsp_info!("Indexing completed");
         set_global("is_indexing_completed", true);
         
         // Save to persistent storage

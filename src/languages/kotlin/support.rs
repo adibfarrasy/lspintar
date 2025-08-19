@@ -10,9 +10,6 @@ use crate::core::{
     definition::{
         queries::QueryProvider,
         local::find_local_generic,
-        project::find_in_project_generic,
-        workspace::find_in_workspace_generic,
-        external::find_external_generic,
     },
     cross_language::type_bridge::CrossLanguageTypeInfo,
     registry::LanguageRegistry,
@@ -202,7 +199,8 @@ impl LanguageSupport for KotlinSupport {
         usage_node: &Node,
         dependency_cache: Arc<DependencyCache>,
     ) -> Option<Location> {
-        find_in_project_generic(source, file_uri, usage_node, dependency_cache, self)
+        // TODO: Implement Kotlin project definition finding
+        None
     }
 
     fn find_in_workspace(
@@ -212,7 +210,8 @@ impl LanguageSupport for KotlinSupport {
         usage_node: &Node,
         dependency_cache: Arc<DependencyCache>,
     ) -> Option<Location> {
-        find_in_workspace_generic(source, file_uri, usage_node, dependency_cache, self)
+        // TODO: Implement Kotlin workspace definition finding
+        None
     }
 
     fn find_external(
@@ -222,7 +221,8 @@ impl LanguageSupport for KotlinSupport {
         usage_node: &Node,
         dependency_cache: Arc<DependencyCache>,
     ) -> Option<Location> {
-        find_external_generic(source, file_uri, usage_node, dependency_cache, self)
+        // TODO: Implement Kotlin external definition finding
+        None
     }
 
     fn set_start_position(

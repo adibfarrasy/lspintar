@@ -302,7 +302,6 @@ impl PersistenceLayer {
                 // Store all project-related entries (allow subdirectories)
                 // Skip only if the project_path is not under our workspace
                 if !project_path.starts_with(&self.project_path) {
-                    skipped_count += 1;
                     continue;
                 }
                 
@@ -324,7 +323,6 @@ impl PersistenceLayer {
                     size,
                     now
                 ])?;
-                saved_count += 1;
             }
             
         } // stmt is dropped here

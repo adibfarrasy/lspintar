@@ -26,8 +26,6 @@ use crate::{
 use super::utils::{prepare_symbol_lookup_key_with_wildcard_support, search_definition};
 use super::method_resolution::find_method_with_signature;
 
-// FIXME: currently accidentally work because the tree-sitter node names overlap
-// betweeen java and groovy.
 #[tracing::instrument(skip_all)]
 pub fn find_external(
     source: &str,

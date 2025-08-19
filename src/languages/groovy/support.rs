@@ -16,7 +16,6 @@ use crate::core::{
     registry::LanguageRegistry,
 };
 use crate::languages::traits::LanguageSupport;
-use crate::core::utils::path_to_file_uri;
 
 use super::definition::external::find_external;
 use super::definition::local::find_local;
