@@ -10,7 +10,7 @@ use tokio::process::Command;
 use tracing::debug;
 use zip::ZipArchive;
 
-use crate::{lsp_error, lsp_info};
+use crate::lsp_info;
 
 use super::{
     constants::GRADLE_CACHE_DIR,
@@ -125,8 +125,6 @@ pub async fn run_gradle_build(project_root: &PathBuf) -> anyhow::Result<()> {
     .context("Gradle build timed out after 5 minutes")??;
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
 
         return Err(anyhow::anyhow!("Gradle build failed. See logs for detail."));
     }
@@ -157,7 +155,6 @@ pub async fn execute_gradle_dependencies(
 
     let mut results = GradleDependenciesResult::new();
 
-    let start = tokio::time::Instant::now();
 
     // Optimized: Run both configurations in a single command when possible
     let output = tokio::time::timeout(
@@ -191,8 +188,6 @@ pub async fn execute_gradle_dependencies(
             results.insert(config, content);
         }
     } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
         debug!(
             "Gradle command failed for project {:?}. Exit code: {:?}",
             project_root,
@@ -495,7 +490,6 @@ pub fn find_sources_jar_in_gradle_cache(dep: &ExternalDependency) -> Option<Path
 pub fn extract_class_names_from_jar(jar_path: &PathBuf) -> Result<HashSet<String>> {
     let jar_data = fs::read(jar_path)?;
 
-    let jar_path = jar_path.clone();
     let cursor = Cursor::new(jar_data);
     let mut archive = ZipArchive::new(cursor)?;
     let mut class_names = HashSet::new();

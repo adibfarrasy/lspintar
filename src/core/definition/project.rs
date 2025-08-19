@@ -1,5 +1,5 @@
 use tower_lsp::lsp_types::Location;
-use tree_sitter::{Node, Tree};
+use tree_sitter::Node;
 use std::sync::Arc;
 
 use crate::core::dependency_cache::DependencyCache;

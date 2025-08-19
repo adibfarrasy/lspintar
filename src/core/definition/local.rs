@@ -4,7 +4,7 @@ use tree_sitter::{Node, QueryCursor, StreamingIterator, Tree};
 use crate::core::{symbols::SymbolType, utils::node_to_lsp_location};
 use crate::languages::traits::LanguageSupport;
 
-use super::{queries::QueryProvider, scope::{calculate_scope_distance, find_containing_method}};
+use super::scope::{calculate_scope_distance, find_containing_method};
 
 /// Generic local definition finder that works across languages
 pub fn find_local_generic(

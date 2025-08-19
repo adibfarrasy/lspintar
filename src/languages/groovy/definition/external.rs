@@ -2,7 +2,7 @@ use std::{path::PathBuf, sync::Arc};
 
 use anyhow::Context;
 use tower_lsp::lsp_types::Location;
-use tracing::{debug, error};
+use tracing::debug;
 use tree_sitter::Node;
 
 use crate::{
@@ -23,8 +23,8 @@ use crate::{
     lsp_warning,
 };
 
-use super::utils::{prepare_symbol_lookup_key_with_wildcard_support, search_definition, extract_static_method_context};
-use super::method_resolution::{extract_call_signature_from_context, find_method_with_signature};
+use super::utils::{prepare_symbol_lookup_key_with_wildcard_support, search_definition};
+use super::method_resolution::find_method_with_signature;
 
 // FIXME: currently accidentally work because the tree-sitter node names overlap
 // betweeen java and groovy.

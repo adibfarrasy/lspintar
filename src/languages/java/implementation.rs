@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::sync::Arc;
 use tower_lsp::lsp_types::{Location, Position};
 use tree_sitter::Tree;
@@ -46,7 +46,7 @@ pub fn handle(
     }
 }
 
-async fn find_implementations(symbol_name: &str, dependency_cache: &Arc<DependencyCache>) -> Result<Vec<Location>> {
+async fn find_implementations(_symbol_name: &str, _dependency_cache: &Arc<DependencyCache>) -> Result<Vec<Location>> {
     // TODO: Implement actual implementation finding logic
     // This should search for classes that implement the interface or extend the class
     
@@ -68,10 +68,10 @@ fn handle_method_call_implementation(
 }
 
 async fn find_method_implementations(
-    tree: &Tree,
-    source: &str,
-    method_name: &str,
-    dependency_cache: &Arc<DependencyCache>,
+    _tree: &Tree,
+    _source: &str,
+    _method_name: &str,
+    _dependency_cache: &Arc<DependencyCache>,
 ) -> Result<Vec<Location>> {
     // TODO: Implement method implementation finding
     // This should find all classes that implement this method (if it's an interface method)

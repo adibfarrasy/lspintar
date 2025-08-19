@@ -8,6 +8,9 @@ use tracing::debug;
 use tree_sitter::{Node, Parser, Tree};
 
 use super::constants::{PROJECT_ROOT_MARKER, TEMP_DIR_PREFIX};
+use crate::languages::{java::JavaSupport, groovy::GroovySupport, kotlin::KotlinSupport, LanguageSupport};
+use crate::languages::groovy::definition::utils::search_definition_in_project as groovy_search_definition_in_project;
+use crate::languages::java::definition::utils::search_definition_in_project as java_search_definition_in_project;
 
 #[tracing::instrument(skip_all)]
 pub fn path_to_file_uri(file_path: &PathBuf) -> Option<String> {
@@ -118,11 +121,11 @@ pub fn detect_language_from_path(file_path: &PathBuf) -> Option<&'static str> {
 }
 
 /// Get the appropriate language support for a given file path
-pub fn get_language_support_for_file(file_path: &PathBuf) -> Option<Box<dyn crate::languages::LanguageSupport>> {
+pub fn get_language_support_for_file(file_path: &PathBuf) -> Option<Box<dyn LanguageSupport>> {
     match detect_language_from_path(file_path)? {
-        "java" => Some(Box::new(crate::languages::java::JavaSupport::new())),
-        "groovy" => Some(Box::new(crate::languages::groovy::GroovySupport::new())),
-        "kotlin" => Some(Box::new(crate::languages::kotlin::KotlinSupport::new())),
+        "java" => Some(Box::new(JavaSupport::new())),
+        "groovy" => Some(Box::new(GroovySupport::new())),
+        "kotlin" => Some(Box::new(KotlinSupport::new())),
         _ => None,
     }
 }
@@ -151,7 +154,7 @@ pub fn search_definition_in_project_cross_language(
     match target_language {
         "groovy" => {
             debug!("Core: Calling Groovy search_definition_in_project");
-            crate::languages::groovy::definition::utils::search_definition_in_project(
+            groovy_search_definition_in_project(
                 current_file_uri,
                 current_source,
                 usage_node,
@@ -161,7 +164,7 @@ pub fn search_definition_in_project_cross_language(
         }
         "java" => {
             debug!("Core: Calling Java search_definition_in_project");
-            crate::languages::java::definition::utils::search_definition_in_project(
+            java_search_definition_in_project(
                 current_file_uri,
                 current_source,
                 usage_node,
@@ -178,14 +181,14 @@ pub fn search_definition_in_project_cross_language(
             debug!("Core: Unknown language {}, using fallback language support", target_language);
             // Fallback to the provided language support (usually the current file's language)
             match fallback_language_support.language_id() {
-                "java" => crate::languages::java::definition::utils::search_definition_in_project(
+                "java" => java_search_definition_in_project(
                     current_file_uri,
                     current_source,
                     usage_node,
                     target_file_uri,
                     fallback_language_support,
                 ),
-                "groovy" => crate::languages::groovy::definition::utils::search_definition_in_project(
+                "groovy" => groovy_search_definition_in_project(
                     current_file_uri,
                     current_source,
                     usage_node,
@@ -303,7 +306,7 @@ pub fn set_start_position_for_language(
     file_uri: &str, 
     language: &str
 ) -> Option<Location> {
-    use tree_sitter::{QueryCursor, Parser, StreamingIterator};
+    use tree_sitter::{QueryCursor, StreamingIterator};
     
     let symbol_name = usage_node.utf8_text(source.as_bytes()).ok()?;
 

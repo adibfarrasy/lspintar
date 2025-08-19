@@ -14,27 +14,16 @@ use tower_lsp::LanguageServer;
 use tracing::debug;
 use tree_sitter::Tree;
 
-use crate::core::build_tools::run_gradle_build;
-use crate::core::constants::BUILD_ON_INIT;
-use crate::core::constants::GRADLE_CACHE_DIR;
+use crate::core::build_tools::{run_gradle_build, detect_build_tool, BuildTool};
+use crate::core::constants::{BUILD_ON_INIT, GRADLE_CACHE_DIR};
 use crate::core::dependency_cache::symbol_index::find_workspace_root;
 use crate::core::dependency_cache::DependencyCache;
 use crate::core::logging_service;
-use crate::core::state_manager;
-use crate::core::state_manager::{get_global, set_global};
+use crate::core::state_manager::{self, get_global, set_global};
 use crate::core::symbols::SymbolType;
-use crate::core::utils::find_external_dependency_root;
-use crate::core::utils::is_external_dependency;
-use crate::core::utils::is_path_in_external_dependency;
-use crate::core::utils::is_project_root;
-use crate::core::utils::uri_to_path;
-use crate::core::DiagnosticManager;
-use crate::core::Document;
-use crate::core::DocumentManager;
-use crate::core::{
-    build_tools::{detect_build_tool, BuildTool},
-    utils::find_project_root,
-};
+use crate::core::utils::{find_external_dependency_root, is_external_dependency, is_path_in_external_dependency, is_project_root, uri_to_path, find_project_root, node_to_lsp_location, path_to_file_uri};
+use crate::core::{DiagnosticManager, Document, DocumentManager};
+use crate::languages::groovy::utils::find_identifier_at_position;
 use crate::languages::LanguageRegistry;
 use crate::lsp_error;
 use crate::lsp_warning;
@@ -507,9 +496,7 @@ impl LspServer {
             } else {
                 // Extract symbol info first (before moving language_support into closure)
                 let symbol_info_for_cache = if let Ok(identifier_node) =
-                    crate::languages::groovy::utils::find_identifier_at_position(
-                        &tree, &content, position,
-                    ) {
+                    find_identifier_at_position(&tree, &content, position) {
                     if let Ok(symbol_name) = identifier_node.utf8_text(content.as_bytes()) {
                         if let Ok(symbol_type) = language_support
                             .determine_symbol_type_from_context(&tree, &identifier_node, &content)
@@ -582,15 +569,14 @@ impl LspServer {
                     symbol_type,
                     SymbolType::ClassDeclaration | SymbolType::InterfaceDeclaration
                 ) {
-                    if let Some(project_root) = crate::core::utils::find_project_root(
-                        &crate::core::utils::uri_to_path(&uri).unwrap_or_default(),
+                    if let Some(project_root) = find_project_root(
+                        &uri_to_path(&uri).unwrap_or_default(),
                     ) {
                         let cache_key = (project_root, symbol_name.clone());
                         if let Some(file_path) = dependency_cache.symbol_index.get(&cache_key) {
-                            if let Some(location) = crate::core::utils::node_to_lsp_location(
+                            if let Some(location) = node_to_lsp_location(
                                 &tree.root_node(),
-                                &crate::core::utils::path_to_file_uri(&file_path)
-                                    .unwrap_or_default(),
+                                &path_to_file_uri(&file_path).unwrap_or_default(),
                             ) {
                                 return Ok(location);
                             }

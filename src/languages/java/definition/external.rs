@@ -2,7 +2,7 @@ use std::{path::PathBuf, sync::Arc};
 
 use anyhow::Context;
 use tower_lsp::lsp_types::Location;
-use tracing::{debug, error};
+use tracing::debug;
 use tree_sitter::Node;
 
 use crate::{

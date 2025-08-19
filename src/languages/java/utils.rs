@@ -1,5 +1,5 @@
 use tower_lsp::lsp_types::{Position, Range};
-use tree_sitter::{Node, Query, QueryCursor, Tree};
+use tree_sitter::{Node, Tree};
 
 pub fn find_identifier_at_position<'a>(tree: &'a Tree, source: &str, position: Position) -> Option<Node<'a>> {
     let byte_offset = position_to_byte_offset(source, position)?;

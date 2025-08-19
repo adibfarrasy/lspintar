@@ -17,4 +17,3 @@ pub mod registry;
 
 pub use diagnostic_manager::DiagnosticManager;
 pub use document_manager::{Document, DocumentManager};
-pub use registry::LanguageRegistry;

@@ -1,7 +1,7 @@
 use core::panic;
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use tower_lsp::lsp_types::{Diagnostic, Hover, Location, Position};
 use tracing::debug;
 use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator, Tree};
@@ -16,6 +16,7 @@ use crate::core::{
     registry::LanguageRegistry,
 };
 use crate::languages::traits::LanguageSupport;
+use crate::core::utils::path_to_file_uri;
 
 use super::definition::external::find_external;
 use super::definition::local::find_local;
@@ -635,7 +636,7 @@ impl GroovySupport {
             
             if let Some(file_location) = dependency_cache.symbol_index.get(&symbol_key) {
                 debug!("find_static_method_definition: found class file at {:?}", file_location);
-                let class_uri = crate::core::utils::path_to_file_uri(&file_location)?;
+                let class_uri = path_to_file_uri(&file_location)?;
                 Some(tower_lsp::lsp_types::Location {
                     uri: tower_lsp::lsp_types::Url::parse(&class_uri).ok()?,
                     range: tower_lsp::lsp_types::Range::default(),
@@ -661,7 +662,7 @@ impl GroovySupport {
                     let symbol_key = (other_project.clone(), fqn.clone());
                     if let Some(file_location) = dependency_cache.symbol_index.get(&symbol_key) {
                         debug!("find_static_method_definition: found class in other project {:?}", other_project.file_name().unwrap_or_default());
-                        let class_uri = crate::core::utils::path_to_file_uri(&file_location)?;
+                        let class_uri = path_to_file_uri(&file_location)?;
                         return Some(tower_lsp::lsp_types::Location {
                             uri: tower_lsp::lsp_types::Url::parse(&class_uri).ok()?,
                             range: tower_lsp::lsp_types::Range::default(),

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::{anyhow, Context, Result};
 use tower_lsp::lsp_types::{Diagnostic, Hover, Location, Position};
 use tree_sitter::{Node, Parser, Tree, Query, QueryCursor, StreamingIterator};
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 use crate::core::{
     dependency_cache::DependencyCache,

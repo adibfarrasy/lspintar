@@ -404,7 +404,6 @@ impl ProjectMapper {
             results.insert("".to_string(), result);
             return Ok(results);
         } else {
-            let stderr = String::from_utf8_lossy(&output.stderr);
         }
 
         Err(anyhow!("Single command approach failed"))

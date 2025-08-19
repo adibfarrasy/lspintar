@@ -1,6 +1,6 @@
 use std::sync::OnceLock;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use tree_sitter::{Node, Query, QueryCursor, StreamingIterator, Tree};
 
 use crate::core::{

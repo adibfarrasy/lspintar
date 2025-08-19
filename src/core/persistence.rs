@@ -9,7 +9,6 @@ use std::{
     process::Command,
     time::{SystemTime, UNIX_EPOCH},
 };
-use tracing::debug;
 
 use crate::core::build_tools::ExternalDependency;
 
@@ -296,8 +295,6 @@ impl PersistenceLayer {
                  VALUES (?, ?, ?, ?, ?, ?)"
             )?;
             
-            let mut saved_count = 0;
-            let mut skipped_count = 0;
             
             for entry in map.iter() {
                 let ((project_path, fqn), file_path) = (entry.key(), entry.value());

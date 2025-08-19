@@ -1,4 +1,3 @@
-use std::usize;
 
 use tower_lsp::lsp_types::Location;
 use tree_sitter::{Node, QueryCursor, StreamingIterator, Tree};

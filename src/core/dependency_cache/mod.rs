@@ -5,7 +5,7 @@ pub mod symbol_index;
 
 use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Instant};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use dashmap::DashMap;
 use project_deps::ProjectMetadata;
 use source_file_info::SourceFileInfo;
@@ -150,7 +150,6 @@ impl DependencyCache {
 
     #[tracing::instrument(skip_all)]
     pub async fn index_external_dependency(self: Arc<Self>, current_dir: PathBuf) -> Result<()> {
-        let start = Instant::now();
 
         self.index_project_symbols(&current_dir)
             .await
@@ -176,7 +175,6 @@ impl DependencyCache {
         let build_tool =
             detect_build_tool(project_root.as_path()).context("Cannot detect build tool")?;
 
-        let start = Instant::now();
         lsp_info!("Starting workspace indexing...");
 
         self.index_project_symbols(&project_root)

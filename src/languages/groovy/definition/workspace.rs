@@ -12,8 +12,7 @@ use crate::{
     languages::LanguageSupport,
 };
 
-use super::utils::{prepare_symbol_lookup_key_with_wildcard_support, search_definition_in_project, search_static_method_definition_in_project, extract_static_method_context, get_wildcard_imports_from_source};
-use super::method_resolution::extract_call_signature_from_context;
+use super::utils::{prepare_symbol_lookup_key_with_wildcard_support, get_wildcard_imports_from_source};
 
 #[tracing::instrument(skip_all)]
 pub fn find_in_workspace(
