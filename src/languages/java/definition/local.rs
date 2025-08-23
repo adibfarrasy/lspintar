@@ -1,5 +1,5 @@
-
 use tower_lsp::lsp_types::Location;
+use tracing::debug;
 use tree_sitter::{Node, QueryCursor, StreamingIterator, Tree};
 
 use crate::{
@@ -7,6 +7,10 @@ use crate::{
     languages::LanguageSupport,
 };
 
+use super::method_resolution::{
+    calculate_signature_match_score, extract_call_signature_from_context, extract_method_signature,
+    find_method_with_signature, CallSignature,
+};
 use super::utils::{
     find_definition_candidates, get_declaration_query_for_symbol_type, get_or_create_query,
 };
@@ -37,40 +41,56 @@ pub fn search_local_definitions<'a>(
         .determine_symbol_type_from_context(tree, usage_node, source)
         .ok()?;
 
-    if symbol_type.is_declaration() {
-        return None;
-    }
-
     match symbol_type {
-        SymbolType::MethodCall => {
+        SymbolType::MethodCall | SymbolType::MethodDeclaration => {
             // Use specialized method resolution for method calls
             find_best_method_match(tree, source, usage_node, symbol_name)
         }
-        SymbolType::VariableUsage => {
+        SymbolType::VariableUsage | SymbolType::VariableDeclaration => {
             // Search for variable declarations in accessible scopes
-            let variable_candidates = find_variable_declarations_in_scope(tree, source, usage_node, &symbol_name);
-            
+            let variable_candidates =
+                find_variable_declarations_in_scope(tree, source, usage_node, &symbol_name);
+
             if !variable_candidates.is_empty() {
                 // Find the best match using scope distance
-                if let Some(best_match) = find_closest_declaration(usage_node, &variable_candidates) {
+                if let Some(best_match) = find_closest_declaration(usage_node, &variable_candidates)
+                {
                     return Some(best_match);
                 }
             }
-            
+
             // Not found as variable, try as field
             find_as_field(tree, source, symbol_name)
         }
 
-        SymbolType::FieldUsage => {
-            // Get candidates for field usage
-            let query_text = get_declaration_query_for_symbol_type(&symbol_type)?;
-            let candidates = find_definition_candidates(tree, source, &symbol_name, query_text)?;
-            
-            // For field usage, find the field declaration
-            // Fields are class-level, so we don't need closest scope logic
-            candidates.into_iter().next()
+        SymbolType::FieldUsage | SymbolType::FieldDeclaration => {
+            // Try to find as a field first, but don't fail if field query fails
+            if let Some(query_text) = get_declaration_query_for_symbol_type(&symbol_type) {
+                if let Some(candidates) =
+                    find_definition_candidates(tree, source, &symbol_name, query_text)
+                {
+                    if let Some(field_match) = candidates.into_iter().next() {
+                        return Some(field_match);
+                    }
+                }
+            }
+
+            // If not found as field, try as local variable (might be misclassified)
+            let variable_candidates =
+                find_variable_declarations_in_scope(tree, source, usage_node, &symbol_name);
+
+            if !variable_candidates.is_empty() {
+                // Find the best match using scope distance
+                if let Some(best_match) = find_closest_declaration(usage_node, &variable_candidates)
+                {
+                    return Some(best_match);
+                }
+            }
+
+            // If still not found, return None
+            None
         }
-        
+
         _ => {
             // For other symbol types, use the general candidate finding approach
             let query_text = get_declaration_query_for_symbol_type(&symbol_type)?;
@@ -92,7 +112,7 @@ fn find_variable_declarations_in_scope<'a>(
     symbol_name: &str,
 ) -> Vec<Node<'a>> {
     let mut candidates = Vec::new();
-    
+
     // 1. Check method parameters first (highest priority)
     if let Some(method) = find_containing_method(usage_node) {
         let param_query = r#"(formal_parameter (identifier) @name)"#;
@@ -111,18 +131,21 @@ fn find_variable_declarations_in_scope<'a>(
                 });
         }
     }
-    
+
     // 2. Check local variable declarations in accessible scopes
     let mut current_node = Some(*usage_node);
     while let Some(node) = current_node {
         // Check if this node is a block or method body
-        if matches!(node.kind(), "block" | "method_declaration" | "constructor_declaration") {
+        if matches!(
+            node.kind(),
+            "block" | "method_declaration" | "constructor_declaration"
+        ) {
             find_local_variables_in_block(&node, source, symbol_name, usage_node, &mut candidates);
         }
-        
+
         current_node = node.parent();
     }
-    
+
     candidates
 }
 
@@ -137,7 +160,7 @@ fn find_local_variables_in_block<'a>(
     let var_query = r#"(local_variable_declaration 
                         declarator: (variable_declarator 
                             name: (identifier) @name))"#;
-    
+
     if let Ok(query) = get_or_create_query(var_query) {
         let mut cursor = QueryCursor::new();
         cursor
@@ -165,26 +188,22 @@ fn find_closest_declaration<'a>(
     if candidates.is_empty() {
         return None;
     }
-    
+
     // For now, return the last declaration (closest in scope)
     // TODO: Implement proper scope distance calculation
     candidates.last().copied()
 }
 
 /// Try to find symbol as a field declaration
-fn find_as_field<'a>(
-    tree: &'a Tree,
-    source: &str,
-    symbol_name: &str,
-) -> Option<Node<'a>> {
+fn find_as_field<'a>(tree: &'a Tree, source: &str, symbol_name: &str) -> Option<Node<'a>> {
     let field_query = r#"(field_declaration 
                           declarator: (variable_declarator 
                               name: (identifier) @name))"#;
-    
+
     if let Ok(query) = get_or_create_query(field_query) {
         let mut cursor = QueryCursor::new();
         let mut result = None;
-        
+
         cursor
             .matches(&query, tree.root_node(), source.as_bytes())
             .for_each(|m| {
@@ -196,7 +215,7 @@ fn find_as_field<'a>(
                     }
                 }
             });
-        
+
         result
     } else {
         None
@@ -207,7 +226,10 @@ fn find_as_field<'a>(
 fn find_containing_method<'a>(node: &Node<'a>) -> Option<Node<'a>> {
     let mut current = node.parent();
     while let Some(parent) = current {
-        if matches!(parent.kind(), "method_declaration" | "constructor_declaration") {
+        if matches!(
+            parent.kind(),
+            "method_declaration" | "constructor_declaration"
+        ) {
             return Some(parent);
         }
         current = parent.parent();
@@ -217,43 +239,225 @@ fn find_containing_method<'a>(node: &Node<'a>) -> Option<Node<'a>> {
 
 /// Find the best method match for method calls
 /// This handles method overloading by considering parameter types and count
+/// Prioritizes methods in the same class before searching globally
+#[tracing::instrument(skip_all)]
 fn find_best_method_match<'a>(
     tree: &'a Tree,
     source: &str,
     usage_node: &Node<'a>,
     method_name: &str,
 ) -> Option<Node<'a>> {
-    // Find all method declarations with the same name
+    // Extract call signature from the method invocation context
+    if let Some(call_signature) = extract_call_signature_from_context(usage_node, source) {
+        // First, try to find methods with signature matching in the same class
+        if let Some(same_class_method) = find_method_in_same_class_with_signature(
+            usage_node,
+            source,
+            method_name,
+            &call_signature,
+        ) {
+            debug!("Found same-class method, returning: kind={}, start_byte={}", 
+                   same_class_method.kind(), same_class_method.start_byte());
+            return Some(same_class_method);
+        }
+        
+        debug!("No same-class method found, trying global search");
+
+        // If not found in the same class, search globally with signature matching
+        if let Some(global_method) =
+            find_method_with_signature(tree, source, method_name, &call_signature)
+        {
+            // Convert from name node to method_declaration node
+            let mut parent = global_method.parent();
+            while let Some(p) = parent {
+                if p.kind() == "method_declaration" {
+                    return Some(p);
+                }
+                parent = p.parent();
+            }
+        }
+    }
+
+    // Fallback: try without signature matching (same class first)
+    if let Some(same_class_method) = find_method_in_same_class(usage_node, source, method_name) {
+        return Some(same_class_method);
+    }
+
+    // Final fallback: search globally without signature
+    find_method_globally(tree, source, method_name)
+}
+
+/// Find a method declaration within the same class using signature matching
+fn find_method_in_same_class_with_signature<'a>(
+    usage_node: &Node<'a>,
+    source: &str,
+    method_name: &str,
+    call_signature: &CallSignature,
+) -> Option<Node<'a>> {
+    // Find the containing class
+    let containing_class = find_containing_class(usage_node)?;
+
+    // Search for method declarations within this class with signature matching
     let method_query = r#"(method_declaration name: (identifier) @name)"#;
-    
+
+    if let Ok(query) = get_or_create_query(method_query) {
+        let mut cursor = QueryCursor::new();
+        let mut best_match = None;
+        let mut best_score = 0;
+        let mut fallback_match = None;
+
+        cursor
+            .matches(&query, containing_class, source.as_bytes())
+            .for_each(|m| {
+                for capture in m.captures {
+                    if let Ok(capture_text) = capture.node.utf8_text(source.as_bytes()) {
+                        debug!(
+                            "capture_text: {}, capture kind: {}, parent kind: {:?}",
+                            capture_text,
+                            capture.node.kind(),
+                            capture.node.parent().map(|p| p.kind())
+                        );
+
+                        if capture_text == method_name {
+                            // CRITICAL: Verify this is actually a method declaration name, not a method call
+                            if let Some(parent) = capture.node.parent() {
+                                if parent.kind() == "method_declaration" {
+                                    // This is definitely a method declaration
+                                    debug!("Found method declaration for '{}'", method_name);
+                                    
+                                    // Keep first match as fallback
+                                    if fallback_match.is_none() {
+                                        fallback_match = Some(parent);
+                                    }
+
+                                    // Try signature matching
+                                    if let Some(method_sig) = extract_method_signature(&parent, source) {
+                                        let score = calculate_signature_match_score(
+                                            call_signature,
+                                            &method_sig,
+                                        );
+                                        debug!("Method '{}' signature score: {}", method_name, score);
+                                        if score > best_score {
+                                            best_score = score;
+                                            best_match = Some(parent);
+                                        }
+                                    }
+                                } else {
+                                    debug!("Skipping non-declaration node: parent kind = {}", parent.kind());
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+
+        // Return best signature match, or fallback if no good signature match
+        let result = if best_score > 0 {
+            debug!("Returning best_match with score {}", best_score);
+            best_match
+        } else {
+            debug!("Returning fallback_match");
+            fallback_match
+        };
+        
+        if let Some(ref node) = result {
+            debug!("Final result node kind: {}, start_byte: {}", node.kind(), node.start_byte());
+        } else {
+            debug!("No result found in same class");
+        }
+        
+        result
+    } else {
+        None
+    }
+}
+
+/// Find a method declaration within the same class as the usage node (name-only matching)
+fn find_method_in_same_class<'a>(
+    usage_node: &Node<'a>,
+    source: &str,
+    method_name: &str,
+) -> Option<Node<'a>> {
+    // Find the containing class
+    let containing_class = find_containing_class(usage_node)?;
+
+    // Search for method declarations within this class
+    let method_query = r#"(method_declaration name: (identifier) @name)"#;
+
     if let Ok(query) = get_or_create_query(method_query) {
         let mut cursor = QueryCursor::new();
         let mut candidates = Vec::new();
-        
+
+        cursor
+            .matches(&query, containing_class, source.as_bytes())
+            .for_each(|m| {
+                for capture in m.captures {
+                    if let Ok(capture_text) = capture.node.utf8_text(source.as_bytes()) {
+                        if capture_text == method_name {
+                            // CRITICAL: Verify this is actually a method declaration name, not a method call
+                            if let Some(parent) = capture.node.parent() {
+                                if parent.kind() == "method_declaration" {
+                                    // This is definitely a method declaration
+                                    candidates.push(parent);
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+
+        // Return the first match in the same class
+        candidates.into_iter().next()
+    } else {
+        None
+    }
+}
+
+/// Find a method declaration globally across the entire tree
+fn find_method_globally<'a>(tree: &'a Tree, source: &str, method_name: &str) -> Option<Node<'a>> {
+    let method_query = r#"(method_declaration name: (identifier) @name)"#;
+
+    if let Ok(query) = get_or_create_query(method_query) {
+        let mut cursor = QueryCursor::new();
+        let mut candidates = Vec::new();
+
         cursor
             .matches(&query, tree.root_node(), source.as_bytes())
             .for_each(|m| {
                 for capture in m.captures {
                     if let Ok(capture_text) = capture.node.utf8_text(source.as_bytes()) {
                         if capture_text == method_name {
-                            // Find the parent method_declaration node
-                            let mut parent = capture.node.parent();
-                            while let Some(p) = parent {
-                                if p.kind() == "method_declaration" {
-                                    candidates.push(p);
-                                    break;
+                            // CRITICAL: Verify this is actually a method declaration name, not a method call
+                            if let Some(parent) = capture.node.parent() {
+                                if parent.kind() == "method_declaration" {
+                                    // This is definitely a method declaration
+                                    candidates.push(parent);
                                 }
-                                parent = p.parent();
                             }
                         }
                     }
                 }
             });
-        
-        // For now, return the first match
-        // TODO: Implement proper method overloading resolution based on parameter types
+
+        // Return the first match globally
         candidates.into_iter().next()
     } else {
         None
     }
 }
+
+/// Find the containing class for a given node
+fn find_containing_class<'a>(node: &Node<'a>) -> Option<Node<'a>> {
+    let mut current = node.parent();
+    while let Some(parent) = current {
+        if matches!(
+            parent.kind(),
+            "class_declaration" | "enum_declaration" | "interface_declaration"
+        ) {
+            return Some(parent);
+        }
+        current = parent.parent();
+    }
+    None
+}
+

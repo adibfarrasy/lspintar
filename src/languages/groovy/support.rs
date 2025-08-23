@@ -12,9 +12,9 @@ use crate::core::{
     symbols::SymbolType,
     utils::{uri_to_path, find_project_root, path_to_file_uri},
     definition::queries::QueryProvider,
-    cross_language::type_bridge::CrossLanguageTypeInfo,
-    registry::LanguageRegistry,
 };
+use crate::languages::groovy::definition::method_resolution::extract_call_signature_from_context;
+use crate::languages::groovy::definition::utils::{extract_instance_method_context, extract_static_method_context, get_wildcard_imports_from_source, prepare_symbol_lookup_key_with_wildcard_support, resolve_variable_type, search_definition_in_project, search_static_method_definition_in_project};
 use crate::languages::traits::LanguageSupport;
 
 use super::definition::external::find_external;
@@ -438,8 +438,7 @@ impl LanguageSupport for GroovySupport {
         usage_node: &Node,
     ) -> Result<Location> {
         // Check if this is a static method call pattern FIRST - before symbol type determination
-        let usage_text = usage_node.utf8_text(source.as_bytes()).unwrap_or("");
-        if let Some((class_name, method_name)) = super::definition::utils::extract_static_method_context(usage_node, source) {
+        if let Some((class_name, method_name)) = extract_static_method_context(usage_node, source) {
             // For static method calls, we need to resolve the class first, then find the method
             if let Some(location) = self.find_static_method_definition(tree, source, file_uri, usage_node, &class_name, &method_name, dependency_cache.clone()) {
                 return Ok(location);
@@ -447,7 +446,7 @@ impl LanguageSupport for GroovySupport {
         }
 
         // Check if this is an instance method call pattern (do this EARLY, before fast-path)
-        let instance_context = super::definition::utils::extract_instance_method_context(usage_node, source);
+        let instance_context = extract_instance_method_context(usage_node, source);
         if let Some((variable_name, method_name)) = instance_context {
             // For instance method calls, we need to resolve the variable type first, then find the method
             if let Some(location) = self.find_instance_method_definition(tree, source, file_uri, usage_node, &variable_name, &method_name, dependency_cache.clone()) {
@@ -475,8 +474,20 @@ impl LanguageSupport for GroovySupport {
                 // they're likely in the same project - skip expensive workspace/external search
                 if symbol_type == SymbolType::MethodCall {
                     if let Some(project_location) = self.find_in_project(source, file_uri, usage_node, dependency_cache.clone()) {
-                        if let Some(final_location) = self.set_start_position(source, usage_node, &project_location.uri.to_string()) {
-                            return Ok(final_location);
+                        // If the definition is in the same file, don't call set_start_position 
+                        // as it may find the wrong identifier with the same name
+                        if project_location.uri.to_string() == file_uri {
+                            return Ok(project_location);
+                        } else {
+                            let uri_string = project_location.uri.to_string();
+                            // Skip set_start_position for builtin sources as they are already correctly positioned
+                            if uri_string.contains("lspintar_builtin_sources") {
+                                return Ok(project_location);
+                            } else {
+                                if let Some(final_location) = self.set_start_position(source, usage_node, &uri_string) {
+                                    return Ok(final_location);
+                                }
+                            }
                         }
                     }
                 }
@@ -494,28 +505,13 @@ impl LanguageSupport for GroovySupport {
             .ok_or_else(|| anyhow::anyhow!("Definition not found"))
     }
 
-    fn extract_type_info(&self, _tree: &Tree, _source: &str, _node: &Node) -> Option<CrossLanguageTypeInfo> {
-        // TODO: Implement type info extraction for Groovy
-        None
-    }
-
-    fn find_cross_language_definition(
-        &self,
-        _symbol: &str,
-        _target_language: &str,
-        _registry: &LanguageRegistry,
-        _dependency_cache: Arc<DependencyCache>,
-    ) -> Option<Location> {
-        // TODO: Implement cross-language definition finding for Groovy
-        None
-    }
 
 }
 
 impl GroovySupport {
     /// Check if an identifier is an imported class name
     fn is_imported_class(&self, class_name: &str, source: &str) -> bool {
-        // Check for specific import: import com.example.ObjectTransferUtil
+        // Check for specific import
         if self.has_specific_import(class_name, source) {
             return true;
         }
@@ -579,7 +575,7 @@ impl GroovySupport {
     fn has_wildcard_import_for_class(&self, class_name: &str, source: &str) -> bool {
         // For now, we'll be conservative and assume uppercase class names in wildcard imports are likely classes
         // This could be enhanced by checking against the symbol index
-        if let Some(wildcard_packages) = super::definition::utils::get_wildcard_imports_from_source(source) {
+        if let Some(wildcard_packages) = get_wildcard_imports_from_source(source) {
             // If there are wildcard imports and this looks like a class name (uppercase), assume it could be imported
             return !wildcard_packages.is_empty() && 
                    class_name.chars().next().map_or(false, |c| c.is_uppercase());
@@ -587,7 +583,7 @@ impl GroovySupport {
         false
     }
 
-    /// Specialized resolution for static method calls like ObjectTransferUtil.transferObject()
+    /// Specialized resolution for static method calls
     fn find_static_method_definition(
         &self,
         tree: &Tree,
@@ -609,13 +605,13 @@ impl GroovySupport {
         let class_node = class_node?;
         
         // Extract call signature for method matching
-        let call_signature = super::definition::method_resolution::extract_call_signature_from_context(usage_node, source);
+        let call_signature = extract_call_signature_from_context(usage_node, source);
         
         // Try to resolve the class through import resolution first, then normal resolution chain
         debug!("find_static_method_definition: trying to resolve class '{}'", class_name);
         
         // First try to resolve through imports using the enhanced lookup
-        let class_location = if let Some((project_root, fqn)) = super::definition::utils::prepare_symbol_lookup_key_with_wildcard_support(
+        let class_location = if let Some((project_root, fqn)) = prepare_symbol_lookup_key_with_wildcard_support(
             &class_node, source, file_uri, None, &dependency_cache
         ) {
             debug!("find_static_method_definition: found import resolution for class '{}' -> '{}'", class_name, fqn);
@@ -702,7 +698,7 @@ impl GroovySupport {
         // Now search for the method in the resolved class file
         let method_location = if let Some(call_sig) = call_signature {
             debug!("find_static_method_definition: searching for method '{}' with signature in '{}'", method_name, class_location.uri);
-            super::definition::utils::search_static_method_definition_in_project(
+            search_static_method_definition_in_project(
                 file_uri,
                 source,
                 usage_node,
@@ -712,7 +708,7 @@ impl GroovySupport {
         } else {
             debug!("find_static_method_definition: searching for method '{}' without signature in '{}'", method_name, class_location.uri);
             // Fallback to regular method search
-            super::definition::utils::search_definition_in_project(
+            search_definition_in_project(
                 file_uri,
                 source,
                 usage_node,
@@ -733,7 +729,6 @@ impl GroovySupport {
     /// Create a temporary node for class name resolution
     fn create_temporary_class_node<'a>(&self, tree: &'a Tree, source: &str, class_name: &str) -> Option<Node<'a>> {
         // This is a workaround - we need to find an actual node in the tree that represents the class name
-        // In a static method call like ObjectTransferUtil.transferObject(), we can find the ObjectTransferUtil node
         let query_text = r#"
             (method_invocation 
               object: (identifier) @class_name)
@@ -773,7 +768,7 @@ impl GroovySupport {
         
         // First, resolve the variable to find its type
         debug!("find_instance_method_definition: resolving variable type for '{}'", variable_name);
-        let variable_type = super::definition::utils::resolve_variable_type(variable_name, tree, source, usage_node);
+        let variable_type = resolve_variable_type(variable_name, tree, source, usage_node);
         if variable_type.is_none() {
             debug!("find_instance_method_definition: failed to resolve variable type for '{}'", variable_name);
             return None;
@@ -782,7 +777,7 @@ impl GroovySupport {
         debug!("find_instance_method_definition: resolved variable '{}' to type '{}'", variable_name, variable_type);
         
         // Extract call signature for method matching
-        let call_signature = super::definition::method_resolution::extract_call_signature_from_context(usage_node, source);
+        let call_signature = extract_call_signature_from_context(usage_node, source);
         debug!("find_instance_method_definition: extracted call signature: {:?}", call_signature.is_some());
         
         // Create a simple temporary node for the class name and use existing resolution chain
@@ -801,7 +796,7 @@ impl GroovySupport {
         
         // Try regular method search first (more permissive)
         debug!("find_instance_method_definition: trying regular method search first");
-        let result = super::definition::utils::search_definition_in_project(
+        let result = search_definition_in_project(
             file_uri,
             source,
             usage_node,
@@ -812,7 +807,7 @@ impl GroovySupport {
         // If that fails and we have a signature, try signature-based search as fallback
         let result = if result.is_none() && call_signature.is_some() {
             debug!("find_instance_method_definition: regular search failed, trying signature-based method search");
-            super::definition::utils::search_static_method_definition_in_project(
+            search_static_method_definition_in_project(
                 file_uri,
                 source,
                 usage_node,
@@ -883,7 +878,7 @@ impl GroovySupport {
         if let Some(mock_node) = self.find_identifier_node_in_tree(tree, source, class_name) {
             debug!("resolve_class_through_standard_chain: found identifier node for '{}'", class_name);
             // Use the existing resolution utilities
-            if let Some((_, fqn)) = super::definition::utils::prepare_symbol_lookup_key_with_wildcard_support(
+            if let Some((_, fqn)) = prepare_symbol_lookup_key_with_wildcard_support(
                 &mock_node, source, file_uri, Some(project_root.clone()), &dependency_cache
             ) {
                 debug!("resolve_class_through_standard_chain: resolved '{}' to FQN '{}'", class_name, fqn);
@@ -972,24 +967,72 @@ impl GroovySupport {
         // For simple symbols, try project first (most common case)
         if symbol_name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
             if let Some(location) = self.find_in_project(source, file_uri, usage_node, dependency_cache.clone()) {
-                return self.set_start_position(source, usage_node, &location.uri.to_string());
+                // If the definition is in the same file, don't call set_start_position 
+                // as it may find the wrong identifier with the same name
+                if location.uri.to_string() == file_uri {
+                    return Some(location);
+                } else {
+                    let uri_string = location.uri.to_string();
+                    // Skip set_start_position for builtin sources as they are already correctly positioned
+                    if uri_string.contains("lspintar_builtin_sources") {
+                        return Some(location);
+                    } else {
+                        return self.set_start_position(source, usage_node, &uri_string);
+                    }
+                }
             }
         }
         
         // Strategy 2: Sequential I/O operations for workspace and external (non-parallel to avoid race conditions)
         // Try workspace first
         if let Some(location) = self.find_in_workspace(source, file_uri, usage_node, dependency_cache.clone()) {
-            return self.set_start_position(source, usage_node, &location.uri.to_string());
+            // If the definition is in the same file, don't call set_start_position 
+            // as it may find the wrong identifier with the same name
+            if location.uri.to_string() == file_uri {
+                return Some(location);
+            } else {
+                let uri_string = location.uri.to_string();
+                // Skip set_start_position for builtin sources as they are already correctly positioned
+                if uri_string.contains("lspintar_builtin_sources") {
+                    return Some(location);
+                } else {
+                    return self.set_start_position(source, usage_node, &uri_string);
+                }
+            }
         }
         
         // Then try external
         if let Some(location) = self.find_external(source, file_uri, usage_node, dependency_cache.clone()) {
-            return self.set_start_position(source, usage_node, &location.uri.to_string());
+            // If the definition is in the same file, don't call set_start_position 
+            // as it may find the wrong identifier with the same name
+            if location.uri.to_string() == file_uri {
+                return Some(location);
+            } else {
+                let uri_string = location.uri.to_string();
+                // Skip set_start_position for builtin sources as they are already correctly positioned
+                if uri_string.contains("lspintar_builtin_sources") {
+                    return Some(location);
+                } else {
+                    return self.set_start_position(source, usage_node, &uri_string);
+                }
+            }
         }
         
         // Strategy 3: Final fallback with project search if not done above
         if let Some(location) = self.find_in_project(source, file_uri, usage_node, dependency_cache) {
-            return self.set_start_position(source, usage_node, &location.uri.to_string());
+            // If the definition is in the same file, don't call set_start_position 
+            // as it may find the wrong identifier with the same name
+            if location.uri.to_string() == file_uri {
+                return Some(location);
+            } else {
+                let uri_string = location.uri.to_string();
+                // Skip set_start_position for builtin sources as they are already correctly positioned
+                if uri_string.contains("lspintar_builtin_sources") {
+                    return Some(location);
+                } else {
+                    return self.set_start_position(source, usage_node, &uri_string);
+                }
+            }
         }
         
         None

@@ -2,7 +2,6 @@ use std::{path::PathBuf, sync::Arc};
 
 use anyhow::Context;
 use tower_lsp::lsp_types::Location;
-use tracing::debug;
 use tree_sitter::Node;
 
 use crate::{
@@ -59,22 +58,16 @@ fn find_project_external(
     // Try to resolve the symbol through imports (including wildcard imports)
     let resolved_symbol = if let Some((_, fully_qualified_name)) = 
         prepare_symbol_lookup_key_with_wildcard_support(usage_node, source, file_uri, Some(current_project.clone()), &dependency_cache) {
-        debug!("Symbol {} resolved to fully qualified name: {}", symbol_name, fully_qualified_name);
         // Use the full qualified name for external lookup (not just the class name)
         fully_qualified_name
     } else {
-        debug!("Symbol {} could not be resolved to fully qualified name, using symbol name", symbol_name);
         symbol_name.clone()
     };
 
     let project_key = (current_project.clone(), resolved_symbol.clone());
-    debug!("Looking for external dependency with key: {:?}", project_key);
     
     if let Some(external_info) = dependency_cache.project_external_infos.get(&project_key) {
-        debug!("Found external dependency for key: {:?}", project_key);
         return search_external_definition_and_convert(&symbol_name, external_info.value().clone());
-    } else {
-        debug!("External dependency not found for key: {:?}", project_key);
     }
     if let Some(external_info) = dependency_cache.builtin_infos.get(&resolved_symbol) {
         return search_external_definition_and_convert(&symbol_name, external_info.value().clone());

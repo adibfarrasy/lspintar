@@ -79,13 +79,16 @@ pub fn extract_zip_file_to_temp(source_info: &SourceFileInfo) -> Option<()> {
 
 /// Gets the URI for a source file, handling both direct files and ZIP/JAR extraction
 pub fn get_uri(external_info: &SourceFileInfo) -> Option<String> {
-    if let Some(_) = &external_info.zip_internal_path {
+    if let Some(zip_internal_path) = &external_info.zip_internal_path {
         let temp_dir = dependency_temp_dir(external_info.dependency.clone());
-        if !temp_dir.exists() {
+        let target_file = temp_dir.join(zip_internal_path);
+        
+        // Always ensure the file exists - extract if directory doesn't exist or if specific file is missing
+        if !temp_dir.exists() || !target_file.exists() {
             extract_zip_file_to_temp(external_info);
         }
 
-        path_to_file_uri(&temp_dir.join(external_info.zip_internal_path.clone().unwrap()))
+        path_to_file_uri(&target_file)
     } else {
         path_to_file_uri(&external_info.source_path)
     }

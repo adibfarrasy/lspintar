@@ -79,8 +79,28 @@ impl BuiltinResolver {
                 let file_path = entry.path();
 
                 if let Some(class_name) = file_path.file_stem().and_then(|s| s.to_str()) {
+                    // For regular files, try to derive package from path structure
+                    // This is a best-effort approach
+                    let qualified_name = if let Some(source_path_str) = source_path.to_str() {
+                        if let Some(file_path_str) = file_path.to_str() {
+                            if let Some(relative_path) = file_path_str.strip_prefix(source_path_str) {
+                                relative_path
+                                    .trim_start_matches('/')
+                                    .trim_end_matches(".java")
+                                    .trim_end_matches(".groovy")
+                                    .replace('/', ".")
+                            } else {
+                                class_name.to_string()
+                            }
+                        } else {
+                            class_name.to_string()
+                        }
+                    } else {
+                        class_name.to_string()
+                    };
+                    
                     parse_and_cache_builtin(
-                        class_name,
+                        &qualified_name,
                         file_path.to_path_buf(),
                         None,
                         None,
@@ -134,15 +154,14 @@ impl BuiltinResolver {
 
                     let handle = thread::spawn(move || -> Result<()> {
                         for file_name in chunk {
-                            let class_name = file_name
-                                .split('/')
-                                .last()
-                                .unwrap()
+                            // Convert file path to fully qualified name
+                            let package_path = file_name
                                 .trim_end_matches(".java")
-                                .trim_end_matches(".groovy");
-
+                                .trim_end_matches(".groovy")
+                                .replace('/', ".");
+                            
                             parse_and_cache_builtin(
-                                class_name,
+                                &package_path,
                                 zip_path.clone(),
                                 Some(file_name.clone()),
                                 None,

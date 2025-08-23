@@ -265,9 +265,11 @@ pub fn prepare_symbol_lookup_key_with_wildcard_support(
                 "Java utils: Trying explicit import key: ({:?}, '{}')",
                 project_root, import
             );
+            
             // Check both local symbols and external dependencies  
             if dependency_cache.symbol_index.contains_key(&explicit_key)
-                || dependency_cache.project_external_infos.contains_key(&explicit_key) {
+                || dependency_cache.project_external_infos.contains_key(&explicit_key)
+                || dependency_cache.builtin_infos.contains_key(import) {
                 debug!("Java utils: Found explicit import match!");
                 debug!("Java utils: prepare_symbol_lookup_key_with_wildcard_support returning (explicit): {:?}", explicit_key);
                 return Some(explicit_key);
@@ -292,7 +294,8 @@ pub fn prepare_symbol_lookup_key_with_wildcard_support(
         );
         // Check both local symbols and external dependencies
         if dependency_cache.symbol_index.contains_key(&wildcard_key)
-            || dependency_cache.project_external_infos.contains_key(&wildcard_key) {
+            || dependency_cache.project_external_infos.contains_key(&wildcard_key)
+            || dependency_cache.builtin_infos.contains_key(&wildcard_key.1) {
             debug!("Java utils: Found wildcard match!");
             return Some(wildcard_key);
         }
@@ -310,7 +313,8 @@ pub fn prepare_symbol_lookup_key_with_wildcard_support(
         );
         // Check both local symbols and external dependencies
         if dependency_cache.symbol_index.contains_key(&same_package_key)
-            || dependency_cache.project_external_infos.contains_key(&same_package_key) {
+            || dependency_cache.project_external_infos.contains_key(&same_package_key)
+            || dependency_cache.builtin_infos.contains_key(&same_package_key.1) {
             debug!("Java utils: Found same package match!");
             return Some(same_package_key);
         }
@@ -324,7 +328,8 @@ pub fn prepare_symbol_lookup_key_with_wildcard_support(
     );
     // Check both local symbols and external dependencies
     if dependency_cache.symbol_index.contains_key(&java_lang_key)
-        || dependency_cache.project_external_infos.contains_key(&java_lang_key) {
+        || dependency_cache.project_external_infos.contains_key(&java_lang_key)
+        || dependency_cache.builtin_infos.contains_key(&java_lang_key.1) {
         debug!("Java utils: Found java.lang match!");
         return Some(java_lang_key);
     }

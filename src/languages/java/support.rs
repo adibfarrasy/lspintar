@@ -2,23 +2,15 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
 use tower_lsp::lsp_types::{Diagnostic, Hover, Location, Position};
-use tree_sitter::{Node, Parser, Tree, Query, QueryCursor, StreamingIterator};
 use tracing::{info, warn};
+use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator, Tree};
 
 use crate::core::{
-    dependency_cache::DependencyCache,
-    symbols::SymbolType,
-    definition::queries::QueryProvider,
-    cross_language::type_bridge::CrossLanguageTypeInfo,
-    registry::LanguageRegistry,
+    cross_language::type_bridge::CrossLanguageTypeInfo, definition::queries::QueryProvider,
+    dependency_cache::DependencyCache, registry::LanguageRegistry, symbols::SymbolType,
 };
 
-use super::definition::{
-    local,
-    project,
-    workspace,
-    external,
-};
+use super::definition::{external, local, project, workspace};
 use crate::languages::traits::LanguageSupport;
 
 use super::diagnostics::collect_syntax_errors;
@@ -57,21 +49,15 @@ impl QueryProvider for JavaSupport {
     }
 
     fn interface_declaration_queries(&self) -> &[&'static str] {
-        &[
-            r#"(interface_declaration) @interface"#,
-        ]
+        &[r#"(interface_declaration) @interface"#]
     }
 
     fn parameter_queries(&self) -> &[&'static str] {
-        &[
-            r#"(formal_parameter (identifier) @param)"#,
-        ]
+        &[r#"(formal_parameter (identifier) @param)"#]
     }
 
     fn field_declaration_queries(&self) -> &[&'static str] {
-        &[
-            r#"(field_declaration) @field"#,
-        ]
+        &[r#"(field_declaration) @field"#]
     }
 
     fn symbol_type_detection_query(&self) -> &'static str {
@@ -93,6 +79,8 @@ impl QueryProvider for JavaSupport {
         ; USAGES
         (method_invocation
           name: (identifier) @method_call)
+        (method_reference
+          (identifier) @method_reference)
         (field_access
           field: (identifier) @field_usage)
         (identifier) @variable_usage
@@ -100,15 +88,11 @@ impl QueryProvider for JavaSupport {
     }
 
     fn import_queries(&self) -> &[&'static str] {
-        &[
-            r#"(import_declaration) @import"#,
-        ]
+        &[r#"(import_declaration) @import"#]
     }
 
     fn package_queries(&self) -> &[&'static str] {
-        &[
-            r#"(package_declaration) @package"#,
-        ]
+        &[r#"(package_declaration) @package"#]
     }
 }
 
@@ -143,39 +127,71 @@ impl LanguageSupport for JavaSupport {
         uri: &str,
         dependency_cache: Arc<DependencyCache>,
     ) -> Result<Location> {
-        info!("Java find_definition called for position {:?} in {}", position, uri);
-        
+        info!(
+            "Java find_definition called for position {:?} in {}",
+            position, uri
+        );
+
         // First try to find the identifier at the given position
-        info!("Java: Looking for identifier at line {}, char {} in {} bytes of source", position.line, position.character, source.len());
+        info!(
+            "Java: Looking for identifier at line {}, char {} in {} bytes of source",
+            position.line,
+            position.character,
+            source.len()
+        );
         if let Some(identifier_node) = find_identifier_at_position(tree, source, position) {
             let identifier_text = identifier_node.utf8_text(source.as_bytes()).unwrap_or("?");
-            info!("Java: Found identifier '{}' at position {:?}", identifier_text, position);
-            
+            info!(
+                "Java: Found identifier '{}' at position {:?}",
+                identifier_text, position
+            );
+
             // Try to determine symbol type
             match self.determine_symbol_type_from_context(tree, &identifier_node, source) {
                 Ok(symbol_type) => {
-                    info!("Java: Symbol '{}' has type {:?}", identifier_text, symbol_type);
-                    
+                    info!(
+                        "Java: Symbol '{}' has type {:?}",
+                        identifier_text, symbol_type
+                    );
+
                     // Use the definition chain to find the definition
-                    let result = self.find_definition_chain(tree, source, dependency_cache, uri, &identifier_node);
+                    let result = self.find_definition_chain(
+                        tree,
+                        source,
+                        dependency_cache,
+                        uri,
+                        &identifier_node,
+                    );
                     match &result {
-                        Ok(location) => info!("Java: Found definition for '{}' at {:?}", identifier_text, location),
-                        Err(e) => warn!("Java: Failed to find definition for '{}': {:?}", identifier_text, e),
+                        Ok(location) => info!(
+                            "Java: Found definition for '{}' at {:?}",
+                            identifier_text, location
+                        ),
+                        Err(e) => warn!(
+                            "Java: Failed to find definition for '{}': {:?}",
+                            identifier_text, e
+                        ),
                     }
                     result
                 }
                 Err(e) => {
-                    warn!("Java: Failed to determine symbol type for '{}': {:?}", identifier_text, e);
+                    warn!(
+                        "Java: Failed to determine symbol type for '{}': {:?}",
+                        identifier_text, e
+                    );
                     Err(e)
                 }
             }
         } else {
-            warn!("Java: No identifier found at position {:?} in {}", position, uri);
-            
+            warn!(
+                "Java: No identifier found at position {:?} in {}",
+                position, uri
+            );
+
             // Check if this file is even in our symbol index
             let file_path = uri.strip_prefix("file://").unwrap_or(uri);
             warn!("Java: File {} may not be indexed yet", file_path);
-            
+
             let root_node = tree.root_node();
             self.find_definition_chain(tree, source, dependency_cache, uri, &root_node)
         }
@@ -279,6 +295,10 @@ impl LanguageSupport for JavaSupport {
         ; Type identifiers
         (type_identifier) @type_name
 
+        ; Method references (Java 8+ lambda syntax)
+        (method_reference
+          (identifier) @method_reference)
+
         ; Imports
         (import_declaration
           (scoped_identifier) @import_name) 
@@ -306,7 +326,7 @@ impl LanguageSupport for JavaSupport {
                     let capture_text = capture.node.utf8_text(source.as_bytes()).unwrap();
                     let capture_range = capture.node.range();
                     let node_range = node.range();
-                    
+
                     if capture_text == node_text && capture_range == node_range {
                         let capture_name = query.capture_names()[capture.index as usize];
                         let symbol = match capture_name {
@@ -322,7 +342,11 @@ impl LanguageSupport for JavaSupport {
 
                             "method_object" => {
                                 // Check if this is a class name (uppercase) or variable (lowercase)
-                                if capture_text.chars().next().map_or(false, |c| c.is_uppercase()) {
+                                if capture_text
+                                    .chars()
+                                    .next()
+                                    .map_or(false, |c| c.is_uppercase())
+                                {
                                     SymbolType::Type
                                 } else {
                                     SymbolType::VariableUsage
@@ -331,6 +355,7 @@ impl LanguageSupport for JavaSupport {
                             "method_name" => SymbolType::MethodCall,
                             "simple_method_name" => SymbolType::MethodCall,
                             "method_usage" => SymbolType::MethodCall,
+                            "method_reference" => SymbolType::MethodCall,
                             "type_name" => SymbolType::Type,
                             "super_interface" => SymbolType::SuperInterface,
                             "super_class" => SymbolType::SuperClass,
@@ -351,47 +376,6 @@ impl LanguageSupport for JavaSupport {
             });
 
         result
-    }
-
-    fn extract_type_info(&self, tree: &Tree, source: &str, node: &Node) -> Option<CrossLanguageTypeInfo> {
-        // Extract basic type information for cross-language support
-        let type_name = node.utf8_text(source.as_bytes()).ok()?;
-        
-        use crate::core::cross_language::type_bridge::{TypeKind, Visibility};
-        
-        Some(CrossLanguageTypeInfo {
-            name: type_name.to_string(),
-            full_qualified_name: format!("{}.{}", 
-                extract_package_from_tree(tree, source).unwrap_or_default(), 
-                type_name),
-            language: "java".to_string(),
-            kind: if node.kind() == "interface_declaration" { 
-                TypeKind::Interface
-            } else { 
-                TypeKind::Class
-            },
-            visibility: Visibility::Public, // TODO: extract actual visibility
-            methods: vec![], // TODO: extract methods
-            fields: vec![], // TODO: extract fields
-        })
-    }
-
-    fn find_cross_language_definition(
-        &self,
-        symbol: &str,
-        target_language: &str,
-        registry: &LanguageRegistry,
-        dependency_cache: Arc<DependencyCache>,
-    ) -> Option<Location> {
-        // Basic cross-language definition finding
-        // For now, just check if we can resolve between JVM languages
-        if !self.can_resolve_cross_language(target_language) {
-            return None;
-        }
-        
-        // TODO: Implement actual cross-language resolution logic
-        // This would involve looking up symbols in the target language's symbol index
-        None
     }
 
     // Use Java-specific definition resolution algorithms
@@ -455,10 +439,28 @@ impl LanguageSupport for JavaSupport {
     ) -> Result<Location> {
         // Use the standard definition resolution chain
         self.find_local(tree, source, file_uri, usage_node)
-            .or_else(|| self.find_in_project(source, file_uri, usage_node, dependency_cache.clone()))
-            .or_else(|| self.find_in_workspace(source, file_uri, usage_node, dependency_cache.clone()))
+            .or_else(|| {
+                self.find_in_project(source, file_uri, usage_node, dependency_cache.clone())
+            })
+            .or_else(|| {
+                self.find_in_workspace(source, file_uri, usage_node, dependency_cache.clone())
+            })
             .or_else(|| self.find_external(source, file_uri, usage_node, dependency_cache.clone()))
-            .and_then(|location| self.set_start_position(source, usage_node, &location.uri.to_string()))
+            .and_then(|location| {
+                // If the definition is in the same file, don't call set_start_position
+                // as it may find the wrong identifier with the same name
+                if location.uri.to_string() == file_uri {
+                    Some(location)
+                } else {
+                    let uri_string = location.uri.to_string();
+                    // Skip set_start_position for builtin sources as they are already correctly positioned
+                    if uri_string.contains("lspintar_builtin_sources") {
+                        Some(location)
+                    } else {
+                        self.set_start_position(source, usage_node, &uri_string)
+                    }
+                }
+            })
             .ok_or_else(|| anyhow!("Definition not found"))
     }
 }
@@ -475,7 +477,7 @@ fn extract_package_from_tree(tree: &Tree, source: &str) -> Option<String> {
     let language: tree_sitter::Language = tree_sitter_java::LANGUAGE.into();
     let query = Query::new(&language, query_text).ok()?;
     let mut cursor = QueryCursor::new();
-    
+
     let mut result = None;
     cursor
         .matches(&query, tree.root_node(), source.as_bytes())
@@ -489,7 +491,7 @@ fn extract_package_from_tree(tree: &Tree, source: &str) -> Option<String> {
                     .map(String::from);
             }
         });
-    
+
     result
 }
 

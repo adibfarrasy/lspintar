@@ -5,14 +5,11 @@ use tower_lsp::lsp_types::{Diagnostic, Hover, Location, Position};
 use tree_sitter::{Node, Parser, Tree};
 
 use crate::core::{
-    dependency_cache::DependencyCache,
-    symbols::SymbolType,
-    definition::{
-        queries::QueryProvider,
-        local::find_local_generic,
-    },
     cross_language::type_bridge::CrossLanguageTypeInfo,
+    definition::{local::find_local_generic, queries::QueryProvider},
+    dependency_cache::DependencyCache,
     registry::LanguageRegistry,
+    symbols::SymbolType,
 };
 use crate::languages::traits::LanguageSupport;
 
@@ -49,21 +46,15 @@ impl QueryProvider for KotlinSupport {
     }
 
     fn interface_declaration_queries(&self) -> &[&'static str] {
-        &[
-            r#"(interface_declaration) @interface"#,
-        ]
+        &[r#"(interface_declaration) @interface"#]
     }
 
     fn parameter_queries(&self) -> &[&'static str] {
-        &[
-            r#"(value_parameter (simple_identifier) @param)"#,
-        ]
+        &[r#"(value_parameter (simple_identifier) @param)"#]
     }
 
     fn field_declaration_queries(&self) -> &[&'static str] {
-        &[
-            r#"(property_declaration) @property"#,
-        ]
+        &[r#"(property_declaration) @property"#]
     }
 
     fn symbol_type_detection_query(&self) -> &'static str {
@@ -88,15 +79,11 @@ impl QueryProvider for KotlinSupport {
     }
 
     fn import_queries(&self) -> &[&'static str] {
-        &[
-            r#"(import_header) @import"#,
-        ]
+        &[r#"(import_header) @import"#]
     }
 
     fn package_queries(&self) -> &[&'static str] {
-        &[
-            r#"(package_header) @package"#,
-        ]
+        &[r#"(package_header) @package"#]
     }
 }
 
@@ -165,22 +152,6 @@ impl LanguageSupport for KotlinSupport {
         todo!("Kotlin symbol type detection not implemented yet");
     }
 
-    fn extract_type_info(&self, _tree: &Tree, _source: &str, _node: &Node) -> Option<CrossLanguageTypeInfo> {
-        // TODO: Implement Kotlin type info extraction for cross-language support
-        todo!("Kotlin type info extraction not implemented yet");
-    }
-
-    fn find_cross_language_definition(
-        &self,
-        _symbol: &str,
-        _target_language: &str,
-        _registry: &LanguageRegistry,
-        _dependency_cache: Arc<DependencyCache>,
-    ) -> Option<Location> {
-        // TODO: Implement Kotlin cross-language definition finding
-        todo!("Kotlin cross-language definition finding not implemented yet");
-    }
-
     // Use shared generic algorithms for definition resolution
     fn find_local(
         &self,
@@ -245,10 +216,16 @@ impl LanguageSupport for KotlinSupport {
     ) -> Result<Location> {
         // Use the standard definition resolution chain
         self.find_local(tree, source, file_uri, usage_node)
-            .or_else(|| self.find_in_project(source, file_uri, usage_node, dependency_cache.clone()))
-            .or_else(|| self.find_in_workspace(source, file_uri, usage_node, dependency_cache.clone()))
+            .or_else(|| {
+                self.find_in_project(source, file_uri, usage_node, dependency_cache.clone())
+            })
+            .or_else(|| {
+                self.find_in_workspace(source, file_uri, usage_node, dependency_cache.clone())
+            })
             .or_else(|| self.find_external(source, file_uri, usage_node, dependency_cache.clone()))
-            .and_then(|location| self.set_start_position(source, usage_node, &location.uri.to_string()))
+            .and_then(|location| {
+                self.set_start_position(source, usage_node, &location.uri.to_string())
+            })
             .ok_or_else(|| anyhow!("Definition not found"))
     }
 }
@@ -258,3 +235,4 @@ impl Default for KotlinSupport {
         Self::new()
     }
 }
+

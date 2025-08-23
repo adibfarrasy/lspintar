@@ -1,7 +1,4 @@
-use std::{
-    fs::read_to_string,
-    path::PathBuf,
-};
+use std::{fs::read_to_string, path::PathBuf};
 
 use tower_lsp::lsp_types::Location;
 use tracing::debug;
@@ -12,8 +9,8 @@ use crate::{
         dependency_cache::DependencyCache,
         symbols::SymbolType,
         utils::{
-            find_external_dependency_root, find_project_root, node_to_lsp_location, uri_to_path,
-            uri_to_tree, get_language_support_for_file,
+            find_external_dependency_root, find_project_root, get_language_support_for_file,
+            node_to_lsp_location, uri_to_path, uri_to_tree,
         },
     },
     languages::LanguageSupport,
@@ -40,9 +37,9 @@ pub fn get_declaration_query_for_symbol_type(symbol_type: &SymbolType) -> Option
         SymbolType::SuperClass => Some(r#"(class_declaration name: (identifier) @name)"#),
         SymbolType::SuperInterface => Some(r#"(interface_declaration name: (identifier) @name)"#),
         SymbolType::MethodCall => Some(r#"(method_declaration name: (identifier) @name)"#),
-        SymbolType::FieldUsage => Some(
-            r#"(field_declaration declarator: (variable_declarator (identifier) @name))"#,
-        ),
+        SymbolType::FieldUsage => {
+            Some(r#"(field_declaration declarator: (variable_declarator (identifier) @name))"#)
+        }
         SymbolType::VariableUsage => Some(
             r#"
             (variable_declaration declarator: (variable_declarator (identifier) @name))
@@ -80,7 +77,10 @@ pub fn find_definition_candidates<'a>(
 
         // Early termination for single-result queries (local scope) - but not for variable declarations
         // since we need to find the declaration that comes before usage, not just any assignment
-        if !candidates.is_empty() && is_local_scope_query(query_text) && !query_text.contains("variable_declaration") {
+        if !candidates.is_empty()
+            && is_local_scope_query(query_text)
+            && !query_text.contains("variable_declaration")
+        {
             break;
         }
     }
@@ -104,11 +104,17 @@ pub fn search_definition<'a>(
     symbol_name: &str,
     symbol_type: SymbolType,
 ) -> Option<Node<'a>> {
-    debug!("Groovy search_definition: symbol_name={}, symbol_type={:?}", symbol_name, symbol_type);
+    debug!(
+        "Groovy search_definition: symbol_name={}, symbol_type={:?}",
+        symbol_name, symbol_type
+    );
     let query_text = get_declaration_query_for_symbol_type(&symbol_type)?;
     debug!("Groovy search_definition: query_text={}", query_text);
     let candidates = find_definition_candidates(tree, source, symbol_name, query_text)?;
-    debug!("Groovy search_definition: found {} candidates", candidates.len());
+    debug!(
+        "Groovy search_definition: found {} candidates",
+        candidates.len()
+    );
     candidates.into_iter().next()
 }
 
@@ -120,28 +126,40 @@ pub fn search_definition_in_project(
     other_file_uri: &str,
     language_support: &dyn LanguageSupport,
 ) -> Option<Location> {
-    debug!("Groovy search_definition_in_project: current_file_uri={}, other_file_uri={}", current_file_uri, other_file_uri);
-    
+    debug!(
+        "Groovy search_definition_in_project: current_file_uri={}, other_file_uri={}",
+        current_file_uri, other_file_uri
+    );
+
     let current_tree = uri_to_tree(current_file_uri)?;
     let symbol_name = usage_node.utf8_text(current_source.as_bytes()).ok()?;
-    debug!("Groovy search_definition_in_project: symbol_name={}", symbol_name);
-    
+    debug!(
+        "Groovy search_definition_in_project: symbol_name={}",
+        symbol_name
+    );
+
     // Get the appropriate language support for the current file (where the symbol usage is)
     let current_file_path = uri_to_path(current_file_uri)?;
     let current_language_support = get_language_support_for_file(&current_file_path)?;
     debug!("Groovy search_definition_in_project: current file language support obtained");
-    
+
     let symbol_type = current_language_support
         .determine_symbol_type_from_context(&current_tree, usage_node, current_source)
         .ok()?;
-    debug!("Groovy search_definition_in_project: symbol_type={:?}", symbol_type);
+    debug!(
+        "Groovy search_definition_in_project: symbol_type={:?}",
+        symbol_type
+    );
 
     let other_tree = uri_to_tree(other_file_uri)?;
     debug!("Groovy search_definition_in_project: other_tree obtained");
-    
+
     let other_path = uri_to_path(other_file_uri)?;
     let other_source = read_to_string(other_path).ok()?;
-    debug!("Groovy search_definition_in_project: other_source read, length={}", other_source.len());
+    debug!(
+        "Groovy search_definition_in_project: other_source read, length={}",
+        other_source.len()
+    );
 
     let definition_node = if symbol_type == SymbolType::MethodCall {
         debug!("Groovy search_definition_in_project: searching for method call");
@@ -170,7 +188,7 @@ pub fn search_definition_in_project(
     }
 }
 
-/// Enhanced method resolution for static method calls like ObjectTransferUtil.transferObject()
+/// Enhanced method resolution for static method calls
 pub fn search_static_method_definition_in_project(
     current_file_uri: &str,
     current_source: &str,
@@ -210,8 +228,12 @@ fn find_parent_method_invocation_node<'a>(node: &Node<'a>) -> Option<Node<'a>> {
 /// Detect if a method call is static and extract the class name
 pub fn extract_static_method_context(usage_node: &Node, source: &str) -> Option<(String, String)> {
     let usage_text = usage_node.utf8_text(source.as_bytes()).unwrap_or("");
-    debug!("extract_static_method_context: analyzing node '{}' of kind '{}'", usage_text, usage_node.kind());
-    
+    debug!(
+        "extract_static_method_context: analyzing node '{}' of kind '{}'",
+        usage_text,
+        usage_node.kind()
+    );
+
     let method_invocation = find_parent_method_invocation_node(usage_node);
     if method_invocation.is_none() {
         debug!("extract_static_method_context: no method_invocation parent found");
@@ -230,11 +252,17 @@ pub fn extract_static_method_context(usage_node: &Node, source: &str) -> Option<
         .ok()?
         .to_string();
 
-    debug!("extract_static_method_context: found class_name='{}', method_name='{}', usage_text='{}'", 
-           class_name, method_name, usage_text);
+    debug!(
+        "extract_static_method_context: found class_name='{}', method_name='{}', usage_text='{}'",
+        class_name, method_name, usage_text
+    );
 
     // Only return Some for actual static method calls (class name starts with uppercase)
-    if class_name.chars().next().map_or(false, |c| c.is_uppercase()) {
+    if class_name
+        .chars()
+        .next()
+        .map_or(false, |c| c.is_uppercase())
+    {
         // This looks like a static method call (ClassName.method)
         if usage_text == method_name {
             debug!("extract_static_method_context: usage_node matches method name - static method call detected");
@@ -260,8 +288,12 @@ pub fn extract_instance_method_context(
     source: &str,
 ) -> Option<(String, String)> {
     let usage_text = usage_node.utf8_text(source.as_bytes()).unwrap_or("");
-    debug!("extract_instance_method_context: analyzing node '{}' of kind '{}'", usage_text, usage_node.kind());
-    
+    debug!(
+        "extract_instance_method_context: analyzing node '{}' of kind '{}'",
+        usage_text,
+        usage_node.kind()
+    );
+
     let method_invocation = find_parent_method_invocation_node(usage_node);
     if method_invocation.is_none() {
         debug!("extract_instance_method_context: no method_invocation parent found");
@@ -294,7 +326,10 @@ pub fn extract_instance_method_context(
             None // This looks like a static method call
         }
     } else {
-        debug!("extract_instance_method_context: usage_node '{}' doesn't match method name '{}'", usage_text, method_name);
+        debug!(
+            "extract_instance_method_context: usage_node '{}' doesn't match method name '{}'",
+            usage_text, method_name
+        );
         None
     }
 }
@@ -675,7 +710,7 @@ pub fn prepare_symbol_lookup_key(
         .or_else(|| find_project_root(&current_file_path))
         .or_else(|| find_external_dependency_root(&current_file_path))?;
 
-    resolve_through_imports(&symbol_name, source, &project_root)
+    resolve_through_imports(&symbol_name, source, &project_root, dependency_cache)
         .or_else(|| resolve_same_package(&symbol_name, source, &project_root, dependency_cache))
 }
 
@@ -697,7 +732,7 @@ pub fn prepare_symbol_lookup_key_with_wildcard_support(
         .or_else(|| find_external_dependency_root(&current_file_path))?;
 
     // First try regular resolution (specific imports and same package)
-    let specific_import_result = resolve_through_imports(&symbol_name, source, &project_root);
+    let specific_import_result = resolve_through_imports(&symbol_name, source, &project_root, dependency_cache);
     if let Some(result) = &specific_import_result {
         return Some(result.clone());
     }
@@ -716,6 +751,7 @@ fn resolve_through_imports(
     symbol_name: &str,
     source: &str,
     project_root: &PathBuf,
+    dependency_cache: &DependencyCache,
 ) -> Option<(PathBuf, String)> {
     let query_text = r#"
         (import_declaration) @import_decl
@@ -745,8 +781,14 @@ fn resolve_through_imports(
 
                     // Only handle specific imports here - wildcard imports are handled in resolve_through_wildcard_imports
                     if import_text.ends_with(&format!(".{}", symbol_name)) {
-                        specific_import = Some((project_root.clone(), import_text.to_string()));
-                        return;
+                        // Check both local symbols, external dependencies, and builtin classes
+                        let explicit_key = (project_root.clone(), import_text.to_string());
+                        if dependency_cache.symbol_index.contains_key(&explicit_key)
+                            || dependency_cache.project_external_infos.contains_key(&explicit_key)
+                            || dependency_cache.builtin_infos.contains_key(import_text) {
+                            specific_import = Some(explicit_key);
+                            return;
+                        }
                     }
                 };
             }
@@ -779,6 +821,20 @@ fn resolve_through_wildcard_imports(
         if prefixes.iter().any(|prefix| fqn.starts_with(prefix)) {
             return Some((project_root.clone(), fqn));
         }
+    }
+
+    // Also check builtin classes for wildcard imports (like java.lang.* or java.util.*)
+    for package in wildcard_packages {
+        let potential_fqn = format!("{}.{}", package, symbol_name);
+        if dependency_cache.builtin_infos.contains_key(&potential_fqn) {
+            return Some((project_root.clone(), potential_fqn));
+        }
+    }
+
+    // Check java.lang.* (automatically imported)
+    let java_lang_fqn = format!("java.lang.{}", symbol_name);
+    if dependency_cache.builtin_infos.contains_key(&java_lang_fqn) {
+        return Some((project_root.clone(), java_lang_fqn));
     }
 
     None

@@ -72,6 +72,7 @@ fn find_project_external(
     } else {
         debug!("External dependency not found for key: {:?}", project_key);
     }
+    
     if let Some(source_info) = dependency_cache.builtin_infos.get(&resolved_symbol) {
         return search_external_definition_and_convert(&symbol_name, source_info.value().clone());
     }

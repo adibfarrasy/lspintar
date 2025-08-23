@@ -232,6 +232,9 @@ pub fn node_to_lsp_location(node: &Node, file_uri: &str) -> Option<Location> {
     let start_pos = node.start_position();
     let end_pos = node.end_position();
 
+    debug!("node_to_lsp_location: node kind={}, start_byte={}, start_pos=({},{}), end_pos=({},{})", 
+           node.kind(), node.start_byte(), start_pos.row, start_pos.column, end_pos.row, end_pos.column);
+
     let range = Range {
         start: Position {
             line: start_pos.row as u32,

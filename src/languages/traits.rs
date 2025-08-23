@@ -5,11 +5,8 @@ use tower_lsp::lsp_types::{Diagnostic, Hover, Location, Position};
 use tree_sitter::{Node, Parser, Tree};
 
 use crate::core::{
-    dependency_cache::DependencyCache,
-    symbols::SymbolType,
-    definition::queries::QueryProvider,
-    cross_language::type_bridge::CrossLanguageTypeInfo,
-    registry::LanguageRegistry,
+    cross_language::type_bridge::CrossLanguageTypeInfo, definition::queries::QueryProvider,
+    dependency_cache::DependencyCache, registry::LanguageRegistry, symbols::SymbolType,
 };
 
 pub trait LanguageSupport: Send + Sync + QueryProvider {
@@ -46,17 +43,6 @@ pub trait LanguageSupport: Send + Sync + QueryProvider {
         node: &Node,
         source: &str,
     ) -> Result<SymbolType>;
-
-    // Cross-language support methods
-    fn extract_type_info(&self, tree: &Tree, source: &str, node: &Node) -> Option<CrossLanguageTypeInfo>;
-
-    fn find_cross_language_definition(
-        &self,
-        symbol: &str,
-        target_language: &str,
-        registry: &LanguageRegistry,
-        dependency_cache: Arc<DependencyCache>,
-    ) -> Option<Location>;
 
     fn can_resolve_cross_language(&self, target_language: &str) -> bool {
         // Default JVM language interop rules
@@ -263,20 +249,6 @@ mod tests {
             Ok(self.symbol_type.clone())
         }
 
-        fn extract_type_info(&self, _tree: &Tree, _source: &str, _node: &Node) -> Option<CrossLanguageTypeInfo> {
-            None
-        }
-
-        fn find_cross_language_definition(
-            &self,
-            _symbol: &str,
-            _target_language: &str,
-            _registry: &LanguageRegistry,
-            _dependency_cache: Arc<DependencyCache>,
-        ) -> Option<Location> {
-            None
-        }
-
         fn find_definition_chain(
             &self,
             tree: &Tree,
@@ -287,9 +259,13 @@ mod tests {
         ) -> Result<Location> {
             self.find_local(tree, source, uri, usage_node)
                 .or_else(|| self.find_in_project(source, uri, usage_node, dependency_cache.clone()))
-                .or_else(|| self.find_in_workspace(source, uri, usage_node, dependency_cache.clone()))
+                .or_else(|| {
+                    self.find_in_workspace(source, uri, usage_node, dependency_cache.clone())
+                })
                 .or_else(|| self.find_external(source, uri, usage_node, dependency_cache.clone()))
-                .and_then(|location| self.set_start_position(source, usage_node, &location.uri.to_string()))
+                .and_then(|location| {
+                    self.set_start_position(source, usage_node, &location.uri.to_string())
+                })
                 .ok_or_else(|| anyhow::anyhow!("Definition not found"))
         }
 
@@ -364,8 +340,14 @@ mod tests {
             Location {
                 uri: Url::parse(file_uri).unwrap(),
                 range: Range {
-                    start: Position { line: 0, character: 0 },
-                    end: Position { line: 0, character: 10 },
+                    start: Position {
+                        line: 0,
+                        character: 0,
+                    },
+                    end: Position {
+                        line: 0,
+                        character: 10,
+                    },
                 },
             }
         }
@@ -431,7 +413,10 @@ mod tests {
             // Test parser creation
             let parser = test_case.language_support.create_parser();
             // Basic test that parser was created
-            assert!(parser.language().is_none(), "Parser should be created without language set");
+            assert!(
+                parser.language().is_none(),
+                "Parser should be created without language set"
+            );
         }
     }
 
@@ -483,7 +468,7 @@ mod tests {
             let mut parser = Parser::new();
             // Note: In a real test, you'd set the language, but for this mock we'll skip it
             let tree = parser.parse(source, None);
-            
+
             if let Some(tree) = tree {
                 let root_node = tree.root_node();
                 let result = test_case.language_support.find_definition_chain(
@@ -547,8 +532,8 @@ mod tests {
         ];
 
         for test_case in test_cases {
-            let language_support = MockLanguageSupport::new("test")
-                .with_symbol_type(test_case.symbol_type.clone());
+            let language_support =
+                MockLanguageSupport::new("test").with_symbol_type(test_case.symbol_type.clone());
 
             let source = "mock source";
             let mut parser = Parser::new();
@@ -556,11 +541,8 @@ mod tests {
 
             if let Some(tree) = tree {
                 let root_node = tree.root_node();
-                let result = language_support.determine_symbol_type_from_context(
-                    &tree,
-                    &root_node,
-                    source,
-                );
+                let result =
+                    language_support.determine_symbol_type_from_context(&tree, &root_node, source);
 
                 if test_case.expected_success {
                     assert!(
@@ -572,8 +554,7 @@ mod tests {
 
                     if let Ok(symbol_type) = result {
                         assert_eq!(
-                            symbol_type,
-                            test_case.symbol_type,
+                            symbol_type, test_case.symbol_type,
                             "Test '{}': symbol type mismatch",
                             test_case.name
                         );
@@ -609,8 +590,14 @@ mod tests {
         let location = Location {
             uri: Url::parse("file:///test/file.mock").unwrap(),
             range: Range {
-                start: Position { line: 0, character: 0 },
-                end: Position { line: 0, character: 10 },
+                start: Position {
+                    line: 0,
+                    character: 0,
+                },
+                end: Position {
+                    line: 0,
+                    character: 10,
+                },
             },
         };
 
@@ -627,19 +614,18 @@ mod tests {
     fn test_find_implementation() {
         let language_support = MockLanguageSupport::new("test");
         let source = "mock source";
-        let position = Position { line: 0, character: 0 };
+        let position = Position {
+            line: 0,
+            character: 0,
+        };
         let dependency_cache = Arc::new(DependencyCache::new());
 
         let mut parser = Parser::new();
         let tree = parser.parse(source, None);
 
         if let Some(tree) = tree {
-            let result = language_support.find_implementation(
-                &tree,
-                source,
-                position,
-                dependency_cache,
-            );
+            let result =
+                language_support.find_implementation(&tree, source, position, dependency_cache);
 
             assert!(result.is_ok(), "Mock implementation should succeed");
             if let Ok(locations) = result {
@@ -696,33 +682,27 @@ mod tests {
                 let root_node = tree.root_node();
 
                 let result = match test_case.method_name {
-                    "find_local" => {
-                        test_case.language_support.find_local(&tree, source, uri, &root_node)
-                    }
-                    "find_in_project" => {
-                        test_case.language_support.find_in_project(
-                            source,
-                            uri,
-                            &root_node,
-                            dependency_cache.clone(),
-                        )
-                    }
-                    "find_in_workspace" => {
-                        test_case.language_support.find_in_workspace(
-                            source,
-                            uri,
-                            &root_node,
-                            dependency_cache.clone(),
-                        )
-                    }
-                    "find_external" => {
-                        test_case.language_support.find_external(
-                            source,
-                            uri,
-                            &root_node,
-                            dependency_cache,
-                        )
-                    }
+                    "find_local" => test_case
+                        .language_support
+                        .find_local(&tree, source, uri, &root_node),
+                    "find_in_project" => test_case.language_support.find_in_project(
+                        source,
+                        uri,
+                        &root_node,
+                        dependency_cache.clone(),
+                    ),
+                    "find_in_workspace" => test_case.language_support.find_in_workspace(
+                        source,
+                        uri,
+                        &root_node,
+                        dependency_cache.clone(),
+                    ),
+                    "find_external" => test_case.language_support.find_external(
+                        source,
+                        uri,
+                        &root_node,
+                        dependency_cache,
+                    ),
                     _ => None,
                 };
 
@@ -738,3 +718,4 @@ mod tests {
         }
     }
 }
+

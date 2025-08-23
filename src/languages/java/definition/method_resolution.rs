@@ -36,17 +36,20 @@ pub fn find_method_with_signature<'a>(
                 let name_text = name_node.utf8_text(source.as_bytes()).unwrap_or("");
 
                 if name_text == method_name {
-                    // Always keep the first name match as fallback
-                    if fallback_match.is_none() {
-                        fallback_match = Some(name_node);
-                    }
-                    
+                    // CRITICAL: Only consider nodes that are actually method declaration names
                     if let Some(method_decl) = name_node.parent() {
-                        if let Some(method_sig) = extract_method_signature(&method_decl, source) {
-                            let score = calculate_signature_match_score(call_signature, &method_sig);
-                            if score > best_score {
-                                best_score = score;
-                                best_match = Some(name_node);
+                        if method_decl.kind() == "method_declaration" {
+                            // Keep first method declaration as fallback
+                            if fallback_match.is_none() {
+                                fallback_match = Some(name_node);
+                            }
+                            
+                            if let Some(method_sig) = extract_method_signature(&method_decl, source) {
+                                let score = calculate_signature_match_score(call_signature, &method_sig);
+                                if score > best_score {
+                                    best_score = score;
+                                    best_match = Some(name_node);
+                                }
                             }
                         }
                     }
@@ -96,7 +99,7 @@ fn find_parent_method_invocation<'a>(node: &Node<'a>) -> Option<Node<'a>> {
     None
 }
 
-fn extract_method_signature(method_decl: &Node, source: &str) -> Option<MethodSignature> {
+pub fn extract_method_signature(method_decl: &Node, source: &str) -> Option<MethodSignature> {
     let parameters = method_decl.child_by_field_name("parameters")?;
     
     let mut param_types = Vec::new();
@@ -124,7 +127,7 @@ fn extract_method_signature(method_decl: &Node, source: &str) -> Option<MethodSi
     })
 }
 
-fn calculate_signature_match_score(call_sig: &CallSignature, method_sig: &MethodSignature) -> u32 {
+pub fn calculate_signature_match_score(call_sig: &CallSignature, method_sig: &MethodSignature) -> u32 {
     let mut score = 0;
 
     // Perfect parameter count match gets highest score
