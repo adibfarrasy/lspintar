@@ -40,18 +40,37 @@ pub fn extract_class_signature(tree: &Tree, source: &str) -> Option<String> {
                 let text = capture.node.utf8_text(source.as_bytes()).unwrap_or("");
 
                 match capture_name {
-                    "package_name" => package_name.push_str(text),
-                    "modifiers" => modifiers.push_str(text),
-                    "class_name" => {
-                        if !class_name.is_empty() {
-                            class_name.push_str(" ");
+                    "package_name" => {
+                        if package_name.is_empty() {
+                            package_name.push_str(text);
                         }
-                        class_name.push_str("class");
-                        class_name.push_str(text);
                     }
-                    "interface_line" => interface_line = text.to_string(),
-                    "superclass_line" => superclass_line = text.to_string(),
-                    "groovydoc" => groovydoc = text.to_string(),
+                    "modifiers" => {
+                        if modifiers.is_empty() {
+                            modifiers = text.to_string();
+                        }
+                    }
+                    "class_name" => {
+                        if class_name.is_empty() {
+                            class_name.push_str("class ");
+                            class_name.push_str(text);
+                        }
+                    }
+                    "interface_line" => {
+                        if interface_line.is_empty() {
+                            interface_line = text.to_string();
+                        }
+                    }
+                    "superclass_line" => {
+                        if superclass_line.is_empty() {
+                            superclass_line = text.to_string();
+                        }
+                    }
+                    "groovydoc" => {
+                        if groovydoc.is_empty() {
+                            groovydoc = text.to_string();
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -96,14 +115,12 @@ fn format_class_signature(
 
     parts.push(class_name);
 
-    if !interface_line.is_empty() {
-        parts.push(interface_line);
-        parts.push("\n".to_string());
-    }
-
     if !superclass_line.is_empty() {
         parts.push(superclass_line);
-        parts.push("\n".to_string());
+    }
+
+    if !interface_line.is_empty() {
+        parts.push(interface_line);
     }
 
     parts.push("```".to_string());

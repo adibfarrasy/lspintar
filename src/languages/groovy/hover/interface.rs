@@ -37,17 +37,32 @@ pub fn extract_interface_signature(tree: &Tree, source: &str) -> Option<String> 
                 let text = capture.node.utf8_text(source.as_bytes()).unwrap_or("");
 
                 match capture_name {
-                    "package_name" => package_name.push_str(text),
-                    "modifiers" => modifiers.push_str(text),
-                    "interface_name" => {
-                        if !interface_name.is_empty() {
-                            interface_name.push(' ');
+                    "package_name" => {
+                        if package_name.is_empty() {
+                            package_name.push_str(text);
                         }
-                        interface_name.push_str("interface ");
-                        interface_name.push_str(text);
                     }
-                    "extends_line" => extends_line = text.to_string(),
-                    "groovydoc" => groovydoc = text.to_string(),
+                    "modifiers" => {
+                        if modifiers.is_empty() {
+                            modifiers = text.to_string();
+                        }
+                    }
+                    "interface_name" => {
+                        if interface_name.is_empty() {
+                            interface_name.push_str("interface ");
+                            interface_name.push_str(text);
+                        }
+                    }
+                    "extends_line" => {
+                        if extends_line.is_empty() {
+                            extends_line = text.to_string();
+                        }
+                    }
+                    "groovydoc" => {
+                        if groovydoc.is_empty() {
+                            groovydoc = text.to_string();
+                        }
+                    }
                     _ => {}
                 }
             }

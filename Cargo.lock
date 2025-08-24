@@ -1202,6 +1202,7 @@ dependencies = [
  "tree-sitter",
  "tree-sitter-groovy",
  "tree-sitter-java",
+ "tree-sitter-kotlin",
  "walkdir",
  "zip",
 ]
@@ -2154,6 +2155,15 @@ source = "git+https://github.com/adibfarrasy/tree-sitter-java#fe2f67e829eaa4c52e
 dependencies = [
  "cc",
  "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-kotlin"
+version = "0.3.9"
+source = "git+https://github.com/fwcd/tree-sitter-kotlin#57fb4560ba8641865bc0baa6b3f413b236112c4c"
+dependencies = [
+ "cc",
+ "tree-sitter",
 ]
 
 [[package]]

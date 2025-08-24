@@ -14,8 +14,8 @@ pub fn extract_class_signature(tree: &Tree, source: &str) -> Option<String> {
       (class_declaration
         (modifiers)? @modifiers
         name: (identifier) @class_name
-        (superclass)? @superclass_line
-        (super_interfaces)? @interface_line
+        superclass: (superclass)? @superclass_line
+        interfaces: (super_interfaces)? @interface_line
       )
     )
     "#;
@@ -33,9 +33,7 @@ pub fn extract_class_signature(tree: &Tree, source: &str) -> Option<String> {
     let mut javadoc = String::new();
 
     let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
-    
-    // Process all matches but avoid duplicate concatenation
-    let mut found_class = false;
+
     while let Some(query_match) = matches.next() {
         for capture in query_match.captures {
             let capture_name = query.capture_names()[capture.index as usize];
@@ -43,44 +41,40 @@ pub fn extract_class_signature(tree: &Tree, source: &str) -> Option<String> {
 
             match capture_name {
                 "package_name" => {
-                    debug!("extract_class_signature: Found package_name: '{}'", text);
                     if package_name.is_empty() {
                         package_name.push_str(text);
                     }
-                },
+                }
                 "modifiers" => {
-                    debug!("extract_class_signature: Found modifiers: '{}'", text);
-                    if modifiers.is_empty() && !found_class {
+                    if modifiers.is_empty() {
                         modifiers.push_str(text);
                     }
-                },
+                }
                 "class_name" => {
-                    debug!("extract_class_signature: Found class_name: '{}'", text);
-                    if class_name.is_empty() && !found_class {
+                    if class_name.is_empty() {
                         class_name.push_str(text);
-                        found_class = true;
                     }
-                },
+                }
                 "interface_line" => {
-                    debug!("extract_class_signature: Found interface_line: '{}', node_kind: '{}'", text, capture.node.kind());
-                    if interface_line.is_empty() && !found_class {
+                    if interface_line.is_empty() {
                         interface_line = text.to_string();
                     }
-                },
+                }
                 "superclass_line" => {
-                    debug!("extract_class_signature: Found superclass_line: '{}', node_kind: '{}'", text, capture.node.kind());
-                    if superclass_line.is_empty() && !found_class {
+                    if superclass_line.is_empty() {
                         superclass_line = text.to_string();
                     }
-                },
+                }
                 "javadoc" => {
-                    debug!("extract_class_signature: Found javadoc: '{}'", text);
-                    if javadoc.is_empty() && !found_class {
+                    if javadoc.is_empty() {
                         javadoc = text.to_string();
                     }
-                },
+                }
                 _ => {
-                    debug!("extract_class_signature: Unknown capture '{}': '{}'", capture_name, text);
+                    debug!(
+                        "extract_class_signature: Unknown capture '{}': '{}'",
+                        capture_name, text
+                    );
                 }
             }
         }
@@ -88,7 +82,7 @@ pub fn extract_class_signature(tree: &Tree, source: &str) -> Option<String> {
 
     debug!("extract_class_signature: Final values - package='{}', class='{}', modifiers='{}', superclass='{}', interfaces='{}'", 
            package_name, class_name, modifiers, superclass_line, interface_line);
-    
+
     format_class_signature(
         package_name,
         modifiers,
@@ -121,31 +115,31 @@ fn format_class_signature(
     parts.push("```java".to_string());
 
     let (annotation, modifier_vec) = partition_modifiers(modifiers);
-    
+
     // Add annotations
     annotation.into_iter().for_each(|a| parts.push(a));
 
     // Build the class declaration line
     let mut class_line = String::new();
-    
+
     if !modifier_vec.is_empty() {
         class_line.push_str(&modifier_vec.join(" "));
         class_line.push(' ');
     }
-    
+
     class_line.push_str("class ");
     class_line.push_str(&class_name);
-    
+
     parts.push(class_line);
 
     // Add extends clause on separate line
     if !superclass_line.is_empty() {
-        parts.push(format!("    {}", superclass_line));
+        parts.push(format!("{}", superclass_line));
     }
 
     // Add implements clause on separate line
     if !interface_line.is_empty() {
-        parts.push(format!("    {}", interface_line));
+        parts.push(format!("{}", interface_line));
     }
 
     parts.push("```".to_string());
@@ -158,3 +152,4 @@ fn format_class_signature(
 
     Some(parts.join("\n"))
 }
+

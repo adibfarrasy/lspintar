@@ -6,17 +6,18 @@ src/core/utils.rs:177: Implement Kotlin search_definition_in_project
 src/languages/java/definition/local.rs:193: Implement proper scope distance calculation
 src/languages/java/implementation.rs:124: Implement method call implementation finding
 src/languages/java/implementation.rs:136: Implement method implementation finding
-src/languages/kotlin/support.rs:96: Implement Kotlin parser setup when tree-sitter-kotlin is added
-src/languages/kotlin/support.rs:106: Implement Kotlin-specific diagnostics
-src/languages/kotlin/support.rs:118: Implement Kotlin-specific definition finding using shared algorithms
-src/languages/kotlin/support.rs:131: Implement Kotlin implementation finding
-src/languages/kotlin/support.rs:136: Implement Kotlin hover support
-src/languages/kotlin/support.rs:146: Implement Kotlin-specific symbol type detection
-src/languages/kotlin/support.rs:158: Implement Kotlin local definition finding
-src/languages/kotlin/support.rs:169: Implement Kotlin project definition finding
-src/languages/kotlin/support.rs:180: Implement Kotlin workspace definition finding
-src/languages/kotlin/support.rs:191: Implement Kotlin external definition finding
-src/languages/kotlin/support.rs:201: Implement Kotlin-specific position setting
+src/languages/kotlin/hover/interface.rs:2: Implement hover for Kotlin interface declarations
+src/languages/kotlin/hover/field.rs:2: Implement hover for Kotlin property declarations
+src/languages/kotlin/hover/mod.rs:17: Implement Kotlin hover support
+src/languages/kotlin/hover/class.rs:2: Implement hover for Kotlin class declarations
+src/languages/kotlin/hover/method.rs:2: Implement hover for Kotlin function declarations
+src/languages/kotlin/hover/utils.rs:2: Implement hover utilities for Kotlin symbols
+src/languages/kotlin/definition/project.rs:13: Implement Kotlin project-wide definition search
+src/languages/kotlin/definition/workspace.rs:13: Implement Kotlin workspace-wide definition search
+src/languages/kotlin/definition/external.rs:12: Implement Kotlin external definition search
+src/languages/kotlin/definition/method_resolution.rs:4: Implement Kotlin method signature extraction
+src/languages/kotlin/implementation.rs:14: Implement Kotlin implementation finding
+src/languages/kotlin/symbols.rs:13: Implement symbol collection when tree_sitter_kotlin is available
 src/languages/groovy/support.rs:146: replace this with more sophisticated handling
 src/languages/groovy/definition/local.rs:554: Could enhance with variable type lookup
 src/languages/groovy/definition/mod.rs:7: make this private?
