@@ -7,11 +7,11 @@ use tracing::debug;
 use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator, Tree};
 
 use crate::constants::LSP_NAME;
+use crate::core::queries::QueryProvider;
 use crate::core::{
     dependency_cache::DependencyCache,
     symbols::SymbolType,
     utils::{uri_to_path, find_project_root, path_to_file_uri},
-    definition::queries::QueryProvider,
 };
 use crate::languages::groovy::definition::method_resolution::extract_call_signature_from_context;
 use crate::languages::groovy::definition::utils::{extract_instance_method_context, extract_static_method_context, get_wildcard_imports_from_source, prepare_symbol_lookup_key_with_wildcard_support, resolve_variable_type, search_definition_in_project, search_static_method_definition_in_project};
@@ -397,7 +397,11 @@ impl LanguageSupport for GroovySupport {
         usage_node: &Node,
         dependency_cache: Arc<DependencyCache>,
     ) -> Option<Location> {
-        find_in_project(source, file_uri, usage_node, dependency_cache, self)
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(
+                find_in_project(source, file_uri, usage_node, dependency_cache, self)
+            )
+        })
     }
 
     fn find_in_workspace(
@@ -417,7 +421,11 @@ impl LanguageSupport for GroovySupport {
         usage_node: &Node,
         dependency_cache: Arc<DependencyCache>,
     ) -> Option<Location> {
-        find_external(source, file_uri, usage_node, dependency_cache)
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(
+                find_external(source, file_uri, usage_node, dependency_cache)
+            )
+        })
     }
 
     fn set_start_position(

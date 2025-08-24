@@ -3,7 +3,7 @@ pub mod project_deps;
 pub mod source_file_info;
 pub mod symbol_index;
 
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Instant};
 
 use anyhow::{Context, Result};
 use dashmap::DashMap;
@@ -18,7 +18,7 @@ use tracing::debug;
 
 use crate::{
     core::{state_manager::set_global, utils::is_project_root},
-    lsp_info,
+    lsp_info, lsp_warning,
 };
 
 use super::{
@@ -44,6 +44,9 @@ pub struct DependencyCache {
     pub project_external_infos: Arc<DashMap<(PathBuf, String), SourceFileInfo>>,
 
     pub project_metadata: Arc<DashMap<PathBuf, ProjectMetadata>>,
+
+    // Persistence layer for lazy loading
+    persistence: Arc<tokio::sync::RwLock<Option<PersistenceLayer>>>,
 }
 
 impl DependencyCache {
@@ -55,102 +58,99 @@ impl DependencyCache {
             inheritance_index: Arc::new(DashMap::new()),
             project_external_infos: Arc::new(DashMap::new()),
             project_metadata: Arc::new(DashMap::new()),
+            persistence: Arc::new(tokio::sync::RwLock::new(None)),
         }
     }
-    
-    /// Load cache from persistent storage if available and valid
-    pub async fn load_from_disk(&self, project_root: &PathBuf) -> Result<bool> {
+
+    /// Initialize persistence layer for lazy loading
+    pub async fn initialize_persistence(&self, project_root: PathBuf) -> Result<()> {
+        let persistence = PersistenceLayer::new(project_root)?;
+        let mut guard = self.persistence.write().await;
+        *guard = Some(persistence);
+        Ok(())
+    }
+
+    /// Check if cache exists and is valid, initialize persistence layer for lazy loading
+    pub async fn check_and_initialize_cache(&self, project_root: &PathBuf) -> Result<bool> {
         let persistence = match PersistenceLayer::new(project_root.clone()) {
             Ok(p) => p,
             Err(_) => return Ok(false),
         };
-        
+
         // Check if cache is stale
-        match persistence.is_git_state_stale() {
-            Ok(true) => return Ok(false),
-            Ok(false) => {},
-            Err(_) => return Ok(false),
-        }
-        
-        // Load all caches
-        match persistence.load_all_caches() {
-            Ok((symbol_index, builtin_infos, inheritance_index, project_external_infos)) => {
-                
-                // Replace current cache contents
-                self.symbol_index.clear();
-                self.class_name_index.clear();
-                self.builtin_infos.clear();
-                self.inheritance_index.clear();
-                self.project_external_infos.clear();
-                
-                // Copy loaded data and rebuild class name index
-                for entry in symbol_index.iter() {
-                    let ((project_root, fqn), file_path) = (entry.key(), entry.value());
-                    self.symbol_index.insert((project_root.clone(), fqn.clone()), file_path.clone());
-                    
-                    // Extract class name from FQN and update class name index
-                    if let Some(class_name) = fqn.split('.').last() {
-                        let class_key = (project_root.clone(), class_name.to_string());
-                        self.class_name_index.entry(class_key)
-                            .or_insert_with(Vec::new)
-                            .push(fqn.clone());
+        let is_cache_valid = match persistence.is_git_state_stale() {
+            Ok(false) => true, // Cache is not stale
+            Ok(true) => false, // Cache is stale
+            Err(_) => false,   // Error checking, assume stale
+        };
+
+        if is_cache_valid {
+            // Load project metadata eagerly as it's needed for dependency resolution
+            match persistence.load_project_metadata() {
+                Ok(project_metadata_map) => {
+                    for (project_path, metadata) in project_metadata_map {
+                        self.project_metadata.insert(project_path, metadata);
                     }
+                    lsp_info!("lspintar ready");
                 }
-                
-                for entry in builtin_infos.iter() {
-                    self.builtin_infos.insert(entry.key().clone(), entry.value().clone());
+                Err(e) => {
+                    lsp_warning!(
+                        "Failed to load project metadata during lazy initialization: {}",
+                        e
+                    );
                 }
-                
-                for entry in inheritance_index.iter() {
-                    self.inheritance_index.insert(entry.key().clone(), entry.value().clone());
-                }
-                
-                for entry in project_external_infos.iter() {
-                    self.project_external_infos.insert(entry.key().clone(), entry.value().clone());
-                }
-                
-                lsp_info!("Loaded cache from disk with {} symbols", self.symbol_index.len());
-                Ok(true)
             }
-            Err(_) => Ok(false)
+
+            // Cache is valid, initialize persistence for lazy loading
+            let mut guard = self.persistence.write().await;
+            *guard = Some(persistence);
+            drop(guard);
+
+            Ok(true)
+        } else {
+            Ok(false)
         }
     }
-    
+
     /// Save cache to persistent storage
     pub async fn save_to_disk(&self, project_root: &PathBuf) -> Result<()> {
         let persistence = PersistenceLayer::new(project_root.clone())
             .context("Failed to initialize persistence layer")?;
-        
-        
+
         persistence.store_all_caches(
             &self.symbol_index,
             &self.builtin_infos,
             &self.inheritance_index,
             &self.project_external_infos,
+            &self.project_metadata,
         )?;
-        
+
         Ok(())
     }
-    
+
     /// Invalidate cache entries for specific files
-    pub async fn invalidate_files(&self, project_root: &PathBuf, file_paths: &[PathBuf]) -> Result<()> {
+    pub async fn invalidate_files(
+        &self,
+        project_root: &PathBuf,
+        file_paths: &[PathBuf],
+    ) -> Result<()> {
         let persistence = PersistenceLayer::new(project_root.clone())
             .context("Failed to initialize persistence layer")?;
-        
+
         persistence.invalidate_files(file_paths)?;
-        
+
         // Also remove from in-memory cache
         for file_path in file_paths {
             self.symbol_index.retain(|_, v| v != file_path);
-            self.project_external_infos.retain(|_, v| &v.source_path != file_path);
+            self.project_external_infos
+                .retain(|_, v| &v.source_path != file_path);
         }
-        
+
         Ok(())
     }
 
     #[tracing::instrument(skip_all)]
     pub async fn index_external_dependency(self: Arc<Self>, current_dir: PathBuf) -> Result<()> {
-
         self.index_project_symbols(&current_dir)
             .await
             .context("Failed to index project symbols")?;
@@ -177,6 +177,7 @@ impl DependencyCache {
 
         lsp_info!("Starting workspace indexing...");
 
+        let start = Instant::now();
         self.index_project_symbols(&project_root)
             .await
             .context("Failed to index project symbols")?;
@@ -189,16 +190,20 @@ impl DependencyCache {
 
         debug!("Creating ProjectMapper for build tool: {:?}", build_tool);
         let project_mapper = project_deps::ProjectMapper::new(build_tool.clone());
-        debug!("Starting project dependencies indexing for: {:?}", project_root);
+        debug!(
+            "Starting project dependencies indexing for: {:?}",
+            project_root
+        );
         project_mapper
             .index_project_dependencies(project_root.clone(), self.clone())
             .await
             .context("Failed to index project dependencies")?;
         debug!("Project dependencies indexing completed");
 
-        lsp_info!("Indexing completed");
+        let duration = start.elapsed();
+        lsp_info!("Indexing completed in {:.2}s", duration.as_secs_f64());
         set_global("is_indexing_completed", true);
-        
+
         // Save to persistent storage
         let _ = self.save_to_disk(&project_root).await;
 
@@ -211,8 +216,7 @@ impl DependencyCache {
         let project_roots = if is_external_dependency {
             vec![current_dir.clone()]
         } else {
-            find_project_roots(current_dir)
-                .context("Failed to get project roots")?
+            find_project_roots(current_dir).context("Failed to get project roots")?
         };
 
         for project_root in project_roots {
@@ -227,7 +231,7 @@ impl DependencyCache {
             let symbol_definitions = extract_symbol_definitions(parsed_files)
                 .await
                 .context("Failed to extract symbol definitions")?;
-            
+
             for symbol in symbol_definitions {
                 let key = (project_root.clone(), symbol.fully_qualified_name.clone());
                 self.symbol_index.insert(key, symbol.source_file.clone());
@@ -235,7 +239,8 @@ impl DependencyCache {
                 // Update class name index for wildcard import support
                 if let Some(class_name) = symbol.fully_qualified_name.split('.').last() {
                     let class_key = (project_root.clone(), class_name.to_string());
-                    self.class_name_index.entry(class_key)
+                    self.class_name_index
+                        .entry(class_key)
                         .or_insert_with(Vec::new)
                         .push(symbol.fully_qualified_name.clone());
                 }
@@ -249,17 +254,267 @@ impl DependencyCache {
 
     /// Find all fully qualified names for a given class name in a project
     /// Used for wildcard import resolution
-    pub fn find_symbols_by_class_name(&self, project_root: &PathBuf, class_name: &str) -> Vec<String> {
+    pub fn find_symbols_by_class_name(
+        &self,
+        project_root: &PathBuf,
+        class_name: &str,
+    ) -> Vec<String> {
         let class_key = (project_root.clone(), class_name.to_string());
-        self.class_name_index.get(&class_key)
+        self.class_name_index
+            .get(&class_key)
             .map(|entry| entry.value().clone())
             .unwrap_or_default()
     }
 
+    /// Synchronous lazy lookup for symbol file path, checking in-memory cache first, then database
+    pub fn find_symbol_sync(&self, project_root: &PathBuf, fqn: &str) -> Option<PathBuf> {
+        let key = (project_root.clone(), fqn.to_string());
+
+        debug!(
+            "find_symbol_sync: looking for symbol '{}' in project '{:?}'",
+            fqn, project_root
+        );
+
+        // First check in-memory cache
+        if let Some(file_path) = self.symbol_index.get(&key) {
+            debug!("find_symbol_sync: found symbol '{}' in memory cache", fqn);
+            return Some(file_path.value().clone());
+        }
+
+        debug!(
+            "find_symbol_sync: symbol '{}' not in memory, checking database",
+            fqn
+        );
+
+        // If not found in memory, try database lookup
+        let persistence_guard = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(self.persistence.read())
+        });
+
+        if let Some(ref persistence) = *persistence_guard {
+            debug!("find_symbol_sync: persistence layer available, querying database");
+            match persistence.lookup_symbol(project_root, fqn) {
+                Ok(Some(file_path)) => {
+                    debug!(
+                        "find_symbol_sync: found symbol '{}' in database at path '{:?}'",
+                        fqn, file_path
+                    );
+                    // Cache the result in memory for future lookups
+                    drop(persistence_guard);
+                    self.symbol_index.insert(key, file_path.clone());
+                    return Some(file_path);
+                }
+                Ok(None) => {
+                    debug!("find_symbol_sync: symbol '{}' not found in database", fqn);
+                }
+                Err(e) => {
+                    debug!(
+                        "find_symbol_sync: database query error for symbol '{}': {}",
+                        fqn, e
+                    );
+                }
+            }
+        } else {
+            debug!("find_symbol_sync: no persistence layer available");
+        }
+
+        None
+    }
+
+    /// Lazy lookup for symbol file path, checking in-memory cache first, then database
+    pub async fn find_symbol(&self, project_root: &PathBuf, fqn: &str) -> Option<PathBuf> {
+        let key = (project_root.clone(), fqn.to_string());
+
+        debug!(
+            "find_symbol: looking for symbol '{}' in project '{:?}'",
+            fqn, project_root
+        );
+
+        // First check in-memory cache
+        if let Some(file_path) = self.symbol_index.get(&key) {
+            debug!("find_symbol: found symbol '{}' in memory cache", fqn);
+            return Some(file_path.value().clone());
+        }
+
+        debug!(
+            "find_symbol: symbol '{}' not in memory, checking database",
+            fqn
+        );
+
+        // If not found in memory, try database lookup
+        let persistence_guard = self.persistence.read().await;
+        if let Some(ref persistence) = *persistence_guard {
+            debug!("find_symbol: persistence layer available, querying database");
+            match persistence.lookup_symbol(project_root, fqn) {
+                Ok(Some(file_path)) => {
+                    debug!(
+                        "find_symbol: found symbol '{}' in database at path '{:?}'",
+                        fqn, file_path
+                    );
+                    // Cache the result in memory for future lookups
+                    drop(persistence_guard);
+                    self.symbol_index.insert(key, file_path.clone());
+                    return Some(file_path);
+                }
+                Ok(None) => {
+                    debug!("find_symbol: symbol '{}' not found in database", fqn);
+                }
+                Err(e) => {
+                    debug!(
+                        "find_symbol: database query error for symbol '{}': {}",
+                        fqn, e
+                    );
+                }
+            }
+        } else {
+            debug!("find_symbol: no persistence layer available");
+        }
+
+        None
+    }
+
+    /// Synchronous lazy lookup for builtin info, checking in-memory cache first, then database
+    pub fn find_builtin_info(&self, class_name: &str) -> Option<SourceFileInfo> {
+        // First check in-memory cache
+        if let Some(info) = self.builtin_infos.get(class_name) {
+            return Some(info.value().clone());
+        }
+
+        // If not found in memory, try database lookup
+        let persistence_guard = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(self.persistence.read())
+        });
+
+        if let Some(ref persistence) = *persistence_guard {
+            match persistence.lookup_builtin_info(class_name) {
+                Ok(Some(info)) => {
+                    drop(persistence_guard);
+                    self.builtin_infos
+                        .insert(class_name.to_string(), info.clone());
+                    return Some(info);
+                }
+                Ok(None) => {
+                    debug!(
+                        "find_builtin_info: builtin '{}' not found in database",
+                        class_name
+                    );
+                }
+                Err(e) => {
+                    debug!(
+                        "find_builtin_info: database query error for builtin '{}': {}",
+                        class_name, e
+                    );
+                }
+            }
+        } else {
+            debug!("find_builtin_info: no persistence layer available");
+        }
+
+        None
+    }
+
+    /// Lazy lookup for project external info, checking in-memory cache first, then database
+    pub async fn find_project_external_info(
+        &self,
+        project_root: &PathBuf,
+        type_name: &str,
+    ) -> Option<SourceFileInfo> {
+        let key = (project_root.clone(), type_name.to_string());
+
+        // First check in-memory cache
+        if let Some(info) = self.project_external_infos.get(&key) {
+            return Some(info.value().clone());
+        }
+
+        // If not found in memory, try database lookup
+        let persistence_guard = self.persistence.read().await;
+        if let Some(ref persistence) = *persistence_guard {
+            if let Ok(Some(info)) =
+                persistence.lookup_project_external_info(project_root, type_name)
+            {
+                // Cache the result in memory for future lookups
+                drop(persistence_guard);
+                self.project_external_infos.insert(key, info.clone());
+                return Some(info);
+            }
+        }
+
+        None
+    }
+
+    /// Lazy lookup for inheritance index, checking in-memory cache first, then database
+    pub async fn find_inheritance_implementations(
+        &self,
+        project_root: &PathBuf,
+        type_name: &str,
+    ) -> Option<Vec<(PathBuf, usize, usize)>> {
+        let key = (project_root.clone(), type_name.to_string());
+
+        debug!(
+            "find_inheritance_implementations: looking for implementations of '{}' in project '{:?}'",
+            type_name, project_root
+        );
+
+        // First check in-memory cache
+        if let Some(implementations) = self.inheritance_index.get(&key) {
+            debug!(
+                "find_inheritance_implementations: found implementations for '{}' in memory cache",
+                type_name
+            );
+            return Some(implementations.value().clone());
+        }
+
+        debug!(
+            "find_inheritance_implementations: implementations for '{}' not in memory, checking database",
+            type_name
+        );
+
+        // If not found in memory, try database lookup
+        let persistence_guard = self.persistence.read().await;
+        if let Some(ref persistence) = *persistence_guard {
+            debug!(
+                "find_inheritance_implementations: persistence layer available, querying database"
+            );
+            match persistence.load_inheritance_index() {
+                Ok(inheritance_index_map) => {
+                    debug!(
+                        "find_inheritance_implementations: loaded inheritance index from database, {} entries",
+                        inheritance_index_map.len()
+                    );
+                    
+                    // Cache all loaded inheritance data in memory for future lookups
+                    for entry in inheritance_index_map.iter() {
+                        let (db_key, db_implementations) = (entry.key(), entry.value());
+                        self.inheritance_index.insert(db_key.clone(), db_implementations.clone());
+                    }
+                    drop(persistence_guard);
+                    
+                    // Now check if we have the requested type
+                    if let Some(implementations) = self.inheritance_index.get(&key) {
+                        debug!(
+                            "find_inheritance_implementations: found implementations for '{}' after database load",
+                            type_name
+                        );
+                        return Some(implementations.value().clone());
+                    }
+                }
+                Err(e) => {
+                    debug!(
+                        "find_inheritance_implementations: database query error: {}",
+                        e
+                    );
+                }
+            }
+        } else {
+            debug!("find_inheritance_implementations: no persistence layer available");
+        }
+
+        None
+    }
+
     #[tracing::instrument(skip_all)]
     pub async fn dump_to_file(&self) -> Result<()> {
-        let home_dir = dirs::home_dir()
-            .context("Failed to get home directory")?;
+        let home_dir = dirs::home_dir().context("Failed to get home directory")?;
 
         let dump_file = home_dir.join("lsp_index.json");
 
@@ -416,9 +671,13 @@ mod tests {
                     let project_root = PathBuf::from("/test/project");
                     let fqn = "com.example.TestClass".to_string();
                     let file_path = PathBuf::from("/test/project/TestClass.groovy");
-                    
-                    cache.symbol_index.insert((project_root.clone(), fqn.clone()), file_path);
-                    cache.class_name_index.entry((project_root, "TestClass".to_string()))
+
+                    cache
+                        .symbol_index
+                        .insert((project_root.clone(), fqn.clone()), file_path);
+                    cache
+                        .class_name_index
+                        .entry((project_root, "TestClass".to_string()))
                         .or_insert_with(Vec::new)
                         .push(fqn);
                     cache
@@ -440,18 +699,24 @@ mod tests {
                 setup: || {
                     let cache = DependencyCache::new();
                     let project_root = PathBuf::from("/test/project");
-                    
+
                     // Insert two classes with same simple name but different packages
                     let fqn1 = "com.example.util.Helper".to_string();
                     let fqn2 = "com.other.Helper".to_string();
                     let file1 = PathBuf::from("/test/project/util/Helper.groovy");
                     let file2 = PathBuf::from("/test/project/other/Helper.groovy");
-                    
-                    cache.symbol_index.insert((project_root.clone(), fqn1.clone()), file1);
-                    cache.symbol_index.insert((project_root.clone(), fqn2.clone()), file2);
-                    
+
+                    cache
+                        .symbol_index
+                        .insert((project_root.clone(), fqn1.clone()), file1);
+                    cache
+                        .symbol_index
+                        .insert((project_root.clone(), fqn2.clone()), file2);
+
                     let mut helpers = vec![fqn1, fqn2];
-                    cache.class_name_index.insert((project_root, "Helper".to_string()), helpers);
+                    cache
+                        .class_name_index
+                        .insert((project_root, "Helper".to_string()), helpers);
                     cache
                 },
                 input: DependencyCacheTestInput {
@@ -470,7 +735,7 @@ mod tests {
 
         for test_case in test_cases {
             println!("Running test: {}", test_case.name);
-            
+
             let cache = (test_case.setup)();
             let input = &test_case.input;
             let expected = &test_case.expected;
@@ -479,25 +744,24 @@ mod tests {
             let symbol_key = (input.project_root.clone(), input.fqn.clone());
             let found_symbol = cache.symbol_index.get(&symbol_key).is_some();
             assert_eq!(
-                found_symbol, 
-                expected.should_find_symbol,
-                "Test '{}': symbol lookup failed", 
+                found_symbol, expected.should_find_symbol,
+                "Test '{}': symbol lookup failed",
                 test_case.name
             );
 
             // Test class name lookup
-            let class_names = cache.find_symbols_by_class_name(&input.project_root, &input.class_name);
+            let class_names =
+                cache.find_symbols_by_class_name(&input.project_root, &input.class_name);
             let found_class_name = !class_names.is_empty();
             assert_eq!(
-                found_class_name, 
-                expected.should_find_class_name,
-                "Test '{}': class name lookup failed", 
+                found_class_name, expected.should_find_class_name,
+                "Test '{}': class name lookup failed",
                 test_case.name
             );
             assert_eq!(
-                class_names.len(), 
+                class_names.len(),
                 expected.class_name_count,
-                "Test '{}': class name count mismatch", 
+                "Test '{}': class name count mismatch",
                 test_case.name
             );
         }
@@ -506,7 +770,7 @@ mod tests {
     #[test]
     fn test_dependency_cache_creation() {
         let cache = DependencyCache::new();
-        
+
         assert_eq!(cache.symbol_index.len(), 0);
         assert_eq!(cache.class_name_index.len(), 0);
         assert_eq!(cache.builtin_infos.len(), 0);
@@ -590,12 +854,12 @@ mod tests {
 
         for test_case in test_cases {
             println!("Running inheritance test: {}", test_case.name);
-            
+
             let cache = DependencyCache::new();
             let project_root = PathBuf::from("/test/project");
-            
+
             cache.index_inheritance(&project_root, &test_case.symbol);
-            
+
             assert_eq!(
                 cache.inheritance_index.len(),
                 test_case.expected_inheritance_entries,

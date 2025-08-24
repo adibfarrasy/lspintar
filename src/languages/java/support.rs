@@ -5,10 +5,8 @@ use tower_lsp::lsp_types::{Diagnostic, Hover, Location, Position};
 use tracing::{info, warn};
 use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator, Tree};
 
-use crate::core::{
-    cross_language::type_bridge::CrossLanguageTypeInfo, definition::queries::QueryProvider,
-    dependency_cache::DependencyCache, registry::LanguageRegistry, symbols::SymbolType,
-};
+use crate::core::queries::QueryProvider;
+use crate::core::{dependency_cache::DependencyCache, symbols::SymbolType};
 
 use super::definition::{external, local, project, workspace};
 use crate::languages::traits::LanguageSupport;
@@ -396,7 +394,15 @@ impl LanguageSupport for JavaSupport {
         usage_node: &Node,
         dependency_cache: Arc<DependencyCache>,
     ) -> Option<Location> {
-        project::find_in_project(source, file_uri, usage_node, dependency_cache, self)
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(project::find_in_project(
+                source,
+                file_uri,
+                usage_node,
+                dependency_cache,
+                self,
+            ))
+        })
     }
 
     fn find_in_workspace(
@@ -416,7 +422,14 @@ impl LanguageSupport for JavaSupport {
         usage_node: &Node,
         dependency_cache: Arc<DependencyCache>,
     ) -> Option<Location> {
-        external::find_external(source, file_uri, usage_node, dependency_cache)
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(external::find_external(
+                source,
+                file_uri,
+                usage_node,
+                dependency_cache,
+            ))
+        })
     }
 
     fn set_start_position(

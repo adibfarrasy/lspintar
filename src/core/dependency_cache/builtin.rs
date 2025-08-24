@@ -9,6 +9,7 @@ use zip::ZipArchive;
 
 use crate::core::build_tools::ExternalDependency;
 use crate::languages::groovy::constants::GROOVY_DEFAULT_IMPORTS;
+use crate::languages::java::constants::JAVA_COMMON_IMPORTS;
 
 use super::source_file_info::SourceFileInfo;
 use super::DependencyCache;
@@ -24,14 +25,22 @@ impl BuiltinResolver {
         let java_home = std::env::var("JAVA_HOME").ok().map(PathBuf::from);
         let groovy_home = std::env::var("GROOVY_HOME").ok().map(PathBuf::from);
 
-        let paths: Vec<PathBuf> = GROOVY_DEFAULT_IMPORTS
+        let java_import_paths: Vec<PathBuf> = JAVA_COMMON_IMPORTS
+            .iter()
+            .map(|i| find_package_source_directory(i, &java_home, &None))
+            .filter_map(|result| result.ok())
+            .collect();
+
+        dependency_paths.extend_from_slice(&java_import_paths);
+
+        let groovy_import_paths: Vec<PathBuf> = GROOVY_DEFAULT_IMPORTS
             .iter()
             .map(|i| find_package_source_directory(i, &java_home, &groovy_home))
             .filter_map(|result| result.ok())
             .collect();
 
         // eagerly load groovy imports, if any
-        dependency_paths.extend_from_slice(&paths);
+        dependency_paths.extend_from_slice(&groovy_import_paths);
 
         Self { dependency_paths }
     }
@@ -83,7 +92,8 @@ impl BuiltinResolver {
                     // This is a best-effort approach
                     let qualified_name = if let Some(source_path_str) = source_path.to_str() {
                         if let Some(file_path_str) = file_path.to_str() {
-                            if let Some(relative_path) = file_path_str.strip_prefix(source_path_str) {
+                            if let Some(relative_path) = file_path_str.strip_prefix(source_path_str)
+                            {
                                 relative_path
                                     .trim_start_matches('/')
                                     .trim_end_matches(".java")
@@ -98,7 +108,7 @@ impl BuiltinResolver {
                     } else {
                         class_name.to_string()
                     };
-                    
+
                     parse_and_cache_builtin(
                         &qualified_name,
                         file_path.to_path_buf(),
@@ -159,7 +169,7 @@ impl BuiltinResolver {
                                 .trim_end_matches(".java")
                                 .trim_end_matches(".groovy")
                                 .replace('/', ".");
-                            
+
                             parse_and_cache_builtin(
                                 &package_path,
                                 zip_path.clone(),
@@ -277,6 +287,12 @@ fn parse_and_cache_builtin(
     dependency: Option<ExternalDependency>,
     cache: &DependencyCache,
 ) -> Result<()> {
+    if class_name.contains("String") {
+        debug!(
+            "parse_and_cache_builtin: caching builtin class '{}'",
+            class_name
+        );
+    }
     let external_info = SourceFileInfo::new(source_path, zip_internal_path, dependency);
 
     cache

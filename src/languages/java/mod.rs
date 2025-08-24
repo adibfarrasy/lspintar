@@ -1,3 +1,4 @@
+pub mod constants;
 pub mod definition;
 pub mod diagnostics;
 pub mod hover;

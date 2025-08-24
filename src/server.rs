@@ -14,14 +14,18 @@ use tower_lsp::LanguageServer;
 use tracing::debug;
 use tree_sitter::Tree;
 
-use crate::core::build_tools::{run_gradle_build, detect_build_tool, BuildTool};
+use crate::core::build_tools::{detect_build_tool, run_gradle_build, BuildTool};
 use crate::core::constants::{BUILD_ON_INIT, GRADLE_CACHE_DIR};
 use crate::core::dependency_cache::symbol_index::find_workspace_root;
 use crate::core::dependency_cache::DependencyCache;
 use crate::core::logging_service;
 use crate::core::state_manager::{self, get_global, set_global};
 use crate::core::symbols::SymbolType;
-use crate::core::utils::{find_external_dependency_root, is_external_dependency, is_path_in_external_dependency, is_project_root, uri_to_path, find_project_root, node_to_lsp_location, path_to_file_uri};
+use crate::core::utils::{
+    find_external_dependency_root, find_project_root, is_external_dependency,
+    is_path_in_external_dependency, is_project_root, node_to_lsp_location, path_to_file_uri,
+    uri_to_path,
+};
 use crate::core::{DiagnosticManager, Document, DocumentManager};
 use crate::languages::groovy::utils::find_identifier_at_position;
 use crate::languages::LanguageRegistry;
@@ -481,22 +485,22 @@ impl LspServer {
             None
         };
 
-        let location =
-            if let Some((symbol_name, symbol_type)) = symbol_info {
-                // Use cached symbol info for faster lookup
-                self.find_definition_with_cached_symbol(
-                    &tree,
-                    &content,
-                    &uri,
-                    &symbol_name,
-                    symbol_type,
-                    cache,
-                )
-                .await?
-            } else {
-                // Extract symbol info first (before moving language_support into closure)
-                let symbol_info_for_cache = if let Ok(identifier_node) =
-                    find_identifier_at_position(&tree, &content, position) {
+        let location = if let Some((symbol_name, symbol_type)) = symbol_info {
+            // Use cached symbol info for faster lookup
+            self.find_definition_with_cached_symbol(
+                &tree,
+                &content,
+                &uri,
+                &symbol_name,
+                symbol_type,
+                cache,
+            )
+            .await?
+        } else {
+            // Extract symbol info first (before moving language_support into closure)
+            let symbol_info_for_cache =
+                if let Ok(identifier_node) = find_identifier_at_position(&tree, &content, position)
+                {
                     if let Ok(symbol_name) = identifier_node.utf8_text(content.as_bytes()) {
                         if let Ok(symbol_type) = language_support
                             .determine_symbol_type_from_context(&tree, &identifier_node, &content)
@@ -512,28 +516,28 @@ impl LspServer {
                     None
                 };
 
-                // Full resolution - extract symbol and cache it
-                let location = tokio::task::spawn_blocking({
-                    let tree = tree.clone();
-                    let content = content.clone();
-                    let uri = uri.clone();
-                    let cache = cache.clone();
-                    move || language_support.find_definition(&tree, &content, position, &uri, cache)
-                })
-                .await
-                .map_err(|error| tower_lsp::jsonrpc::Error::invalid_params(format!("{error}")))?
-                .map_err(|error| tower_lsp::jsonrpc::Error::invalid_params(format!("{error}")))?;
+            // Full resolution - extract symbol and cache it
+            let location = tokio::task::spawn_blocking({
+                let tree = tree.clone();
+                let content = content.clone();
+                let uri = uri.clone();
+                let cache = cache.clone();
+                move || language_support.find_definition(&tree, &content, position, &uri, cache)
+            })
+            .await
+            .map_err(|error| tower_lsp::jsonrpc::Error::invalid_params(format!("{error}")))?
+            .map_err(|error| tower_lsp::jsonrpc::Error::invalid_params(format!("{error}")))?;
 
-                // Cache the symbol info for future use
-                if let Some((symbol_name, symbol_type)) = symbol_info_for_cache {
-                    self.position_symbol_cache.insert(
-                        cache_key.clone(),
-                        CachedSymbolInfo::new(symbol_name, symbol_type),
-                    );
-                }
+            // Cache the symbol info for future use
+            if let Some((symbol_name, symbol_type)) = symbol_info_for_cache {
+                self.position_symbol_cache.insert(
+                    cache_key.clone(),
+                    CachedSymbolInfo::new(symbol_name, symbol_type),
+                );
+            }
 
-                location
-            };
+            location
+        };
 
         // Cache the final result
         self.definition_cache
@@ -557,35 +561,34 @@ impl LspServer {
             .ok_or(tower_lsp::jsonrpc::Error::internal_error())?;
 
         // Use cached symbol info to bypass expensive tree-sitter queries
+        // Try direct dependency cache lookup first for class/interface symbols
+        if matches!(
+            symbol_type,
+            SymbolType::ClassDeclaration | SymbolType::InterfaceDeclaration
+        ) {
+            if let Some(project_root) = find_project_root(&uri_to_path(uri).unwrap_or_default()) {
+                // Use lazy loading for symbol lookup
+                if let Some(file_path) = dependency_cache
+                    .find_symbol(&project_root, symbol_name)
+                    .await
+                {
+                    if let Some(location) = node_to_lsp_location(
+                        &tree.root_node(),
+                        &path_to_file_uri(&file_path).unwrap_or_default(),
+                    ) {
+                        return Ok(location);
+                    }
+                }
+            }
+        }
+
+        // Fallback to language-specific resolution with tree traversal
         tokio::task::spawn_blocking({
             let tree = tree.clone();
             let content = content.to_string();
             let uri = uri.to_string();
-            let symbol_name = symbol_name.to_string();
 
             move || {
-                // Try direct dependency cache lookup first for class/interface symbols
-                if matches!(
-                    symbol_type,
-                    SymbolType::ClassDeclaration | SymbolType::InterfaceDeclaration
-                ) {
-                    if let Some(project_root) = find_project_root(
-                        &uri_to_path(&uri).unwrap_or_default(),
-                    ) {
-                        let cache_key = (project_root, symbol_name.clone());
-                        if let Some(file_path) = dependency_cache.symbol_index.get(&cache_key) {
-                            if let Some(location) = node_to_lsp_location(
-                                &tree.root_node(),
-                                &path_to_file_uri(&file_path).unwrap_or_default(),
-                            ) {
-                                return Ok(location);
-                            }
-                        }
-                    }
-                }
-
-                // Fallback to language-specific resolution with tree traversal
-                // This is still faster than full symbol extraction since we know the symbol name
                 language_support.find_definition_chain(
                     &tree,
                     &content,
@@ -730,11 +733,11 @@ impl LspServer {
 
     async fn update_cache(&self, path: Option<PathBuf>) {
         if let Some(dir) = path {
-            // Try to load from persistent cache first
-            let loaded_from_cache = if !is_external_dependency(&dir) {
-                match self.dependency_cache.load_from_disk(&dir).await {
+            // For non-external dependencies, check if cache exists and is valid
+            let cache_loaded = if !is_external_dependency(&dir) {
+                match self.dependency_cache.check_and_initialize_cache(&dir).await {
                     Ok(true) => {
-                        // Set indexing completed flag when loading from cache
+                        // Cache is valid and lazy loading is initialized
                         set_global("is_indexing_completed", true);
                         true
                     }
@@ -745,8 +748,8 @@ impl LspServer {
                 false // Don't use persistence for external dependencies
             };
 
-            // If cache wasn't loaded, rebuild it
-            if !loaded_from_cache {
+            // If cache wasn't found or is stale, rebuild it
+            if !cache_loaded {
                 if is_external_dependency(&dir) {
                     if let Err(error) = self
                         .dependency_cache
@@ -757,8 +760,29 @@ impl LspServer {
                         lsp_error!("{}", error.to_string())
                     }
                 } else {
-                    if let Err(error) = self.dependency_cache.clone().index_workspace(dir).await {
+                    if let Err(error) = self
+                        .dependency_cache
+                        .clone()
+                        .index_workspace(dir.clone())
+                        .await
+                    {
                         lsp_error!("{}", error.to_string())
+                    } else {
+                        // After successful indexing, initialize persistence for lazy loading
+                        if let Err(error) = self
+                            .dependency_cache
+                            .initialize_persistence(dir.clone())
+                            .await
+                        {
+                            lsp_error!(
+                                "Failed to initialize persistence after indexing: {}",
+                                error
+                            );
+                        } else {
+                            tracing::info!(
+                                "Persistence layer initialized for lazy loading after indexing"
+                            );
+                        }
                     }
                 }
             }
@@ -1010,4 +1034,3 @@ mod tests {
         assert!(capabilities.implementation_provider.is_some());
     }
 }
-

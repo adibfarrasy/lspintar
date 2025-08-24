@@ -1,12 +1,15 @@
 use anyhow::Result;
-use std::sync::Arc;
-use tower_lsp::lsp_types::{Location, Position};
+use log::debug;
+use std::{collections::HashSet, path::PathBuf, sync::Arc};
+use tokio::task;
+use tower_lsp::lsp_types::{Location, Position, Range, Url};
 use tree_sitter::Tree;
 
 use crate::{
     core::{
         dependency_cache::DependencyCache,
         symbols::SymbolType,
+        utils::path_to_file_uri,
     },
     languages::LanguageSupport,
 };
@@ -46,12 +49,69 @@ pub fn handle(
     }
 }
 
-async fn find_implementations(_symbol_name: &str, _dependency_cache: &Arc<DependencyCache>) -> Result<Vec<Location>> {
-    // TODO: Implement actual implementation finding logic
-    // This should search for classes that implement the interface or extend the class
+async fn find_implementations(
+    interface_name: &str,
+    dependency_cache: &Arc<DependencyCache>,
+) -> Result<Vec<Location>> {
+    // First, try to get project roots from existing in-memory data
+    let mut project_roots: HashSet<PathBuf> = dependency_cache
+        .inheritance_index
+        .iter()
+        .map(|entry| entry.key().0.clone())
+        .collect();
     
-    // For now, return empty vec as placeholder
-    Ok(vec![])
+    // If no in-memory data, get project roots from symbol index (fallback)
+    if project_roots.is_empty() {
+        project_roots = dependency_cache
+            .symbol_index
+            .iter()
+            .map(|entry| entry.key().0.clone())
+            .collect();
+    }
+
+    let tasks: Vec<_> = project_roots
+        .into_iter()
+        .map(|project_root| {
+            let interface_name = interface_name.to_string();
+            let dependency_cache = dependency_cache.clone();
+
+            task::spawn(async move {
+                dependency_cache
+                    .find_inheritance_implementations(&project_root, &interface_name)
+                    .await
+            })
+        })
+        .collect();
+
+    let results = futures::future::join_all(tasks).await;
+
+    let mut all_locations = Vec::new();
+    for result in results {
+        if let Ok(Some(index_value)) = result {
+            for (file_path, line, col) in index_value {
+                if let Some(file_uri) = path_to_file_uri(&file_path) {
+                    let uri = Url::parse(&file_uri)
+                        .inspect_err(|e| debug!("Failed to parse URI: {e}"))?;
+                    let location = Location {
+                        uri,
+                        range: Range {
+                            start: Position {
+                                line: line as u32,
+                                character: col as u32,
+                            },
+                            end: Position {
+                                line: line as u32,
+                                character: col as u32,
+                            },
+                        },
+                    };
+                    all_locations.push(location);
+                }
+            }
+        }
+    }
+
+    Ok(all_locations)
 }
 
 fn handle_method_call_implementation(

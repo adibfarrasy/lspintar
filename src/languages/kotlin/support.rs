@@ -4,13 +4,8 @@ use anyhow::{anyhow, Result};
 use tower_lsp::lsp_types::{Diagnostic, Hover, Location, Position};
 use tree_sitter::{Node, Parser, Tree};
 
-use crate::core::{
-    cross_language::type_bridge::CrossLanguageTypeInfo,
-    definition::{local::find_local_generic, queries::QueryProvider},
-    dependency_cache::DependencyCache,
-    registry::LanguageRegistry,
-    symbols::SymbolType,
-};
+use crate::core::queries::QueryProvider;
+use crate::core::{dependency_cache::DependencyCache, symbols::SymbolType};
 use crate::languages::traits::LanguageSupport;
 
 pub struct KotlinSupport;
@@ -160,7 +155,8 @@ impl LanguageSupport for KotlinSupport {
         file_uri: &str,
         usage_node: &Node,
     ) -> Option<Location> {
-        find_local_generic(tree, source, file_uri, usage_node, self)
+        // TODO: Implement Kotlin local definition finding
+        None
     }
 
     fn find_in_project(
@@ -235,4 +231,3 @@ impl Default for KotlinSupport {
         Self::new()
     }
 }
-

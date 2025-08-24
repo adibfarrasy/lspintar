@@ -23,8 +23,8 @@ cub:
 
 # Fast build with essential tests only
 b:
-    @echo "RUSTFLAGS=-A warnings cargo build"
-    @RUSTFLAGS="-A warnings" cargo build
+    @echo "cargo build"
+    @cargo build
     @just test-quick
     @just note
 

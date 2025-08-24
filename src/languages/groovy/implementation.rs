@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use log::debug;
 use std::{
+    collections::HashSet,
     path::PathBuf,
     sync::{Arc, OnceLock},
 };
@@ -60,24 +61,34 @@ pub fn handle(
 #[tracing::instrument(skip_all)]
 async fn find_implementations(
     interface_name: &str,
-    dependency_cache: &DependencyCache,
+    dependency_cache: &Arc<DependencyCache>,
 ) -> Result<Vec<Location>> {
-    let project_roots: std::collections::HashSet<PathBuf> = dependency_cache
+    // First, try to get project roots from existing in-memory data
+    let mut project_roots: HashSet<PathBuf> = dependency_cache
         .inheritance_index
         .iter()
         .map(|entry| entry.key().0.clone())
         .collect();
+    
+    // If no in-memory data, get project roots from symbol index (fallback)
+    if project_roots.is_empty() {
+        project_roots = dependency_cache
+            .symbol_index
+            .iter()
+            .map(|entry| entry.key().0.clone())
+            .collect();
+    }
 
     let tasks: Vec<_> = project_roots
         .into_iter()
         .map(|project_root| {
             let interface_name = interface_name.to_string();
-            let inheritance_index = dependency_cache.inheritance_index.clone();
+            let dependency_cache = dependency_cache.clone();
 
             task::spawn(async move {
-                inheritance_index
-                    .get(&(project_root, interface_name))
-                    .map(|file_paths| file_paths.value().clone())
+                dependency_cache
+                    .find_inheritance_implementations(&project_root, &interface_name)
+                    .await
             })
         })
         .collect();
@@ -288,7 +299,7 @@ fn find_containing_interface(mut node: tree_sitter::Node) -> Option<tree_sitter:
 async fn find_interface_method_implementations(
     interface_name: &str,
     method_name: &str,
-    dependency_cache: &DependencyCache,
+    dependency_cache: &Arc<DependencyCache>,
 ) -> Result<Vec<Location>> {
     // First find all implementations of the interface
     let interface_implementations = find_implementations(interface_name, dependency_cache).await?;

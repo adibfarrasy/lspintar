@@ -7,12 +7,18 @@ use tree_sitter::Node;
 use crate::{
     core::{
         dependency_cache::DependencyCache,
-        utils::{find_project_root, path_to_file_uri, uri_to_path, search_definition_in_project_cross_language},
+        utils::{
+            find_project_root, path_to_file_uri, search_definition_in_project_cross_language,
+            uri_to_path,
+        },
     },
     languages::LanguageSupport,
 };
 
-use super::utils::{prepare_symbol_lookup_key_with_wildcard_support, search_definition_in_project, get_wildcard_imports_from_source, extract_imports_from_source};
+use super::utils::{
+    extract_imports_from_source, get_wildcard_imports_from_source,
+    prepare_symbol_lookup_key_with_wildcard_support, search_definition_in_project,
+};
 
 #[tracing::instrument(skip_all)]
 pub fn find_in_workspace(
@@ -59,15 +65,18 @@ fn find_in_project_dependencies(
         None,
         &dependency_cache,
     )?;
-    
+
     debug!("Java workspace: Current project: {:?}", current_project);
-    debug!("Java workspace: Symbol key from current project: {:?}", symbol_key);
+    debug!(
+        "Java workspace: Symbol key from current project: {:?}",
+        symbol_key
+    );
 
     // Extract imports to look for fully qualified names
     let symbol_name = usage_node.utf8_text(source.as_bytes()).unwrap_or("");
     let imports = extract_imports_from_source(source);
     let mut search_keys = vec![symbol_key.1.clone()]; // Start with the resolved symbol key
-    
+
     // Add fully qualified import names that match our symbol
     for import in &imports {
         if import.ends_with(&format!(".{}", symbol_name)) {
@@ -75,7 +84,7 @@ fn find_in_project_dependencies(
             search_keys.push(import.clone());
         }
     }
-    
+
     debug!("Java workspace: Will search for keys: {:?}", search_keys);
 
     // Get all projects in the workspace except the current one
@@ -85,32 +94,47 @@ fn find_in_project_dependencies(
     // Search in other projects in the workspace
     for entry in dependency_cache.symbol_index.iter() {
         let ((project_root, _), file_path) = (entry.key(), entry.value());
-        
+
         if !checked_projects.contains(project_root) {
             checked_projects.insert(project_root.clone());
             debug!("Java workspace: Checking project: {:?}", project_root);
-            
+
             // Try each search key (simple name + fully qualified imports)
             for search_key in &search_keys {
                 let project_symbol_key = (project_root.clone(), search_key.clone());
                 debug!("Java workspace: Looking for key: {:?}", project_symbol_key);
-                
-                if let Some(target_file) = dependency_cache.symbol_index.get(&project_symbol_key) {
-                    debug!("Java workspace: Found symbol in project {:?} at file path: {:?}", project_root, target_file.value());
-                    
+
+                let target_file_opt = tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(
+                        dependency_cache.find_symbol(&project_symbol_key.0, &project_symbol_key.1),
+                    )
+                });
+
+                if let Some(target_file) = target_file_opt {
+                    debug!(
+                        "Java workspace: Found symbol in project {:?} at file path: {:?}",
+                        project_root, target_file
+                    );
+
                     let target_uri = match path_to_file_uri(&target_file) {
                         Some(uri) => {
                             debug!("Java workspace: Converted file path to URI: {}", uri);
                             uri
                         }
                         None => {
-                            debug!("Java workspace: Failed to convert file path to URI: {:?}", target_file.value());
+                            debug!(
+                                "Java workspace: Failed to convert file path to URI: {:?}",
+                                target_file
+                            );
                             continue;
                         }
                     };
-                    
-                    debug!("Java workspace: Calling search_definition_in_project with target_uri: {}", target_uri);
-                    
+
+                    debug!(
+                        "Java workspace: Calling search_definition_in_project with target_uri: {}",
+                        target_uri
+                    );
+
                     // Use the centralized cross-language dispatcher
                     if let Some(location) = search_definition_in_project_cross_language(
                         file_uri,
@@ -119,13 +143,19 @@ fn find_in_project_dependencies(
                         &target_uri,
                         language_support,
                     ) {
-                        debug!("Java workspace: Successfully resolved symbol at {:?}", location);
+                        debug!(
+                            "Java workspace: Successfully resolved symbol at {:?}",
+                            location
+                        );
                         return Some(location);
                     } else {
                         debug!("Java workspace: search_definition_in_project returned None for target_uri: {}", target_uri);
                     }
                 } else {
-                    debug!("Java workspace: Key {:?} not found in project {:?}", search_key, project_root);
+                    debug!(
+                        "Java workspace: Key {:?} not found in project {:?}",
+                        search_key, project_root
+                    );
                 }
             }
         }
@@ -145,20 +175,20 @@ fn fallback_impl(
     // Fallback: try to resolve using wildcard imports
     let symbol_name = usage_node.utf8_text(source.as_bytes()).ok()?;
     let current_project = uri_to_path(file_uri).and_then(|path| find_project_root(&path))?;
-    
+
     // Get wildcard imports from the current file
     let wildcard_imports = get_wildcard_imports_from_source(source);
-    
+
     for import_package in wildcard_imports {
         let full_symbol_name = format!("{}.{}", import_package, symbol_name);
-        
+
         // Search in all projects for this fully qualified name
         for entry in dependency_cache.symbol_index.iter() {
             let ((project_root, fqn), file_path) = (entry.key(), entry.value());
-            
+
             if fqn == &full_symbol_name {
                 let target_uri = path_to_file_uri(&file_path)?;
-                
+
                 if let Some(location) = search_definition_in_project(
                     file_uri,
                     source,
@@ -171,6 +201,7 @@ fn fallback_impl(
             }
         }
     }
-    
+
     None
 }
+

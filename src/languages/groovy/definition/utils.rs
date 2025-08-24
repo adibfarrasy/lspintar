@@ -13,7 +13,7 @@ use crate::{
             node_to_lsp_location, uri_to_path, uri_to_tree,
         },
     },
-    languages::LanguageSupport,
+    languages::{groovy::constants::GROOVY_DEFAULT_IMPORTS, LanguageSupport},
 };
 
 use super::method_resolution::{extract_call_signature_from_context, find_method_with_signature};
@@ -724,27 +724,41 @@ pub fn prepare_symbol_lookup_key_with_wildcard_support(
 ) -> Option<(PathBuf, String)> {
     let symbol_bytes = usage_node.utf8_text(source.as_bytes()).ok()?;
     let symbol_name = symbol_bytes.to_string();
+    debug!("prepare_symbol_lookup_key_with_wildcard_support: starting resolution for '{}'", symbol_name);
 
     let current_file_path = uri_to_path(file_uri)?;
 
     let project_root = project_root
         .or_else(|| find_project_root(&current_file_path))
         .or_else(|| find_external_dependency_root(&current_file_path))?;
+    debug!("prepare_symbol_lookup_key_with_wildcard_support: project_root = {:?}", project_root);
 
     // First try regular resolution (specific imports and same package)
+    debug!("prepare_symbol_lookup_key_with_wildcard_support: trying specific imports for '{}'", symbol_name);
     let specific_import_result = resolve_through_imports(&symbol_name, source, &project_root, dependency_cache);
     if let Some(result) = &specific_import_result {
+        debug!("prepare_symbol_lookup_key_with_wildcard_support: found via specific import: {:?}", result);
         return Some(result.clone());
+    } else {
+        debug!("prepare_symbol_lookup_key_with_wildcard_support: no specific imports found for '{}'", symbol_name);
     }
 
     let same_package_result =
         resolve_same_package(&symbol_name, source, &project_root, dependency_cache);
     if let Some(result) = &same_package_result {
+        debug!("prepare_symbol_lookup_key_with_wildcard_support: found via same package: {:?}", result);
         return Some(result.clone());
     }
 
     // If not found, try wildcard import resolution
-    resolve_through_wildcard_imports(&symbol_name, source, &project_root, dependency_cache)
+    let wildcard_result = resolve_through_wildcard_imports(&symbol_name, source, &project_root, dependency_cache);
+    if let Some(result) = &wildcard_result {
+        debug!("prepare_symbol_lookup_key_with_wildcard_support: found via wildcard import: {:?}", result);
+        return Some(result.clone());
+    }
+
+    debug!("prepare_symbol_lookup_key_with_wildcard_support: no resolution found for '{}'", symbol_name);
+    None
 }
 
 fn resolve_through_imports(
@@ -753,6 +767,8 @@ fn resolve_through_imports(
     project_root: &PathBuf,
     dependency_cache: &DependencyCache,
 ) -> Option<(PathBuf, String)> {
+    debug!("resolve_through_imports: looking for specific imports for '{}'", symbol_name);
+    
     let query_text = r#"
         (import_declaration) @import_decl
     "#;
@@ -779,16 +795,68 @@ fn resolve_through_imports(
                         .trim_end_matches(';')
                         .trim();
 
+                    debug!("resolve_through_imports: found import: '{}'", import_text);
+
                     // Only handle specific imports here - wildcard imports are handled in resolve_through_wildcard_imports
+                    debug!("resolve_through_imports: checking if import '{}' ends with '.{}'", import_text, symbol_name);
                     if import_text.ends_with(&format!(".{}", symbol_name)) {
-                        // Check both local symbols, external dependencies, and builtin classes
+                        debug!("resolve_through_imports: import '{}' matches symbol '{}'", import_text, symbol_name);
+                        // Check both local symbols, external dependencies, and builtin classes using read-through cache
                         let explicit_key = (project_root.clone(), import_text.to_string());
-                        if dependency_cache.symbol_index.contains_key(&explicit_key)
-                            || dependency_cache.project_external_infos.contains_key(&explicit_key)
-                            || dependency_cache.builtin_infos.contains_key(import_text) {
+                        debug!("resolve_through_imports: checking cache for key: ({:?}, '{}')", explicit_key.0, explicit_key.1);
+                        
+                        // First try current project (symbols and builtins)
+                        if dependency_cache.find_symbol_sync(&explicit_key.0, &explicit_key.1).is_some()
+                            || dependency_cache.find_builtin_info(&explicit_key.1).is_some() {
+                            debug!("resolve_through_imports: found specific import in current project: '{}'", import_text);
+                            specific_import = Some(explicit_key.clone());
+                            return;
+                        }
+                        
+                        // Then try current project's external dependencies (JAR files)
+                        debug!("resolve_through_imports: checking external dependencies of current project for import '{}'", import_text);
+                        if let Some(_) = tokio::task::block_in_place(|| {
+                            tokio::runtime::Handle::current().block_on(async {
+                                dependency_cache.find_project_external_info(project_root, import_text).await
+                            })
+                        }) {
+                            debug!("resolve_through_imports: found specific import in external dependencies of current project: '{}'", import_text);
                             specific_import = Some(explicit_key);
                             return;
                         }
+                        
+                        // Then try dependency projects
+                        if let Some(project_metadata) = dependency_cache.project_metadata.get(project_root) {
+                            debug!("resolve_through_imports: checking {} dependency projects for import", project_metadata.inter_project_deps.len());
+                            for dependent_project_ref in project_metadata.inter_project_deps.iter() {
+                                let dependent_project = dependent_project_ref.clone();
+                                let dep_key = (dependent_project.clone(), import_text.to_string());
+                                debug!("resolve_through_imports: checking dependency project {:?} for import '{}'", dependent_project, import_text);
+                                
+                                if dependency_cache.find_symbol_sync(&dep_key.0, &dep_key.1).is_some()
+                                    || dependency_cache.find_builtin_info(&dep_key.1).is_some() {
+                                    debug!("resolve_through_imports: found specific import in dependency project {:?}: '{}'", dependent_project, import_text);
+                                    specific_import = Some(dep_key);
+                                    return;
+                                }
+                                
+                                // Also check external dependencies of this dependency project
+                                debug!("resolve_through_imports: checking external dependencies of project {:?} for import '{}'", dependent_project, import_text);
+                                if let Some(_) = tokio::task::block_in_place(|| {
+                                    tokio::runtime::Handle::current().block_on(async {
+                                        dependency_cache.find_project_external_info(&dependent_project, import_text).await
+                                    })
+                                }) {
+                                    debug!("resolve_through_imports: found specific import in external dependencies of project {:?}: '{}'", dependent_project, import_text);
+                                    specific_import = Some(dep_key);
+                                    return;
+                                }
+                            }
+                        }
+                        
+                        debug!("resolve_through_imports: import '{}' not found in current project or dependencies", import_text);
+                    } else if !import_text.ends_with("*") {
+                        debug!("resolve_through_imports: import '{}' does not match symbol '{}'", import_text, symbol_name);
                     }
                 };
             }
@@ -804,8 +872,16 @@ fn resolve_through_wildcard_imports(
     project_root: &PathBuf,
     dependency_cache: &DependencyCache,
 ) -> Option<(PathBuf, String)> {
+    debug!("resolve_through_wildcard_imports: resolving '{}'", symbol_name);
+    
     // Get all wildcard imports from the source
-    let wildcard_packages = get_wildcard_imports(source)?;
+    let wildcard_packages = get_wildcard_imports(source);
+    if wildcard_packages.is_none() {
+        debug!("resolve_through_wildcard_imports: no wildcard packages found");
+    } else {
+        debug!("resolve_through_wildcard_imports: wildcard packages: {:?}", wildcard_packages);
+    }
+    let wildcard_packages = wildcard_packages?;
 
     // Get all possible FQNs for this class name in the project
     let possible_fqns = dependency_cache.find_symbols_by_class_name(project_root, symbol_name);
@@ -816,26 +892,55 @@ fn resolve_through_wildcard_imports(
         .map(|pkg| format!("{}.", pkg))
         .collect();
 
-    // Check if any FQN matches any wildcard prefix
+    // Check if any FQN matches any wildcard prefix using read-through cache
     for fqn in possible_fqns {
         if prefixes.iter().any(|prefix| fqn.starts_with(prefix)) {
-            return Some((project_root.clone(), fqn));
+            // Check if this symbol actually exists using read-through cache
+            if dependency_cache.find_symbol_sync(project_root, &fqn).is_some() {
+                debug!("resolve_through_wildcard_imports: found project symbol via wildcard: '{}'", fqn);
+                return Some((project_root.clone(), fqn));
+            }
         }
     }
 
-    // Also check builtin classes for wildcard imports (like java.lang.* or java.util.*)
-    for package in wildcard_packages {
-        let potential_fqn = format!("{}.{}", package, symbol_name);
-        if dependency_cache.builtin_infos.contains_key(&potential_fqn) {
+    // Also check for wildcard imports (both project symbols and builtin classes)
+    for package in &wildcard_packages {
+        // Strip 'static ' prefix if present (from static imports)
+        let clean_package = if package.starts_with("static ") {
+            &package[7..] // Remove "static " prefix
+        } else {
+            package
+        };
+        
+        let potential_fqn = format!("{}.{}", clean_package, symbol_name);
+        debug!("resolve_through_wildcard_imports: checking FQN: '{}'", potential_fqn);
+        
+        // First try project symbols (for static imports and regular classes)
+        if dependency_cache.find_symbol_sync(project_root, &potential_fqn).is_some() {
+            debug!("resolve_through_wildcard_imports: found project symbol: '{}'", potential_fqn);
+            return Some((project_root.clone(), potential_fqn));
+        }
+        
+        // Then try builtin classes
+        if dependency_cache.find_builtin_info(&potential_fqn).is_some() {
+            debug!("resolve_through_wildcard_imports: found builtin class: '{}'", potential_fqn);
             return Some((project_root.clone(), potential_fqn));
         }
     }
-
-    // Check java.lang.* (automatically imported)
-    let java_lang_fqn = format!("java.lang.{}", symbol_name);
-    if dependency_cache.builtin_infos.contains_key(&java_lang_fqn) {
-        return Some((project_root.clone(), java_lang_fqn));
+    
+    let packages = GROOVY_DEFAULT_IMPORTS.iter()
+        .map(|import| import.strip_suffix(".*").unwrap_or(import))
+        .collect::<Vec<&str>>();
+    
+    for package in &packages {
+        let fqn = format!("{}.{}", package, symbol_name);
+        debug!("resolve_through_wildcard_imports: checking indexed package {} FQN: '{}'", package, fqn);
+        if dependency_cache.find_builtin_info(&fqn).is_some() {
+            debug!("resolve_through_wildcard_imports: found indexed builtin class: '{}'", fqn);
+            return Some((project_root.clone(), fqn));
+        }
     }
+    debug!("resolve_through_wildcard_imports: symbol '{}' not found in indexed builtin packages", symbol_name);
 
     None
 }
@@ -922,10 +1027,12 @@ fn resolve_same_package(
                 if let Ok(package_name) = capture.node.utf8_text(source.as_bytes()) {
                     let fqn = format!("{}.{}", package_name, symbol_name);
 
-                    // Only return the same-package result if the symbol actually exists in the cache
-                    let symbol_key = (project_root.clone(), fqn.clone());
-                    if dependency_cache.symbol_index.get(&symbol_key).is_some() {
-                        result = Some((project_root.clone(), fqn));
+                    // Only return if the symbol actually exists in this package using read-through cache
+                    let explicit_key = (project_root.clone(), fqn.clone());
+                    if dependency_cache.find_symbol_sync(&explicit_key.0, &explicit_key.1).is_some()
+                        || dependency_cache.find_builtin_info(&explicit_key.1).is_some() {
+                        debug!("resolve_same_package: found same package symbol: '{}'", fqn);
+                        result = Some(explicit_key);
                         return;
                     }
                 };

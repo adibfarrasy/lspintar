@@ -7,12 +7,17 @@ use tree_sitter::Node;
 use crate::{
     core::{
         dependency_cache::DependencyCache,
-        utils::{find_project_root, path_to_file_uri, uri_to_path, search_definition_in_project_cross_language},
+        utils::{
+            find_project_root, path_to_file_uri, search_definition_in_project_cross_language,
+            uri_to_path,
+        },
     },
     languages::LanguageSupport,
 };
 
-use super::utils::{prepare_symbol_lookup_key_with_wildcard_support, get_wildcard_imports_from_source};
+use super::utils::{
+    get_wildcard_imports_from_source, prepare_symbol_lookup_key_with_wildcard_support,
+};
 
 #[tracing::instrument(skip_all)]
 pub fn find_in_workspace(
@@ -54,16 +59,27 @@ fn find_in_project_dependencies(
 ) -> Option<Location> {
     let project_meta = dependency_cache.project_metadata.get(current_project)?;
 
-    let symbol_key = prepare_symbol_lookup_key_with_wildcard_support(usage_node, source, file_uri, None, &dependency_cache)?;
+    let symbol_key = prepare_symbol_lookup_key_with_wildcard_support(
+        usage_node,
+        source,
+        file_uri,
+        None,
+        &dependency_cache,
+    )?;
     let (_, fully_qualified_name) = symbol_key;
 
     // Search in each project that this project depends on
     for dep_project_root in project_meta.inter_project_deps.iter() {
         let dep_symbol_key = (dep_project_root.clone(), fully_qualified_name.clone());
 
-        if let Some(file_location) = dependency_cache.symbol_index.get(&dep_symbol_key) {
+        let file_location_opt = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(dependency_cache.find_symbol(&dep_symbol_key.0, &dep_symbol_key.1))
+        });
+
+        if let Some(file_location) = file_location_opt {
             let other_uri = path_to_file_uri(&file_location)?;
-            
+
             // Use the centralized cross-language dispatcher
             if let Some(location) = search_definition_in_project_cross_language(
                 file_uri,
@@ -109,18 +125,27 @@ fn fallback_impl(
         }
 
         let symbol_name = usage_node.utf8_text(source.as_bytes()).ok()?.to_string();
-        
+
         // First try to resolve the symbol using import resolution for this project
         let symbol_key_from_imports = prepare_symbol_lookup_key_with_wildcard_support(
-            usage_node, source, file_uri, Some(project_root.clone()), &dependency_cache
+            usage_node,
+            source,
+            file_uri,
+            Some(project_root.clone()),
+            &dependency_cache,
         );
-        
+
         if let Some((_, fqn)) = symbol_key_from_imports {
             let symbol_key = (project_root.clone(), fqn.clone());
-            
-            if let Some(file_location) = dependency_cache.symbol_index.get(&symbol_key) {
+
+            let file_location_opt = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current()
+                    .block_on(dependency_cache.find_symbol(&symbol_key.0, &symbol_key.1))
+            });
+
+            if let Some(file_location) = file_location_opt {
                 let other_uri = path_to_file_uri(&file_location)?;
-                
+
                 // Use the centralized cross-language dispatcher
                 return search_definition_in_project_cross_language(
                     file_uri,
@@ -131,17 +156,22 @@ fn fallback_impl(
                 );
             }
         }
-        
+
         // Also try wildcard imports (for backward compatibility with OrderService case)
         let wildcard_packages = get_wildcard_imports_from_source(source);
         if let Some(packages) = wildcard_packages {
             for package in packages {
                 let candidate_fqn = format!("{}.{}", package, symbol_name);
                 let symbol_key = (project_root.clone(), candidate_fqn.clone());
-                
-                if let Some(file_location) = dependency_cache.symbol_index.get(&symbol_key) {
+
+                let file_location_opt = tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current()
+                        .block_on(dependency_cache.find_symbol(&symbol_key.0, &symbol_key.1))
+                });
+
+                if let Some(file_location) = file_location_opt {
                     let other_uri = path_to_file_uri(&file_location)?;
-                    
+
                     // Use the centralized cross-language dispatcher
                     return search_definition_in_project_cross_language(
                         file_uri,
