@@ -267,14 +267,7 @@ fn find_best_method_match<'a>(
         if let Some(global_method) =
             find_method_with_signature(tree, source, method_name, &call_signature)
         {
-            // Convert from name node to method_declaration node
-            let mut parent = global_method.parent();
-            while let Some(p) = parent {
-                if p.kind() == "method_declaration" {
-                    return Some(p);
-                }
-                parent = p.parent();
-            }
+            return Some(global_method);
         }
     }
 
@@ -327,7 +320,7 @@ fn find_method_in_same_class_with_signature<'a>(
                                     
                                     // Keep first match as fallback
                                     if fallback_match.is_none() {
-                                        fallback_match = Some(parent);
+                                        fallback_match = Some(capture.node);
                                     }
 
                                     // Try signature matching
@@ -339,7 +332,7 @@ fn find_method_in_same_class_with_signature<'a>(
                                         debug!("Method '{}' signature score: {}", method_name, score);
                                         if score > best_score {
                                             best_score = score;
-                                            best_match = Some(parent);
+                                            best_match = Some(capture.node);
                                         }
                                     }
                                 } else {
@@ -398,7 +391,7 @@ fn find_method_in_same_class<'a>(
                             if let Some(parent) = capture.node.parent() {
                                 if parent.kind() == "method_declaration" {
                                     // This is definitely a method declaration
-                                    candidates.push(parent);
+                                    candidates.push(capture.node);
                                 }
                             }
                         }
@@ -431,7 +424,7 @@ fn find_method_globally<'a>(tree: &'a Tree, source: &str, method_name: &str) -> 
                             if let Some(parent) = capture.node.parent() {
                                 if parent.kind() == "method_declaration" {
                                     // This is definitely a method declaration
-                                    candidates.push(parent);
+                                    candidates.push(capture.node);
                                 }
                             }
                         }
