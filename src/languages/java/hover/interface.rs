@@ -5,7 +5,6 @@ use super::utils::partition_modifiers;
 
 #[tracing::instrument(skip_all)]
 pub fn extract_interface_signature(tree: &Tree, source: &str) -> Option<String> {
-    debug!("extract_interface_signature: Starting interface extraction");
     
     let query_text = r#"
     (package_declaration
@@ -33,15 +32,12 @@ pub fn extract_interface_signature(tree: &Tree, source: &str) -> Option<String> 
     let mut javadoc = String::new();
 
     let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
-    
     // Process all matches but avoid duplicate concatenation
     let mut found_interface = false;
     while let Some(query_match) = matches.next() {
-        debug!("extract_interface_signature: Found interface match");
         for capture in query_match.captures {
             let capture_name = query.capture_names()[capture.index as usize];
             let text = capture.node.utf8_text(source.as_bytes()).unwrap_or("");
-            debug!("extract_interface_signature: Captured '{}' = '{}'", capture_name, text);
 
             match capture_name {
                 "package_name" => {
@@ -75,9 +71,6 @@ pub fn extract_interface_signature(tree: &Tree, source: &str) -> Option<String> 
         }
     }
     
-    if !found_interface {
-        debug!("extract_interface_signature: No interface matches found");
-    }
 
     format_interface_signature(
         package_name,
@@ -95,11 +88,8 @@ fn format_interface_signature(
     extends_line: String,
     javadoc: String,
 ) -> Option<String> {
-    debug!("format_interface_signature: interface_name='{}', modifiers='{}', package_name='{}', javadoc='{}'", 
-           interface_name, modifiers, package_name, javadoc);
     
     if interface_name.is_empty() {
-        debug!("format_interface_signature: interface_name is empty, returning None");
         return None;
     }
 

@@ -8,7 +8,6 @@ pub mod jar_utils;
 pub mod logging_service;
 pub mod persistence;
 pub mod queries;
-pub mod registry;
 pub mod state_manager;
 pub mod symbols;
 pub mod utils;

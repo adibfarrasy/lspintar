@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use tower_lsp::lsp_types::Location;
-use tracing::debug;
 use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator};
 
 use crate::{
@@ -36,10 +35,6 @@ pub async fn find_in_project(
         let project_root = crate::core::utils::uri_to_path(file_uri)
             .and_then(|path| crate::core::utils::find_project_root(&path))?;
 
-        debug!(
-            "find_in_project: wildcard resolution failed for '{}', trying direct lookup",
-            symbol_name
-        );
 
         // Try to construct FQN using the current package
         let fqn = if let Some(package) = extract_package_from_source(source) {
@@ -52,10 +47,6 @@ pub async fn find_in_project(
             symbol_name.clone()
         };
 
-        debug!(
-            "find_in_project: constructed FQN '{}' for symbol '{}'",
-            fqn, symbol_name
-        );
         (project_root, fqn)
     };
 

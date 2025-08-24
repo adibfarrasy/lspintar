@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use log::debug;
 use std::{
     collections::HashSet,
     path::PathBuf,
@@ -100,8 +99,7 @@ async fn find_implementations(
         if let Ok(Some(index_value)) = result {
             for (file_path, line, col) in index_value {
                 if let Some(file_uri) = path_to_file_uri(&file_path) {
-                    let uri = Url::parse(&file_uri)
-                        .inspect_err(|e| debug!("Failed to parse URI: {e}"))?;
+                    let uri = Url::parse(&file_uri).map_err(anyhow::Error::from)?;
                     let location = Location {
                         uri,
                         range: Range {
@@ -219,9 +217,7 @@ fn get_implementation_with_method_query() -> &'static Option<Query> {
                     (method_declaration (identifier) @method_name))
                 )"#;
 
-        Query::new(&language, text)
-            .context("failed to parse query")
-            .ok()
+        Query::new(&language, text).ok()
     })
 }
 
@@ -237,7 +233,6 @@ fn get_interface_declaration_query() -> &'static Option<Query> {
         "#;
 
         Query::new(&language, text)
-            .inspect_err(|error| debug!("[get_interface_declaration_query] {error}"))
             .ok()
     })
 }

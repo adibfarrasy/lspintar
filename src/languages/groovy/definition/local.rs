@@ -679,7 +679,6 @@ fn find_as_field<'a>(tree: &'a Tree, source: &str, symbol_name: &str) -> Option<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::symbols::SymbolType;
     use crate::core::utils::create_parser_for_language;
     use crate::languages::groovy::support::GroovySupport;
     use tower_lsp::lsp_types::Position;

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::{anyhow, Result};
 use tower_lsp::lsp_types::{Diagnostic, Hover, Location, Position};
 use tree_sitter::{Node, Parser, Tree, Query, QueryCursor, StreamingIterator};
-use tracing::{debug, warn};
+use tracing::warn;
 
 use crate::core::queries::QueryProvider;
 use crate::core::{dependency_cache::DependencyCache, symbols::SymbolType};
@@ -149,16 +149,13 @@ impl LanguageSupport for KotlinSupport {
         uri: &str,
         dependency_cache: Arc<DependencyCache>,
     ) -> Result<Location> {
-        debug!("Kotlin find_definition called for position {:?} in {}", position, uri);
 
         if let Some(identifier_node) = find_identifier_at_position(tree, source, position) {
             let identifier_text = identifier_node.utf8_text(source.as_bytes()).unwrap_or("?");
-            debug!("Kotlin: Found identifier '{}' at position {:?}", identifier_text, position);
 
             let result = self.find_definition_chain(tree, source, dependency_cache, uri, &identifier_node);
-            match &result {
-                Ok(location) => debug!("Kotlin: Found definition for '{}' at {:?}", identifier_text, location),
-                Err(e) => warn!("Kotlin: Failed to find definition for '{}': {:?}", identifier_text, e),
+            if let Err(e) = &result {
+                warn!("Kotlin: Failed to find definition for '{}': {:?}", identifier_text, e);
             }
             result
         } else {
@@ -189,7 +186,6 @@ impl LanguageSupport for KotlinSupport {
         source: &str,
     ) -> Result<SymbolType> {
         let node_text = node.utf8_text(source.as_bytes())?;
-        debug!("Kotlin determine_symbol_type_from_context: analyzing symbol '{}' at position {:?}", node_text, node.range());
 
         let query_text = self.symbol_type_detection_query();
         let query = Query::new(&tree_sitter_kotlin::language(), query_text)
@@ -212,7 +208,6 @@ impl LanguageSupport for KotlinSupport {
 
                 if capture_text == node_text && capture_range == node_range {
                     let capture_name = query.capture_names()[capture.index as usize];
-                    debug!("Kotlin determine_symbol_type_from_context: MATCHED capture '{}' for symbol '{}'", capture_name, node_text);
 
                     let symbol = match capture_name {
                         "var_decl" => SymbolType::VariableDeclaration,
@@ -227,7 +222,6 @@ impl LanguageSupport for KotlinSupport {
                         _ => SymbolType::VariableUsage,
                     };
 
-                    debug!("Kotlin determine_symbol_type_from_context: final symbol type for '{}': {:?}", node_text, symbol);
                     result = Ok(symbol);
                     found = true;
                     break;
@@ -236,7 +230,6 @@ impl LanguageSupport for KotlinSupport {
         }
 
         if !found {
-            debug!("Kotlin determine_symbol_type_from_context: no match found for '{}', defaulting to VariableUsage", node_text);
         }
 
         result

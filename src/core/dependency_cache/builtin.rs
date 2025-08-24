@@ -39,7 +39,6 @@ impl BuiltinResolver {
             .filter_map(|result| result.ok())
             .collect();
 
-        // eagerly load groovy imports, if any
         dependency_paths.extend_from_slice(&groovy_import_paths);
 
         Self { dependency_paths }
@@ -117,9 +116,7 @@ impl BuiltinResolver {
                         &cache.clone(),
                     )
                     .with_context(|| {
-                        let err_text = format!("Failed to parse external classes: {}", class_name);
-                        debug!(err_text);
-                        anyhow!(err_text)
+                        format!("Failed to parse external classes: {}", class_name)
                     })?;
                 }
             }
@@ -287,12 +284,6 @@ fn parse_and_cache_builtin(
     dependency: Option<ExternalDependency>,
     cache: &DependencyCache,
 ) -> Result<()> {
-    if class_name.contains("String") {
-        debug!(
-            "parse_and_cache_builtin: caching builtin class '{}'",
-            class_name
-        );
-    }
     let external_info = SourceFileInfo::new(source_path, zip_internal_path, dependency);
 
     cache

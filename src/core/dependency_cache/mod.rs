@@ -270,21 +270,12 @@ impl DependencyCache {
     pub fn find_symbol_sync(&self, project_root: &PathBuf, fqn: &str) -> Option<PathBuf> {
         let key = (project_root.clone(), fqn.to_string());
 
-        debug!(
-            "find_symbol_sync: looking for symbol '{}' in project '{:?}'",
-            fqn, project_root
-        );
 
         // First check in-memory cache
         if let Some(file_path) = self.symbol_index.get(&key) {
-            debug!("find_symbol_sync: found symbol '{}' in memory cache", fqn);
             return Some(file_path.value().clone());
         }
 
-        debug!(
-            "find_symbol_sync: symbol '{}' not in memory, checking database",
-            fqn
-        );
 
         // If not found in memory, try database lookup
         let persistence_guard = tokio::task::block_in_place(|| {
@@ -292,13 +283,8 @@ impl DependencyCache {
         });
 
         if let Some(ref persistence) = *persistence_guard {
-            debug!("find_symbol_sync: persistence layer available, querying database");
             match persistence.lookup_symbol(project_root, fqn) {
                 Ok(Some(file_path)) => {
-                    debug!(
-                        "find_symbol_sync: found symbol '{}' in database at path '{:?}'",
-                        fqn, file_path
-                    );
                     // Cache the result in memory for future lookups
                     drop(persistence_guard);
                     self.symbol_index.insert(key, file_path.clone());
@@ -325,32 +311,18 @@ impl DependencyCache {
     pub async fn find_symbol(&self, project_root: &PathBuf, fqn: &str) -> Option<PathBuf> {
         let key = (project_root.clone(), fqn.to_string());
 
-        debug!(
-            "find_symbol: looking for symbol '{}' in project '{:?}'",
-            fqn, project_root
-        );
 
         // First check in-memory cache
         if let Some(file_path) = self.symbol_index.get(&key) {
-            debug!("find_symbol: found symbol '{}' in memory cache", fqn);
             return Some(file_path.value().clone());
         }
 
-        debug!(
-            "find_symbol: symbol '{}' not in memory, checking database",
-            fqn
-        );
 
         // If not found in memory, try database lookup
         let persistence_guard = self.persistence.read().await;
         if let Some(ref persistence) = *persistence_guard {
-            debug!("find_symbol: persistence layer available, querying database");
             match persistence.lookup_symbol(project_root, fqn) {
                 Ok(Some(file_path)) => {
-                    debug!(
-                        "find_symbol: found symbol '{}' in database at path '{:?}'",
-                        fqn, file_path
-                    );
                     // Cache the result in memory for future lookups
                     drop(persistence_guard);
                     self.symbol_index.insert(key, file_path.clone());
@@ -450,38 +422,18 @@ impl DependencyCache {
     ) -> Option<Vec<(PathBuf, usize, usize)>> {
         let key = (project_root.clone(), type_name.to_string());
 
-        debug!(
-            "find_inheritance_implementations: looking for implementations of '{}' in project '{:?}'",
-            type_name, project_root
-        );
 
         // First check in-memory cache
         if let Some(implementations) = self.inheritance_index.get(&key) {
-            debug!(
-                "find_inheritance_implementations: found implementations for '{}' in memory cache",
-                type_name
-            );
             return Some(implementations.value().clone());
         }
 
-        debug!(
-            "find_inheritance_implementations: implementations for '{}' not in memory, checking database",
-            type_name
-        );
 
         // If not found in memory, try database lookup
         let persistence_guard = self.persistence.read().await;
         if let Some(ref persistence) = *persistence_guard {
-            debug!(
-                "find_inheritance_implementations: persistence layer available, querying database"
-            );
             match persistence.load_inheritance_index() {
                 Ok(inheritance_index_map) => {
-                    debug!(
-                        "find_inheritance_implementations: loaded inheritance index from database, {} entries",
-                        inheritance_index_map.len()
-                    );
-                    
                     // Cache all loaded inheritance data in memory for future lookups
                     for entry in inheritance_index_map.iter() {
                         let (db_key, db_implementations) = (entry.key(), entry.value());
@@ -491,10 +443,6 @@ impl DependencyCache {
                     
                     // Now check if we have the requested type
                     if let Some(implementations) = self.inheritance_index.get(&key) {
-                        debug!(
-                            "find_inheritance_implementations: found implementations for '{}' after database load",
-                            type_name
-                        );
                         return Some(implementations.value().clone());
                     }
                 }

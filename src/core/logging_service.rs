@@ -54,7 +54,6 @@ impl LoggingService {
     }
 
     pub fn send(&self, message: LogMessage) {
-        // Fire-and-forget - ignore if channel is full or closed
         let _ = self.sender.try_send(message);
     }
 

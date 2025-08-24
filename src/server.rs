@@ -118,9 +118,7 @@ pub struct LspServer {
     dependency_cache: Arc<DependencyCache>,
     client: tower_lsp::Client,
     workspace_root: Arc<RwLock<Option<PathBuf>>>,
-    // Cache for expensive symbol-at-position resolution
     position_symbol_cache: Arc<DashMap<CacheKey, CachedSymbolInfo>>,
-    // Cache for complete definition lookups
     definition_cache: Arc<DashMap<CacheKey, CachedDefinition>>,
 }
 
@@ -133,7 +131,6 @@ impl LanguageServer for LspServer {
             })?;
         }
 
-        // Best effort root guess
         let client_root = params
             .root_uri
             .and_then(|uri| uri.to_file_path().ok())
@@ -223,7 +220,6 @@ impl LanguageServer for LspServer {
             }
         }
 
-        // Trigger initial diagnostics
         self.diagnostics
             .entry(uri.clone())
             .or_insert_with(|| {
@@ -248,7 +244,6 @@ impl LanguageServer for LspServer {
             }
         };
 
-        // Invalidate caches when document changes
         self.invalidate_caches_for_uri(&uri);
 
         self.diagnostics
@@ -267,10 +262,8 @@ impl LanguageServer for LspServer {
             document.remove(&uri);
         }
 
-        // Invalidate caches when document closes
         self.invalidate_caches_for_uri(&uri);
 
-        // Clear diagnostics
         self.client
             .publish_diagnostics(params.text_document.uri, vec![], None)
             .await;
@@ -356,11 +349,8 @@ impl LanguageServer for LspServer {
             .to_string();
         let position = params.text_document_position_params.position;
 
-        // Try to find definition first for remote hover
-        debug!("hover: attempting find_definition");
         match self.find_definition(uri.clone(), position).await {
             Ok(location) => {
-                debug!("hover: found definition at {}", location.uri);
                 let other_uri = location.uri.to_string();
                 let (content, tree) = self.get_content_and_tree(&other_uri).await?;
 
@@ -369,9 +359,7 @@ impl LanguageServer for LspServer {
                     .detect_language(&other_uri)
                     .ok_or(tower_lsp::jsonrpc::Error::internal_error())?;
 
-                debug!("hover: calling provide_hover on target file");
                 if let Some(hover) = language_support.provide_hover(&tree, &content, location) {
-                    debug!("hover: successfully got hover from target file");
                     return Ok(Some(hover));
                 } else {
                     debug!("hover: provide_hover returned None for target file");
@@ -382,14 +370,12 @@ impl LanguageServer for LspServer {
             }
         }
 
-        // Fallback: provide local hover if definition finding fails
         let (content, tree) = self.get_content_and_tree(&uri).await?;
         let language_support = self
             .language_registry
             .detect_language(&uri)
             .ok_or(tower_lsp::jsonrpc::Error::internal_error())?;
 
-        // Create a location from the current position for local hover
         let local_location = Location {
             uri: tower_lsp::lsp_types::Url::parse(&uri).map_err(|_| {
                 tower_lsp::jsonrpc::Error::invalid_params("Invalid URI".to_string())
@@ -406,24 +392,19 @@ impl LanguageServer for LspServer {
             .map(Some)
     }
 
-    // Future features
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
-        // Language-specific completion
         todo!()
     }
 
     async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
-        // Language-specific code actions
         todo!()
     }
 
     async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
-        // Language-specific formatting
         todo!()
     }
 
     async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
-        // Language-specific reference finding
         todo!()
     }
 }
@@ -449,14 +430,11 @@ impl LspServer {
         const DEFINITION_CACHE_TTL: Duration = Duration::from_secs(30);
         const SYMBOL_CACHE_TTL: Duration = Duration::from_secs(60);
 
-        // Check definition cache first (fastest path)
         let cache_key = CacheKey::new(uri.clone(), position);
         if let Some(cached_def) = self.definition_cache.get(&cache_key) {
             if !cached_def.is_expired(DEFINITION_CACHE_TTL) {
-                debug!("Definition cache hit for {}:{:?}", uri, position);
                 return Ok(cached_def.location.clone());
             } else {
-                // Remove expired entry
                 self.definition_cache.remove(&cache_key);
             }
         }
@@ -469,10 +447,8 @@ impl LspServer {
             .detect_language(&uri)
             .ok_or(tower_lsp::jsonrpc::Error::internal_error())?;
 
-        // Check symbol cache for expensive symbol resolution
         let symbol_info = if let Some(cached_symbol) = self.position_symbol_cache.get(&cache_key) {
             if !cached_symbol.is_expired(SYMBOL_CACHE_TTL) {
-                debug!("Symbol cache hit for {}:{:?}", uri, position);
                 Some((
                     cached_symbol.symbol_name.clone(),
                     cached_symbol.symbol_type.clone(),
@@ -486,7 +462,6 @@ impl LspServer {
         };
 
         let location = if let Some((symbol_name, symbol_type)) = symbol_info {
-            // Use cached symbol info for faster lookup
             self.find_definition_with_cached_symbol(
                 &tree,
                 &content,
@@ -497,7 +472,6 @@ impl LspServer {
             )
             .await?
         } else {
-            // Extract symbol info first (before moving language_support into closure)
             let symbol_info_for_cache =
                 if let Ok(identifier_node) = find_identifier_at_position(&tree, &content, position)
                 {
@@ -516,7 +490,6 @@ impl LspServer {
                     None
                 };
 
-            // Full resolution - extract symbol and cache it
             let location = tokio::task::spawn_blocking({
                 let tree = tree.clone();
                 let content = content.clone();
@@ -528,7 +501,6 @@ impl LspServer {
             .map_err(|error| tower_lsp::jsonrpc::Error::invalid_params(format!("{error}")))?
             .map_err(|error| tower_lsp::jsonrpc::Error::invalid_params(format!("{error}")))?;
 
-            // Cache the symbol info for future use
             if let Some((symbol_name, symbol_type)) = symbol_info_for_cache {
                 self.position_symbol_cache.insert(
                     cache_key.clone(),
@@ -539,7 +511,6 @@ impl LspServer {
             location
         };
 
-        // Cache the final result
         self.definition_cache
             .insert(cache_key, CachedDefinition::new(location.clone()));
 
@@ -560,14 +531,11 @@ impl LspServer {
             .detect_language(uri)
             .ok_or(tower_lsp::jsonrpc::Error::internal_error())?;
 
-        // Use cached symbol info to bypass expensive tree-sitter queries
-        // Try direct dependency cache lookup first for class/interface symbols
         if matches!(
             symbol_type,
             SymbolType::ClassDeclaration | SymbolType::InterfaceDeclaration
         ) {
             if let Some(project_root) = find_project_root(&uri_to_path(uri).unwrap_or_default()) {
-                // Use lazy loading for symbol lookup
                 if let Some(file_path) = dependency_cache
                     .find_symbol(&project_root, symbol_name)
                     .await
@@ -582,7 +550,6 @@ impl LspServer {
             }
         }
 
-        // Fallback to language-specific resolution with tree traversal
         tokio::task::spawn_blocking({
             let tree = tree.clone();
             let content = content.to_string();
@@ -604,7 +571,6 @@ impl LspServer {
     }
 
     fn invalidate_caches_for_uri(&self, uri: &str) {
-        // Remove all cache entries for this URI
         self.position_symbol_cache
             .retain(|cache_key, _| cache_key.uri != uri);
         self.definition_cache
@@ -616,11 +582,9 @@ impl LspServer {
         const DEFINITION_CACHE_TTL: Duration = Duration::from_secs(30);
         const SYMBOL_CACHE_TTL: Duration = Duration::from_secs(60);
 
-        // Clean up expired definition cache entries
         self.definition_cache
             .retain(|_, cached_def| !cached_def.is_expired(DEFINITION_CACHE_TTL));
 
-        // Clean up expired symbol cache entries
         self.position_symbol_cache
             .retain(|_, cached_symbol| !cached_symbol.is_expired(SYMBOL_CACHE_TTL));
     }
@@ -637,7 +601,6 @@ impl LspServer {
 
         let mut document_manager = self.documents.write().await;
 
-        // Double-check in case another thread inserted it
         if let Some(document) = document_manager.get(uri) {
             if let Some(tree) = document_manager.get_tree(uri) {
                 return Ok((document.content.clone(), tree.clone()));
@@ -659,7 +622,7 @@ impl LspServer {
         let document = Document::new(
             uri.to_string(),
             content.clone(),
-            0, // Version 0 for disk-loaded files
+            0,
             language_support.language_id().to_string(),
         );
 
@@ -733,11 +696,9 @@ impl LspServer {
 
     async fn update_cache(&self, path: Option<PathBuf>) {
         if let Some(dir) = path {
-            // For non-external dependencies, check if cache exists and is valid
             let cache_loaded = if !is_external_dependency(&dir) {
                 match self.dependency_cache.check_and_initialize_cache(&dir).await {
                     Ok(true) => {
-                        // Cache is valid and lazy loading is initialized
                         set_global("is_indexing_completed", true);
                         true
                     }
@@ -745,10 +706,9 @@ impl LspServer {
                     Err(_) => false,
                 }
             } else {
-                false // Don't use persistence for external dependencies
+                false
             };
 
-            // If cache wasn't found or is stale, rebuild it
             if !cache_loaded {
                 if is_external_dependency(&dir) {
                     if let Err(error) = self
@@ -768,7 +728,6 @@ impl LspServer {
                     {
                         lsp_error!("{}", error.to_string())
                     } else {
-                        // After successful indexing, initialize persistence for lazy loading
                         if let Err(error) = self
                             .dependency_cache
                             .initialize_persistence(dir.clone())

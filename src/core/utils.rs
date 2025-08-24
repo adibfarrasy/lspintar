@@ -139,13 +139,11 @@ pub fn search_definition_in_project_cross_language(
     target_file_uri: &str,
     fallback_language_support: &dyn crate::languages::LanguageSupport,
 ) -> Option<tower_lsp::lsp_types::Location> {
-    use tracing::debug;
     
     // Detect target file language
     let target_file_path = uri_to_path(target_file_uri)?;
     let target_language = detect_language_from_path(&target_file_path).unwrap_or("java");
     
-    debug!("Core: Cross-language search dispatching to {} for target file: {}", target_language, target_file_uri);
     
     // Get the appropriate language support for the target file
     let target_language_support = get_language_support_for_file(&target_file_path)?;
@@ -153,7 +151,6 @@ pub fn search_definition_in_project_cross_language(
     // Dispatch to the appropriate language's search function
     match target_language {
         "groovy" => {
-            debug!("Core: Calling Groovy search_definition_in_project");
             groovy_search_definition_in_project(
                 current_file_uri,
                 current_source,
@@ -163,7 +160,6 @@ pub fn search_definition_in_project_cross_language(
             )
         }
         "java" => {
-            debug!("Core: Calling Java search_definition_in_project");
             java_search_definition_in_project(
                 current_file_uri,
                 current_source,
@@ -173,12 +169,10 @@ pub fn search_definition_in_project_cross_language(
             )
         }
         "kotlin" => {
-            debug!("Core: Kotlin search_definition_in_project not implemented, using fallback");
             // TODO: Implement Kotlin search_definition_in_project
             None
         }
         _ => {
-            debug!("Core: Unknown language {}, using fallback language support", target_language);
             // Fallback to the provided language support (usually the current file's language)
             match fallback_language_support.language_id() {
                 "java" => java_search_definition_in_project(
@@ -232,8 +226,6 @@ pub fn node_to_lsp_location(node: &Node, file_uri: &str) -> Option<Location> {
     let start_pos = node.start_position();
     let end_pos = node.end_position();
 
-    debug!("node_to_lsp_location: node kind={}, start_byte={}, start_pos=({},{}), end_pos=({},{})", 
-           node.kind(), node.start_byte(), start_pos.row, start_pos.column, end_pos.row, end_pos.column);
 
     let range = Range {
         start: Position {

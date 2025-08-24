@@ -1,5 +1,4 @@
 use anyhow::Result;
-use log::debug;
 use std::{collections::HashSet, path::PathBuf, sync::Arc};
 use tokio::task;
 use tower_lsp::lsp_types::{Location, Position, Range, Url};
@@ -90,8 +89,7 @@ async fn find_implementations(
         if let Ok(Some(index_value)) = result {
             for (file_path, line, col) in index_value {
                 if let Some(file_uri) = path_to_file_uri(&file_path) {
-                    let uri = Url::parse(&file_uri)
-                        .inspect_err(|e| debug!("Failed to parse URI: {e}"))?;
+                    let uri = Url::parse(&file_uri).map_err(anyhow::Error::from)?;
                     let location = Location {
                         uri,
                         range: Range {

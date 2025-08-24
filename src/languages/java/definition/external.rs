@@ -2,7 +2,6 @@ use std::{path::PathBuf, sync::Arc};
 
 use anyhow::Context;
 use tower_lsp::lsp_types::Location;
-use tracing::debug;
 use tree_sitter::Node;
 
 use crate::{
@@ -66,68 +65,38 @@ async fn find_project_external(
         symbol_name.clone()
     };
 
-    debug!(
-        "Looking for external dependency with resolved symbol: {}",
-        resolved_symbol
-    );
 
     // First try current project
     if let Some(source_info) = dependency_cache
         .find_project_external_info(&current_project, &resolved_symbol)
         .await
     {
-        debug!("Found external dependency for symbol: {}", resolved_symbol);
         return search_external_definition_and_convert(&symbol_name, source_info);
     }
 
     // Then try projects this project depends on (using project_metadata)
     if let Some(project_metadata) = dependency_cache.project_metadata.get(&current_project) {
-        debug!(
-            "find_project_external: checking {} inter-project dependencies",
-            project_metadata.inter_project_deps.len()
-        );
         for dependent_project_ref in project_metadata.inter_project_deps.iter() {
             let dependent_project = dependent_project_ref.clone();
-            debug!(
-                "find_project_external: checking dependency project '{:?}'",
-                dependent_project
-            );
             if let Some(source_info) = dependency_cache
                 .find_project_external_info(&dependent_project, &resolved_symbol)
                 .await
             {
-                debug!(
-                    "find_project_external: found external info in dependency project '{:?}'",
-                    dependent_project
-                );
                 return search_external_definition_and_convert(&symbol_name, source_info);
             }
 
             // Also check if the symbol exists directly in the dependency project (not as external dependency)
-            debug!(
-                "find_project_external: searching for symbol '{}' in dependency project '{:?}'",
-                resolved_symbol, dependent_project
-            );
             if let Some(symbol_path) = dependency_cache
                 .find_symbol(&dependent_project, &resolved_symbol)
                 .await
             {
-                debug!("find_project_external: found symbol in dependency project '{:?}' at path '{:?}'", dependent_project, symbol_path);
                 // Convert to external source info format
                 let source_info = SourceFileInfo::new(symbol_path, None, None);
                 return search_external_definition_and_convert(&symbol_name, source_info);
             } else {
-                debug!(
-                    "find_project_external: symbol '{}' not found in dependency project '{:?}'",
-                    resolved_symbol, dependent_project
-                );
             }
         }
     } else {
-        debug!(
-            "find_project_external: no project metadata found for '{:?}'",
-            current_project
-        );
 
         // Fallback: try all other projects in the cache (as before)
         let mut checked_projects = std::collections::HashSet::new();
@@ -137,28 +106,16 @@ async fn find_project_external(
             let (project_root, _) = entry.key();
             if !checked_projects.contains(project_root) {
                 checked_projects.insert(project_root.clone());
-                debug!(
-                    "find_project_external: checking project external infos in '{:?}' (fallback)",
-                    project_root
-                );
                 if let Some(source_info) = dependency_cache
                     .find_project_external_info(project_root, &resolved_symbol)
                     .await
                 {
-                    debug!(
-                        "find_project_external: found external info in project '{:?}' (fallback)",
-                        project_root
-                    );
                     return search_external_definition_and_convert(&symbol_name, source_info);
                 }
             }
         }
     }
 
-    debug!(
-        "External dependency not found for symbol: {}",
-        resolved_symbol
-    );
 
     if let Some(source_info) = dependency_cache.find_builtin_info(&resolved_symbol) {
         return search_external_definition_and_convert(&symbol_name, source_info);

@@ -1,5 +1,4 @@
 use tower_lsp::lsp_types::Location;
-use tracing::debug;
 use tree_sitter::{Node, QueryCursor, StreamingIterator, Tree};
 
 use crate::{
@@ -135,7 +134,6 @@ fn find_variable_declarations_in_scope<'a>(
     // 2. Check local variable declarations in accessible scopes
     let mut current_node = Some(*usage_node);
     while let Some(node) = current_node {
-        // Check if this node is a block or method body
         if matches!(
             node.kind(),
             "block" | "method_declaration" | "constructor_declaration"
@@ -169,7 +167,6 @@ fn find_local_variables_in_block<'a>(
                 for capture in m.captures {
                     if let Ok(capture_text) = capture.node.utf8_text(source.as_bytes()) {
                         if capture_text == symbol_name {
-                            // Check if declaration comes before usage (same scope rule)
                             if capture.node.start_byte() < usage_node.start_byte() {
                                 candidates.push(capture.node);
                             }
@@ -256,12 +253,8 @@ fn find_best_method_match<'a>(
             method_name,
             &call_signature,
         ) {
-            debug!("Found same-class method, returning: kind={}, start_byte={}", 
-                   same_class_method.kind(), same_class_method.start_byte());
             return Some(same_class_method);
         }
-        
-        debug!("No same-class method found, trying global search");
 
         // If not found in the same class, search globally with signature matching
         if let Some(global_method) =
@@ -304,19 +297,12 @@ fn find_method_in_same_class_with_signature<'a>(
             .for_each(|m| {
                 for capture in m.captures {
                     if let Ok(capture_text) = capture.node.utf8_text(source.as_bytes()) {
-                        debug!(
-                            "capture_text: {}, capture kind: {}, parent kind: {:?}",
-                            capture_text,
-                            capture.node.kind(),
-                            capture.node.parent().map(|p| p.kind())
-                        );
 
                         if capture_text == method_name {
                             // CRITICAL: Verify this is actually a method declaration name, not a method call
                             if let Some(parent) = capture.node.parent() {
                                 if parent.kind() == "method_declaration" {
                                     // This is definitely a method declaration
-                                    debug!("Found method declaration for '{}'", method_name);
                                     
                                     // Keep first match as fallback
                                     if fallback_match.is_none() {
@@ -329,14 +315,11 @@ fn find_method_in_same_class_with_signature<'a>(
                                             call_signature,
                                             &method_sig,
                                         );
-                                        debug!("Method '{}' signature score: {}", method_name, score);
                                         if score > best_score {
                                             best_score = score;
                                             best_match = Some(capture.node);
                                         }
                                     }
-                                } else {
-                                    debug!("Skipping non-declaration node: parent kind = {}", parent.kind());
                                 }
                             }
                         }
@@ -345,21 +328,11 @@ fn find_method_in_same_class_with_signature<'a>(
             });
 
         // Return best signature match, or fallback if no good signature match
-        let result = if best_score > 0 {
-            debug!("Returning best_match with score {}", best_score);
+        if best_score > 0 {
             best_match
         } else {
-            debug!("Returning fallback_match");
             fallback_match
-        };
-        
-        if let Some(ref node) = result {
-            debug!("Final result node kind: {}, start_byte: {}", node.kind(), node.start_byte());
-        } else {
-            debug!("No result found in same class");
         }
-        
-        result
     } else {
         None
     }

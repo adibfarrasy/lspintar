@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
 use tower_lsp::lsp_types::{Diagnostic, Hover, Location, Position};
-use tracing::{info, warn};
+use tracing::warn;
 use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator, Tree};
 
 use crate::core::queries::QueryProvider;
@@ -125,34 +125,14 @@ impl LanguageSupport for JavaSupport {
         uri: &str,
         dependency_cache: Arc<DependencyCache>,
     ) -> Result<Location> {
-        info!(
-            "Java find_definition called for position {:?} in {}",
-            position, uri
-        );
 
-        // First try to find the identifier at the given position
-        info!(
-            "Java: Looking for identifier at line {}, char {} in {} bytes of source",
-            position.line,
-            position.character,
-            source.len()
-        );
         if let Some(identifier_node) = find_identifier_at_position(tree, source, position) {
             let identifier_text = identifier_node.utf8_text(source.as_bytes()).unwrap_or("?");
-            info!(
-                "Java: Found identifier '{}' at position {:?}",
-                identifier_text, position
-            );
 
             // Try to determine symbol type
             match self.determine_symbol_type_from_context(tree, &identifier_node, source) {
                 Ok(symbol_type) => {
-                    info!(
-                        "Java: Symbol '{}' has type {:?}",
-                        identifier_text, symbol_type
-                    );
 
-                    // Use the definition chain to find the definition
                     let result = self.find_definition_chain(
                         tree,
                         source,
@@ -160,15 +140,11 @@ impl LanguageSupport for JavaSupport {
                         uri,
                         &identifier_node,
                     );
-                    match &result {
-                        Ok(location) => info!(
-                            "Java: Found definition for '{}' at {:?}",
-                            identifier_text, location
-                        ),
-                        Err(e) => warn!(
+                    if let Err(e) = &result {
+                        warn!(
                             "Java: Failed to find definition for '{}': {:?}",
                             identifier_text, e
-                        ),
+                        );
                     }
                     result
                 }
@@ -181,14 +157,8 @@ impl LanguageSupport for JavaSupport {
                 }
             }
         } else {
-            warn!(
-                "Java: No identifier found at position {:?} in {}",
-                position, uri
-            );
-
-            // Check if this file is even in our symbol index
             let file_path = uri.strip_prefix("file://").unwrap_or(uri);
-            warn!("Java: File {} may not be indexed yet", file_path);
+            warn!("Java: No identifier found at position {:?} in {} - file may not be indexed yet", position, file_path);
 
             let root_node = tree.root_node();
             self.find_definition_chain(tree, source, dependency_cache, uri, &root_node)

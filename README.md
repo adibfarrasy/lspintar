@@ -13,10 +13,6 @@ A Language Server Protocol (LSP) implementation for JVM-based languages, current
 - **Dependency Cache**: Efficient caching system for external dependency resolution
 
 ### Planned Support
-Future releases will include support for:
-- Java
-- Kotlin
-
 Additional features under development:
 - Code completion
 - Workspace symbols

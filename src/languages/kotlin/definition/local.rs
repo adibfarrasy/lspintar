@@ -1,5 +1,4 @@
 use tower_lsp::lsp_types::Location;
-use tracing::debug;
 use tree_sitter::{Node, Tree};
 
 use crate::{
@@ -14,18 +13,14 @@ pub fn find_local(
     usage_node: &Node,
     language_support: &dyn LanguageSupport,
 ) -> Option<Location> {
-    debug!("Kotlin find_local: searching for symbol");
     
     let symbol_name = usage_node.utf8_text(source.as_bytes()).ok()?;
-    debug!("Kotlin find_local: looking for symbol '{}'", symbol_name);
 
     // Search for declarations in the same file
     if let Some(definition_node) = search_local_definitions(tree, source, usage_node, symbol_name) {
-        debug!("Kotlin find_local: found local definition for '{}'", symbol_name);
         return node_to_lsp_location(&definition_node, file_uri);
     }
 
-    debug!("Kotlin find_local: no local definition found for '{}'", symbol_name);
     None
 }
 

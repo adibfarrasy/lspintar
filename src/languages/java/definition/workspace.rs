@@ -1,7 +1,6 @@
 use std::{collections::HashSet, path::PathBuf, sync::Arc};
 
 use tower_lsp::lsp_types::Location;
-use tracing::debug;
 use tree_sitter::Node;
 
 use crate::{
@@ -66,11 +65,6 @@ fn find_in_project_dependencies(
         &dependency_cache,
     )?;
 
-    debug!("Java workspace: Current project: {:?}", current_project);
-    debug!(
-        "Java workspace: Symbol key from current project: {:?}",
-        symbol_key
-    );
 
     // Extract imports to look for fully qualified names
     let symbol_name = usage_node.utf8_text(source.as_bytes()).unwrap_or("");
@@ -80,12 +74,10 @@ fn find_in_project_dependencies(
     // Add fully qualified import names that match our symbol
     for import in &imports {
         if import.ends_with(&format!(".{}", symbol_name)) {
-            debug!("Java workspace: Adding import '{}' as search key", import);
             search_keys.push(import.clone());
         }
     }
 
-    debug!("Java workspace: Will search for keys: {:?}", search_keys);
 
     // Get all projects in the workspace except the current one
     let mut checked_projects = HashSet::new();
@@ -97,12 +89,10 @@ fn find_in_project_dependencies(
 
         if !checked_projects.contains(project_root) {
             checked_projects.insert(project_root.clone());
-            debug!("Java workspace: Checking project: {:?}", project_root);
 
             // Try each search key (simple name + fully qualified imports)
             for search_key in &search_keys {
                 let project_symbol_key = (project_root.clone(), search_key.clone());
-                debug!("Java workspace: Looking for key: {:?}", project_symbol_key);
 
                 let target_file_opt = tokio::task::block_in_place(|| {
                     tokio::runtime::Handle::current().block_on(
@@ -111,29 +101,16 @@ fn find_in_project_dependencies(
                 });
 
                 if let Some(target_file) = target_file_opt {
-                    debug!(
-                        "Java workspace: Found symbol in project {:?} at file path: {:?}",
-                        project_root, target_file
-                    );
 
                     let target_uri = match path_to_file_uri(&target_file) {
                         Some(uri) => {
-                            debug!("Java workspace: Converted file path to URI: {}", uri);
                             uri
                         }
                         None => {
-                            debug!(
-                                "Java workspace: Failed to convert file path to URI: {:?}",
-                                target_file
-                            );
                             continue;
                         }
                     };
 
-                    debug!(
-                        "Java workspace: Calling search_definition_in_project with target_uri: {}",
-                        target_uri
-                    );
 
                     // Use the centralized cross-language dispatcher
                     if let Some(location) = search_definition_in_project_cross_language(
@@ -143,19 +120,10 @@ fn find_in_project_dependencies(
                         &target_uri,
                         language_support,
                     ) {
-                        debug!(
-                            "Java workspace: Successfully resolved symbol at {:?}",
-                            location
-                        );
                         return Some(location);
                     } else {
-                        debug!("Java workspace: search_definition_in_project returned None for target_uri: {}", target_uri);
                     }
                 } else {
-                    debug!(
-                        "Java workspace: Key {:?} not found in project {:?}",
-                        search_key, project_root
-                    );
                 }
             }
         }

@@ -3,28 +3,13 @@ use tree_sitter::{Node, Tree};
 
 pub fn find_identifier_at_position<'a>(tree: &'a Tree, source: &str, position: Position) -> Option<Node<'a>> {
     let byte_offset = position_to_byte_offset(source, position)?;
-    use tracing::debug;
-    debug!("Kotlin utils: Position {:?} converted to byte offset {}", position, byte_offset);
-    
-    if let Some(context) = get_context_around_offset(source, byte_offset, 10) {
-        debug!("Kotlin utils: Context around byte {}: '{}'", byte_offset, context);
-    }
-    
     let root_node = tree.root_node();
-    let containing_node = find_deepest_node_containing_offset(root_node, byte_offset);
-    if let Some(node) = containing_node {
-        let node_text = node.utf8_text(source.as_bytes()).unwrap_or("?");
-        debug!("Kotlin utils: Deepest node containing byte {} is '{}' ({}) at bytes {}-{}", 
-               byte_offset, node_text, node.kind(), node.start_byte(), node.end_byte());
-    }
     
     let result = find_identifier_at_byte_offset(root_node, byte_offset);
     
     if result.is_none() {
-        debug!("Kotlin utils: No identifier found at byte offset {}, trying nearby positions", byte_offset);
         for offset in [byte_offset.saturating_sub(1), byte_offset + 1, byte_offset.saturating_sub(2), byte_offset + 2] {
             if let Some(node) = find_identifier_at_byte_offset(root_node, offset) {
-                debug!("Kotlin utils: Found identifier at nearby offset {}", offset);
                 return Some(node);
             }
         }
@@ -80,12 +65,8 @@ fn position_to_byte_offset(source: &str, position: Position) -> Option<usize> {
 }
 
 fn find_identifier_at_byte_offset<'a>(node: Node<'a>, byte_offset: usize) -> Option<Node<'a>> {
-    use tracing::debug;
-    
     let is_identifier = matches!(node.kind(), "simple_identifier" | "type_identifier");
     if is_identifier && node.start_byte() <= byte_offset && byte_offset < node.end_byte() {
-        debug!("Kotlin utils: Found exact {} match at bytes {}-{}", 
-               node.kind(), node.start_byte(), node.end_byte());
         return Some(node);
     }
 
@@ -104,11 +85,7 @@ fn find_identifier_at_byte_offset<'a>(node: Node<'a>, byte_offset: usize) -> Opt
             byte_offset - node.end_byte()
         };
         
-        debug!("Kotlin utils: Checking {} at bytes {}-{}, distance from {} is {}", 
-               node.kind(), node.start_byte(), node.end_byte(), byte_offset, distance);
-        
         if distance <= 3 {
-            debug!("Kotlin utils: Using nearby {} match", node.kind());
             return Some(node);
         }
     }

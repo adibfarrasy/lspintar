@@ -70,18 +70,11 @@ pub fn extract_class_signature(tree: &Tree, source: &str) -> Option<String> {
                         javadoc = text.to_string();
                     }
                 }
-                _ => {
-                    debug!(
-                        "extract_class_signature: Unknown capture '{}': '{}'",
-                        capture_name, text
-                    );
-                }
+                _ => {}
             }
         }
     }
 
-    debug!("extract_class_signature: Final values - package='{}', class='{}', modifiers='{}', superclass='{}', interfaces='{}'", 
-           package_name, class_name, modifiers, superclass_line, interface_line);
 
     format_class_signature(
         package_name,

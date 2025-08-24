@@ -23,24 +23,14 @@ pub fn handle(
     location: Location,
     language_support: &dyn LanguageSupport,
 ) -> Option<Hover> {
-    debug!("hover::handle: called with location {:?}", location);
     let node = location_to_node(&location, tree);
     if node.is_none() {
-        debug!(
-            "hover::handle: location_to_node returned None for location {:?}",
-            location
-        );
         return None;
     }
     let node = node?;
 
-    debug!("hover::handle: successfully got node, determining symbol type");
     let symbol_type = language_support.determine_symbol_type_from_context(tree, &node, source);
     if symbol_type.is_err() {
-        debug!(
-            "hover::handle: determine_symbol_type_from_context failed: {:?}",
-            symbol_type
-        );
         return None;
     }
     let symbol_type = symbol_type.ok()?;
@@ -51,7 +41,6 @@ pub fn handle(
         SymbolType::MethodDeclaration => extract_method_signature(tree, &node, source),
         SymbolType::FieldDeclaration => extract_field_signature(tree, &node, source),
         SymbolType::Type => {
-            debug!("hover::handle: handling Type symbol, determining specific type from node");
             match node.kind() {
                 "class_declaration" => extract_class_signature(tree, source),
                 "interface_declaration" => extract_interface_signature(tree, source),
@@ -59,13 +48,7 @@ pub fn handle(
                     // We don't have enum extraction yet, fall back to class
                     extract_class_signature(tree, source)
                 }
-                _ => {
-                    debug!(
-                        "hover::handle: Type has unknown node kind '{}', trying class extraction",
-                        node.kind()
-                    );
-                    extract_class_signature(tree, source)
-                }
+                _ => extract_class_signature(tree, source)
             }
         }
         SymbolType::MethodCall => {
@@ -77,18 +60,9 @@ pub fn handle(
                 extract_method_call_info(&node, source)
             }
         }
-        _ => {
-            debug!("hover::handle: unsupported symbol type: {:?}", symbol_type);
-            None
-        }
+        _ => None
     };
 
-    if content.is_none() {
-        debug!(
-            "hover::handle: content extraction returned None for symbol type {:?}",
-            symbol_type
-        );
-    }
 
     content.and_then(|c| {
         Some(Hover {

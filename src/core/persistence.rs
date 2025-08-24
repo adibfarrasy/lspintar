@@ -10,7 +10,6 @@ use std::{
     sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
 };
-use tracing::debug;
 
 use crate::core::{
     build_tools::ExternalDependency,
@@ -401,12 +400,6 @@ impl PersistenceLayer {
 
             for entry in map.iter() {
                 let (class_name, source_info) = (entry.key(), entry.value());
-                if class_name.contains("String") {
-                    debug!(
-                        "store_builtin_infos: storing builtin class '{}'",
-                        class_name
-                    );
-                }
 
                 // Get file metadata
                 let (mtime, size) = match fs::metadata(&source_info.source_path) {
@@ -980,12 +973,6 @@ impl PersistenceLayer {
 
     /// Called from: go-to-definition requests when builtin not in memory cache
     pub fn lookup_builtin_info(&self, class_name: &str) -> Result<Option<SourceFileInfo>> {
-        if class_name.contains("String") {
-            debug!(
-                "lookup_builtin_info: looking up builtin class '{}'",
-                class_name
-            );
-        }
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT source_path, zip_internal_path, dependency_info FROM builtin_infos WHERE class_name = ?"

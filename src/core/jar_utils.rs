@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 use anyhow::Context;
-use tracing::{debug, error};
+use tracing::error;
 
 use crate::{
     core::{
@@ -73,7 +73,6 @@ pub fn extract_zip_file_to_temp(source_info: &SourceFileInfo) -> Option<()> {
         }
     }
 
-    debug!("Extracted dependency to: {:?}", temp_dir);
     Some(())
 }
 

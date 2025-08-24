@@ -10,7 +10,7 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use tokio::{fs, task::spawn_blocking};
-use tracing::{debug, info};
+use tracing::debug;
 use tree_sitter::Tree;
 use walkdir::WalkDir;
 
@@ -186,7 +186,6 @@ pub async fn extract_symbol_definitions(
 fn extract_symbols_from_tree_by_language(
     parsed_file: &ParsedSourceFile,
 ) -> Result<Vec<SymbolDefinition>> {
-    info!("Extracting symbols from {} file: {}", parsed_file.language, parsed_file.file_path.display());
     let result = match parsed_file.language.as_str() {
         "groovy" => extract_groovy_symbols(parsed_file),
         "java" => extract_java_symbols(parsed_file),
@@ -201,9 +200,8 @@ fn extract_symbols_from_tree_by_language(
         }
     };
     
-    match &result {
-        Ok(symbols) => info!("Extracted {} symbols from {}", symbols.len(), parsed_file.file_path.display()),
-        Err(e) => debug!("Failed to extract symbols from {}: {:?}", parsed_file.file_path.display(), e),
+    if let Err(e) = &result {
+        debug!("Failed to extract symbols from {}: {:?}", parsed_file.file_path.display(), e);
     }
     
     result

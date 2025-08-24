@@ -182,43 +182,22 @@ pub fn prepare_symbol_lookup_key_with_wildcard_support(
     let project_root = match project_root {
         Some(root) => root,
         None => {
-            debug!(
-                "Java utils: Failed to determine project root for file_uri: {}",
-                file_uri
-            );
             return None;
         }
     };
 
-    debug!(
-        "Java utils: Preparing symbol lookup for '{}' in project {:?}",
-        symbol_name, project_root
-    );
 
     // First try direct symbol lookup
     let direct_key = (project_root.clone(), symbol_name.clone());
-    debug!(
-        "Java utils: Trying direct key: ({:?}, '{}')",
-        project_root, symbol_name
-    );
     // Check using read-through cache pattern
     if dependency_cache
         .find_symbol_sync(&direct_key.0, &direct_key.1)
         .is_some()
     {
-        debug!("Java utils: Found direct match!");
-        debug!(
-            "Java utils: prepare_symbol_lookup_key_with_wildcard_support returning (direct): {:?}",
-            direct_key
-        );
         return Some(direct_key);
     }
 
     // Debug: show comprehensive cache information
-    debug!(
-        "Java utils: Cache contains {} symbol entries",
-        dependency_cache.symbol_index.len()
-    );
 
     // Show all project roots in cache
     let project_roots: std::collections::HashSet<_> = dependency_cache
@@ -226,10 +205,6 @@ pub fn prepare_symbol_lookup_key_with_wildcard_support(
         .iter()
         .map(|entry| entry.key().0.clone())
         .collect();
-    debug!(
-        "Java utils: All project roots in cache: {:?}",
-        project_roots
-    );
 
     // Show symbols for current project
     if !dependency_cache.symbol_index.is_empty() {
@@ -239,38 +214,15 @@ pub fn prepare_symbol_lookup_key_with_wildcard_support(
             .filter(|entry| entry.key().0 == project_root)
             .map(|entry| entry.key().1.clone())
             .collect();
-        debug!(
-            "Java utils: All {} keys for current project {:?}: {:?}",
-            current_project_keys.len(),
-            project_root,
-            current_project_keys
-        );
     }
 
     // Try to resolve through imports
     let imports = extract_imports_from_source(source);
-    debug!(
-        "Java utils: Found {} explicit imports: {:?}",
-        imports.len(),
-        imports
-    );
 
     // Check explicit imports first
     for import in &imports {
-        debug!(
-            "Java utils: checking if import '{}' ends with '.{}'",
-            import, symbol_name
-        );
         if import.ends_with(&format!(".{}", symbol_name)) {
             let explicit_key = (project_root.clone(), import.clone());
-            debug!(
-                "Java utils: import '{}' matches symbol '{}'",
-                import, symbol_name
-            );
-            debug!(
-                "Java utils: Trying explicit import key: ({:?}, '{}')",
-                project_root, import
-            );
 
             // Check using read-through cache pattern
             // First try current project (symbols and builtins)
@@ -279,16 +231,10 @@ pub fn prepare_symbol_lookup_key_with_wildcard_support(
                 .is_some()
                 || dependency_cache.find_builtin_info(import).is_some()
             {
-                debug!("Java utils: Found explicit import match in current project!");
-                debug!("Java utils: prepare_symbol_lookup_key_with_wildcard_support returning (explicit): {:?}", explicit_key);
                 return Some(explicit_key.clone());
             }
 
             // Then try current project's external dependencies (JAR files)
-            debug!(
-                "Java utils: checking external dependencies of current project for import '{}'",
-                import
-            );
             if let Some(_) = tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(async {
                     dependency_cache
@@ -297,7 +243,6 @@ pub fn prepare_symbol_lookup_key_with_wildcard_support(
                 })
             }) {
                 debug!("Java utils: Found explicit import match in external dependencies of current project!");
-                debug!("Java utils: prepare_symbol_lookup_key_with_wildcard_support returning (explicit): {:?}", explicit_key);
                 return Some(explicit_key);
             }
 
@@ -469,7 +414,6 @@ pub fn get_wildcard_imports_from_source(source: &str) -> Vec<String> {
     for line in source.lines() {
         let trimmed = line.trim();
         if trimmed.starts_with("import ") && trimmed.ends_with(".*;") {
-            // Extract package name (remove "import " and ".*;")
             let mut package = trimmed[7..trimmed.len() - 3].trim();
 
             // Remove "static" keyword if present

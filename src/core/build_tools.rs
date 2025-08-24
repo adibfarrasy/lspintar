@@ -7,7 +7,6 @@ use std::{
     sync::Arc,
 };
 use tokio::process::Command;
-use tracing::debug;
 use zip::ZipArchive;
 
 use crate::lsp_info;
@@ -144,14 +143,6 @@ pub async fn execute_gradle_dependencies(
         "gradle"
     };
 
-    debug!(
-        "Executing Gradle dependencies command: {} in project: {:?}",
-        gradle_command, project_root
-    );
-    debug!(
-        "Full command: {} dependencies --configuration compileClasspath --quiet --no-daemon",
-        gradle_command
-    );
 
     let mut results = GradleDependenciesResult::new();
 
@@ -174,34 +165,14 @@ pub async fn execute_gradle_dependencies(
 
     if output.status.success() {
         let output_text = String::from_utf8(output.stdout)?;
-        debug!(
-            "Gradle command succeeded. Output length: {} chars",
-            output_text.len()
-        );
         // Split output by configuration sections
         let sections = parse_multi_configuration_output(&output_text);
-        debug!(
-            "Parsed {} configuration sections from Gradle output",
-            sections.len()
-        );
         for (config, content) in sections {
             results.insert(config, content);
         }
     } else {
-        debug!(
-            "Gradle command failed for project {:?}. Exit code: {:?}",
-            project_root,
-            output.status.code()
-        );
-        debug!("Gradle command was: {} dependencies --configuration compileClasspath --quiet --no-daemon", gradle_command);
-        debug!("Gradle command failed with no detailed output captured");
         // Fallback: Run configurations separately if combined command fails
-        debug!("Trying fallback: running configurations separately");
         for config in &["compileClasspath", "testCompileClasspath"] {
-            debug!(
-                "Running fallback Gradle command for configuration: {}",
-                config
-            );
             let output = tokio::time::timeout(
                 std::time::Duration::from_secs(30),
                 Command::new(gradle_command)
@@ -219,31 +190,8 @@ pub async fn execute_gradle_dependencies(
 
             if output.status.success() {
                 let output_text = String::from_utf8(output.stdout)?;
-                debug!(
-                    "Fallback Gradle command for {} succeeded. Output length: {} chars",
-                    config,
-                    output_text.len()
-                );
                 results.insert(config.to_string(), output_text);
             } else {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                debug!(
-                    "Fallback Gradle command for {} failed in project {:?}. Exit code: {:?}",
-                    config,
-                    project_root,
-                    output.status.code()
-                );
-                debug!(
-                    "Fallback command was: {} dependencies --configuration {} --quiet --no-daemon",
-                    gradle_command, config
-                );
-                if !stderr.is_empty() {
-                    debug!("Fallback stderr: {}", stderr);
-                }
-                if !stdout.is_empty() {
-                    debug!("Fallback stdout: {}", stdout);
-                }
             }
         }
     }
@@ -295,20 +243,9 @@ pub fn parse_gradle_dependencies_output(
     let mut external_deps = Vec::new();
     let mut project_deps = Vec::new();
 
-    debug!(
-        "Parsing Gradle dependencies output with {} configurations",
-        gradle_result.configurations.len()
-    );
 
     // Parse both compile and test configurations
-    for (config_name, output) in &gradle_result.configurations {
-        debug!("Processing configuration: {}", config_name);
-        let lines: Vec<&str> = output.lines().collect();
-        debug!(
-            "Configuration {} has {} lines of output",
-            config_name,
-            lines.len()
-        );
+    for (_config_name, output) in &gradle_result.configurations {
         for line in output.lines() {
             let trimmed = line.trim();
 
@@ -578,11 +515,6 @@ pub fn get_gradle_cache_base() -> Option<PathBuf> {
         .map(|home| home.join(".gradle/caches/modules-2/files-2.1"))
         .filter(|path| path.exists());
 
-    if let Some(ref path) = fallback_path {
-        debug!("Using fallback Gradle cache path: {:?}", path);
-    } else {
-        debug!("No Gradle cache path found");
-    }
 
     fallback_path
 }

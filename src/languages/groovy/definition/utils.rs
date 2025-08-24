@@ -104,17 +104,8 @@ pub fn search_definition<'a>(
     symbol_name: &str,
     symbol_type: SymbolType,
 ) -> Option<Node<'a>> {
-    debug!(
-        "Groovy search_definition: symbol_name={}, symbol_type={:?}",
-        symbol_name, symbol_type
-    );
     let query_text = get_declaration_query_for_symbol_type(&symbol_type)?;
-    debug!("Groovy search_definition: query_text={}", query_text);
     let candidates = find_definition_candidates(tree, source, symbol_name, query_text)?;
-    debug!(
-        "Groovy search_definition: found {} candidates",
-        candidates.len()
-    );
     candidates.into_iter().next()
 }
 
@@ -126,64 +117,40 @@ pub fn search_definition_in_project(
     other_file_uri: &str,
     language_support: &dyn LanguageSupport,
 ) -> Option<Location> {
-    debug!(
-        "Groovy search_definition_in_project: current_file_uri={}, other_file_uri={}",
-        current_file_uri, other_file_uri
-    );
 
     let current_tree = uri_to_tree(current_file_uri)?;
     let symbol_name = usage_node.utf8_text(current_source.as_bytes()).ok()?;
-    debug!(
-        "Groovy search_definition_in_project: symbol_name={}",
-        symbol_name
-    );
 
     // Get the appropriate language support for the current file (where the symbol usage is)
     let current_file_path = uri_to_path(current_file_uri)?;
     let current_language_support = get_language_support_for_file(&current_file_path)?;
-    debug!("Groovy search_definition_in_project: current file language support obtained");
 
     let symbol_type = current_language_support
         .determine_symbol_type_from_context(&current_tree, usage_node, current_source)
         .ok()?;
-    debug!(
-        "Groovy search_definition_in_project: symbol_type={:?}",
-        symbol_type
-    );
 
     let other_tree = uri_to_tree(other_file_uri)?;
-    debug!("Groovy search_definition_in_project: other_tree obtained");
 
     let other_path = uri_to_path(other_file_uri)?;
     let other_source = read_to_string(other_path).ok()?;
-    debug!(
-        "Groovy search_definition_in_project: other_source read, length={}",
-        other_source.len()
-    );
 
     let definition_node = if symbol_type == SymbolType::MethodCall {
-        debug!("Groovy search_definition_in_project: searching for method call");
         // For method calls, try signature-based matching first
         if let Some(call_signature) =
             extract_call_signature_from_context(usage_node, current_source)
         {
-            debug!("Groovy search_definition_in_project: using signature-based matching");
             find_method_with_signature(&other_tree, &other_source, symbol_name, &call_signature)
         } else {
-            debug!("Groovy search_definition_in_project: fallback to regular method search");
             // Fallback to regular method search
             search_definition(&other_tree, &other_source, symbol_name, symbol_type)
         }
     } else {
-        debug!("Groovy search_definition_in_project: searching for non-method symbol");
         search_definition(&other_tree, &other_source, symbol_name, symbol_type)
     };
 
     if let Some(node) = definition_node {
-        debug!("Groovy search_definition_in_project: definition_node found");
         return node_to_lsp_location(&node, &other_file_uri);
     } else {
-        debug!("Groovy search_definition_in_project: definition_node NOT found");
         return None;
     }
 }
@@ -724,40 +691,32 @@ pub fn prepare_symbol_lookup_key_with_wildcard_support(
 ) -> Option<(PathBuf, String)> {
     let symbol_bytes = usage_node.utf8_text(source.as_bytes()).ok()?;
     let symbol_name = symbol_bytes.to_string();
-    debug!("prepare_symbol_lookup_key_with_wildcard_support: starting resolution for '{}'", symbol_name);
 
     let current_file_path = uri_to_path(file_uri)?;
 
     let project_root = project_root
         .or_else(|| find_project_root(&current_file_path))
         .or_else(|| find_external_dependency_root(&current_file_path))?;
-    debug!("prepare_symbol_lookup_key_with_wildcard_support: project_root = {:?}", project_root);
 
     // First try regular resolution (specific imports and same package)
-    debug!("prepare_symbol_lookup_key_with_wildcard_support: trying specific imports for '{}'", symbol_name);
     let specific_import_result = resolve_through_imports(&symbol_name, source, &project_root, dependency_cache);
     if let Some(result) = &specific_import_result {
-        debug!("prepare_symbol_lookup_key_with_wildcard_support: found via specific import: {:?}", result);
         return Some(result.clone());
     } else {
-        debug!("prepare_symbol_lookup_key_with_wildcard_support: no specific imports found for '{}'", symbol_name);
     }
 
     let same_package_result =
         resolve_same_package(&symbol_name, source, &project_root, dependency_cache);
     if let Some(result) = &same_package_result {
-        debug!("prepare_symbol_lookup_key_with_wildcard_support: found via same package: {:?}", result);
         return Some(result.clone());
     }
 
     // If not found, try wildcard import resolution
     let wildcard_result = resolve_through_wildcard_imports(&symbol_name, source, &project_root, dependency_cache);
     if let Some(result) = &wildcard_result {
-        debug!("prepare_symbol_lookup_key_with_wildcard_support: found via wildcard import: {:?}", result);
         return Some(result.clone());
     }
 
-    debug!("prepare_symbol_lookup_key_with_wildcard_support: no resolution found for '{}'", symbol_name);
     None
 }
 
