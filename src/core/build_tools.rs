@@ -7,6 +7,7 @@ use std::{
     sync::Arc,
 };
 use tokio::process::Command;
+use tracing::debug;
 use zip::ZipArchive;
 
 use crate::{lsp_error, lsp_info};
@@ -432,10 +433,16 @@ pub fn extract_class_names_from_jar(jar_path: &PathBuf) -> Result<HashSet<String
         let file = archive.by_index(i)?;
         let file_name = file.name();
 
-        if (file_name.ends_with(".java") || file_name.ends_with(".groovy"))
+        if (file_name.ends_with(".java") || file_name.ends_with(".groovy") || file_name.ends_with(".kt"))
             && should_index_source_file(file_name)
         {
+            if file_name.contains("String.kt") {
+                debug!("Found String.kt file: {}", file_name);
+            }
             if let Some(class_name) = source_path_to_class_name(file_name) {
+                if class_name.contains("String") {
+                    debug!("Extracted String class: '{}' from file '{}'", class_name, file_name);
+                }
                 class_names.insert(class_name);
             }
         }
@@ -461,10 +468,11 @@ fn should_index_source_file(file_path: &str) -> bool {
 }
 
 fn source_path_to_class_name(source_path: &str) -> Option<String> {
-    // Convert "com/example/MyClass.java" or "com/example/MyClass.groovy" to "com.example.MyClass"
+    // Convert "com/example/MyClass.java", "com/example/MyClass.groovy", or "com/example/MyClass.kt" to "com.example.MyClass"
     let without_extension = source_path
         .strip_suffix(".java")
-        .or_else(|| source_path.strip_suffix(".groovy"))?;
+        .or_else(|| source_path.strip_suffix(".groovy"))
+        .or_else(|| source_path.strip_suffix(".kt"))?;
 
     Some(without_extension.replace('/', "."))
 }
@@ -539,9 +547,8 @@ pub fn index_jar_sources(
         let mut file = archive.by_index(i)?;
         let file_name = file.name().to_string();
 
-        if !(file_name.ends_with(".java")
-            || file_name.ends_with(".groovy")
-            || should_index_source_file(&file_name))
+        if !((file_name.ends_with(".java") || file_name.ends_with(".groovy") || file_name.ends_with(".kt"))
+            && should_index_source_file(&file_name))
         {
             continue;
         }
@@ -551,7 +558,8 @@ pub fn index_jar_sources(
             .last()
             .unwrap()
             .trim_end_matches(".java")
-            .trim_end_matches(".groovy");
+            .trim_end_matches(".groovy")
+            .trim_end_matches(".kt");
 
         let mut content = String::new();
         if file.read_to_string(&mut content).is_err() {
@@ -567,7 +575,16 @@ pub fn index_jar_sources(
         let package_name = package_name.unwrap();
         let fully_qualified_name = format!("{}.{}", package_name, class_name);
 
-        if !class_fqn_names.contains(&fully_qualified_name) {
+        // For Kotlin files, the class_fqn_names contains entries like "commonMain.kotlin.String"
+        // but the fully_qualified_name from package content is "kotlin.String"
+        // So we need to check if any class_fqn_name ends with our fully_qualified_name
+        let should_index = if file_name.ends_with(".kt") {
+            class_fqn_names.iter().any(|fqn| fqn.ends_with(&fully_qualified_name))
+        } else {
+            class_fqn_names.contains(&fully_qualified_name)
+        };
+        
+        if !should_index {
             continue;
         }
 

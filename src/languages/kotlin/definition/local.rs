@@ -1,154 +1,308 @@
 use tower_lsp::lsp_types::Location;
-use tree_sitter::{Node, Tree, Query, QueryCursor, StreamingIterator};
+use tree_sitter::{Node, Tree};
 
 use crate::{
-    core::{utils::node_to_lsp_location, constants::KOTLIN_PARSER},
+    core::{utils::node_to_lsp_location, symbols::SymbolType},
     languages::LanguageSupport,
 };
 
+use super::utils::{find_definition_candidates, get_declaration_query_for_symbol_type};
+use super::method_resolution::{extract_call_signature_from_context, find_method_with_signature};
+
+#[tracing::instrument(skip_all)]
 pub fn find_local(
     tree: &Tree,
     source: &str,
     file_uri: &str,
     usage_node: &Node,
-    _language_support: &dyn LanguageSupport,
+    language_support: &dyn LanguageSupport,
 ) -> Option<Location> {
+    let definition_node = search_local_definitions(tree, source, usage_node, language_support)?;
     
-    let symbol_name = usage_node.utf8_text(source.as_bytes()).ok()?.to_string();
-
-    // Search for declarations in the same file using tree-sitter queries
-    if let Some(definition_node) = search_local_definitions_with_queries(tree, source, usage_node, &symbol_name) {
-        return node_to_lsp_location(&definition_node, file_uri);
-    }
-
-    // Fallback to simple traversal search
-    if let Some(definition_node) = search_local_definitions(tree, source, usage_node, &symbol_name) {
-        return node_to_lsp_location(&definition_node, file_uri);
-    }
-
-    None
+    node_to_lsp_location(&definition_node, file_uri)
 }
 
-/// Search for local definitions using tree-sitter queries for better accuracy
-fn search_local_definitions_with_queries<'a>(
+#[tracing::instrument(skip_all)]
+pub fn search_local_definitions<'a>(
     tree: &'a Tree,
     source: &str,
-    usage_node: &Node,
-    symbol_name: &str,
+    usage_node: &Node<'a>,
+    language_support: &dyn LanguageSupport,
 ) -> Option<Node<'a>> {
-    let usage_byte_offset = usage_node.start_byte();
-    
-    // Define comprehensive queries for Kotlin declarations
-    let queries = [
-        // Variable declarations
-        r#"(property_declaration (variable_declaration (simple_identifier) @name))"#,
-        // Function declarations
-        r#"(function_declaration (simple_identifier) @name)"#,
-        // Class declarations
-        r#"(class_declaration (type_identifier) @name)"#,
-        // Interface declarations
-        r#"(interface_declaration (type_identifier) @name)"#,
-        // Object declarations
-        r#"(object_declaration (type_identifier) @name)"#,
-        // Parameters in functions
-        r#"(function_value_parameters (parameter (simple_identifier) @name))"#,
-        r#"(primary_constructor (class_parameters (class_parameter (simple_identifier) @name)))"#,
-        // Lambda parameters
-        r#"(lambda_parameters (lambda_parameter (simple_identifier) @name))"#,
-        // For loop variables
-        r#"(for_statement (multi_variable_declaration (variable_declaration (simple_identifier) @name)))"#,
-        r#"(for_statement (variable_declaration (simple_identifier) @name))"#,
-        // Catch parameters
-        r#"(catch_block (simple_identifier) @name)"#,
-    ];
+    let symbol_name = usage_node.utf8_text(source.as_bytes()).ok()?;
 
-    for query_text in &queries {
-        if let Some(node) = execute_query_for_symbol(tree, source, query_text, symbol_name, usage_byte_offset) {
-            return Some(node);
+    let symbol_type = language_support
+        .determine_symbol_type_from_context(tree, usage_node, source)
+        .ok()?;
+
+    if symbol_type.is_declaration() {
+        return None;
+    }
+
+    match symbol_type {
+        SymbolType::MethodCall => {
+            // Use specialized method resolution for method calls
+            find_best_method_match(tree, source, usage_node, symbol_name)
+        }
+        SymbolType::VariableUsage => {
+            // Search for variable declarations in accessible scopes
+            let variable_candidates =
+                find_variable_declarations_in_scope(tree, source, usage_node, &symbol_name);
+
+            if !variable_candidates.is_empty() {
+                // Find the best match using scope distance
+                if let Some(best_match) = find_closest_declaration(usage_node, &variable_candidates)
+                {
+                    return Some(best_match);
+                }
+            }
+
+            // Not found as variable, try as field
+            find_as_field(tree, source, symbol_name)
+        }
+
+        SymbolType::FieldUsage => {
+            // Get candidates for field usage
+            let query_text = get_declaration_query_for_symbol_type(&symbol_type)?;
+            let candidates = find_definition_candidates(tree, source, &symbol_name, query_text)?;
+
+            // For field usage, find the field declaration
+            candidates.into_iter().next()
+        }
+
+        _ => {
+            // For other symbol types, use the general candidate finding approach
+            let query_text = get_declaration_query_for_symbol_type(&symbol_type)?;
+            let candidates = find_definition_candidates(tree, source, &symbol_name, query_text)?;
+            candidates.into_iter().next()
+        }
+    }
+}
+
+/// Find variable declarations that are accessible from the usage point
+fn find_variable_declarations_in_scope<'a>(
+    tree: &'a Tree,
+    source: &str,
+    usage_node: &Node<'a>,
+    symbol_name: &str,
+) -> Vec<Node<'a>> {
+    let mut candidates = Vec::new();
+
+    // 1. Check function parameters first (highest priority)
+    if let Some(function) = find_containing_function(usage_node) {
+        if let Some(params) = find_function_parameters(&function, source, symbol_name) {
+            candidates.extend(params);
         }
     }
 
+    // 2. Check lambda parameters
+    if let Some(lambda_params) = find_lambda_parameters(usage_node, source, symbol_name) {
+        candidates.extend(lambda_params);
+    }
+
+    // 3. Check for variable declarations in accessible scopes
+    let mut current = usage_node.parent();
+    while let Some(node) = current {
+        // Check variable declarations in this scope that come before usage
+        find_variables_in_block(&node, source, symbol_name, usage_node.start_byte(), &mut candidates);
+
+        // Move to parent scope
+        current = node.parent();
+    }
+
+    candidates
+}
+
+/// Find the closest declaration to the usage point
+fn find_closest_declaration<'a>(
+    usage_node: &Node,
+    candidates: &[Node<'a>],
+) -> Option<Node<'a>> {
+    if candidates.is_empty() {
+        return None;
+    }
+
+    let usage_start = usage_node.start_byte();
+    
+    // Find the candidate that is closest to (but before) the usage
+    candidates.iter()
+        .filter(|node| node.start_byte() < usage_start)
+        .max_by_key(|node| node.start_byte())
+        .copied()
+}
+
+/// Find variables as field declarations
+fn find_as_field<'a>(tree: &'a Tree, source: &str, symbol_name: &str) -> Option<Node<'a>> {
+    let query_text = r#"(property_declaration (variable_declaration (simple_identifier) @name))"#;
+    let candidates = find_definition_candidates(tree, source, symbol_name, query_text)?;
+    candidates.into_iter().next()
+}
+
+/// Find the best method match using signature matching
+fn find_best_method_match<'a>(
+    tree: &'a Tree,
+    source: &str,
+    usage_node: &Node<'a>,
+    symbol_name: &str,
+) -> Option<Node<'a>> {
+    // Extract call signature from the usage context
+    let call_signature = extract_call_signature_from_context(usage_node, source);
+    
+    // Find method candidates
+    let query_text = r#"(function_declaration (simple_identifier) @name)"#;
+    let candidates = find_definition_candidates(tree, source, symbol_name, query_text)?;
+    
+    if let Some(call_sig) = call_signature {
+        // Try to find method with matching signature
+        let result = find_method_with_signature(tree, source, symbol_name, &call_sig);
+        if result.is_some() {
+            result
+        } else {
+            // Signature matching failed, try first candidate
+            candidates.into_iter().next()
+        }
+    } else {
+        // No signature available, return first match
+        candidates.into_iter().next()
+    }
+}
+
+/// Find containing function for a node
+fn find_containing_function<'a>(node: &Node<'a>) -> Option<Node<'a>> {
+    let mut current = node.parent();
+    while let Some(parent) = current {
+        if parent.kind() == "function_declaration" {
+            return Some(parent);
+        }
+        current = parent.parent();
+    }
     None
 }
 
-fn execute_query_for_symbol<'a>(
-    tree: &'a Tree,
+/// Find function parameters that match the symbol name
+fn find_function_parameters<'a>(
+    function_node: &Node<'a>,
     source: &str,
-    query_text: &str,
     symbol_name: &str,
-    usage_byte_offset: usize,
-) -> Option<Node<'a>> {
-    let language = KOTLIN_PARSER.get_or_init(|| tree_sitter_kotlin::language());
-    let query = Query::new(language, query_text).ok()?;
-    let mut cursor = QueryCursor::new();
+) -> Option<Vec<Node<'a>>> {
+    let mut parameters = Vec::new();
     
-    let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
-    
-    while let Some(query_match) = matches.next() {
-        for capture in query_match.captures {
-            if let Ok(node_text) = capture.node.utf8_text(source.as_bytes()) {
-                if node_text == symbol_name && capture.node.start_byte() < usage_byte_offset {
-                    // Return the declaration node, not just the identifier
-                    return find_declaration_parent(capture.node);
+    for child in function_node.children(&mut function_node.walk()) {
+        if child.kind() == "function_value_parameters" {
+            for param_child in child.children(&mut child.walk()) {
+                if param_child.kind() == "parameter" {
+                    for param_part in param_child.children(&mut param_child.walk()) {
+                        if param_part.kind() == "simple_identifier" {
+                            if let Ok(param_name) = param_part.utf8_text(source.as_bytes()) {
+                                if param_name == symbol_name {
+                                    parameters.push(param_child);
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
     }
     
-    None
+    if parameters.is_empty() { None } else { Some(parameters) }
 }
 
-fn find_declaration_parent(identifier_node: Node) -> Option<Node> {
-    let mut current = identifier_node;
+/// Find lambda parameters that match the symbol name
+fn find_lambda_parameters<'a>(
+    usage_node: &Node<'a>,
+    source: &str,
+    symbol_name: &str,
+) -> Option<Vec<Node<'a>>> {
+    let mut current = usage_node.parent();
+    let mut parameters = Vec::new();
     
-    // Traverse up to find the actual declaration node
-    while let Some(parent) = current.parent() {
-        match parent.kind() {
-            "property_declaration" | "function_declaration" | "class_declaration" 
-            | "object_declaration" | "parameter" | "class_parameter" 
-            | "lambda_parameter" | "catch_block" => {
-                return Some(parent);
+    while let Some(node) = current {
+        if node.kind() == "lambda_literal" {
+            // Look for lambda parameters
+            for child in node.children(&mut node.walk()) {
+                if child.kind() == "lambda_parameters" {
+                    for param_child in child.children(&mut child.walk()) {
+                        if param_child.kind() == "lambda_parameter" {
+                            for param_part in param_child.children(&mut param_child.walk()) {
+                                if param_part.kind() == "simple_identifier" {
+                                    if let Ok(param_name) = param_part.utf8_text(source.as_bytes()) {
+                                        if param_name == symbol_name {
+                                            parameters.push(param_child);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
-            _ => current = parent,
         }
+        current = node.parent();
     }
     
-    Some(identifier_node)
+    if parameters.is_empty() { None } else { Some(parameters) }
 }
 
-fn search_local_definitions<'a>(
-    tree: &'a Tree,
-    source: &str,
-    usage_node: &Node,
-    symbol_name: &str,
-) -> Option<Node<'a>> {
-    // Simple approach: search for matching declarations in the same file
-    search_for_declaration(tree.root_node(), source, symbol_name, usage_node.start_byte())
-}
-
-fn search_for_declaration<'a>(
-    node: Node<'a>,
+/// Find variable declarations in a block that come before the usage
+fn find_variables_in_block<'a>(
+    block_node: &Node<'a>,
     source: &str,
     symbol_name: &str,
     usage_byte_offset: usize,
-) -> Option<Node<'a>> {
-    // Check if this node is a declaration that matches our symbol
-    if is_declaration_node(&node) {
-        if let Some(declared_name) = get_declared_name(&node, source) {
-            if declared_name == symbol_name && node.start_byte() < usage_byte_offset {
-                return Some(node);
+    candidates: &mut Vec<Node<'a>>,
+) {
+    for child in block_node.children(&mut block_node.walk()) {
+        if child.start_byte() >= usage_byte_offset {
+            break; // Don't look at declarations after usage
+        }
+        
+        match child.kind() {
+            "property_declaration" => {
+                if let Some(var_name) = get_declared_name(&child, source) {
+                    if var_name == symbol_name {
+                        candidates.push(child);
+                    }
+                }
+            }
+            "variable_declaration" => {
+                if let Some(var_name) = get_declared_name(&child, source) {
+                    if var_name == symbol_name {
+                        candidates.push(child);
+                    }
+                }
+            }
+            "for_statement" => {
+                // Check for loop variable declarations
+                for for_child in child.children(&mut child.walk()) {
+                    if for_child.kind() == "variable_declaration" || 
+                       for_child.kind() == "multi_variable_declaration" {
+                        if let Some(var_name) = get_declared_name(&for_child, source) {
+                            if var_name == symbol_name {
+                                candidates.push(for_child);
+                            }
+                        }
+                    }
+                }
+            }
+            "catch_block" => {
+                // Check catch parameter
+                for catch_child in child.children(&mut child.walk()) {
+                    if catch_child.kind() == "simple_identifier" {
+                        if let Ok(param_name) = catch_child.utf8_text(source.as_bytes()) {
+                            if param_name == symbol_name {
+                                candidates.push(child); // Return the catch_block itself
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {
+                // Recursively search in nested blocks
+                find_variables_in_block(&child, source, symbol_name, usage_byte_offset, candidates);
             }
         }
     }
-
-    // Search children
-    for child in node.children(&mut node.walk()) {
-        if let Some(result) = search_for_declaration(child, source, symbol_name, usage_byte_offset) {
-            return Some(result);
-        }
-    }
-
-    None
 }
 
 fn is_declaration_node(node: &Node) -> bool {

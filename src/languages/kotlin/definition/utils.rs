@@ -13,7 +13,7 @@ use crate::{
             set_start_position_for_language, uri_to_path, uri_to_tree,
         },
     },
-    languages::{kotlin::constants::KOTLIN_COMMON_IMPORTS, LanguageSupport},
+    languages::LanguageSupport,
 };
 
 use super::method_resolution::{
@@ -97,10 +97,15 @@ pub fn search_definition<'a>(tree: &'a Tree, source: &str, symbol_name: &str) ->
     let queries = [
         r#"(function_declaration (simple_identifier) @name)"#,
         r#"(class_declaration (type_identifier) @name)"#,
+        r#"(class_declaration (modifiers) (type_identifier) @name)"#,
         r#"(interface_declaration (type_identifier) @name)"#,
+        r#"(interface_declaration (modifiers) (type_identifier) @name)"#,
         r#"(object_declaration (type_identifier) @name)"#,
+        r#"(object_declaration (modifiers) (type_identifier) @name)"#,
         r#"(enum_declaration (type_identifier) @name)"#,
+        r#"(enum_declaration (modifiers) (type_identifier) @name)"#,
         r#"(type_alias (type_identifier) @name)"#,
+        r#"(type_alias (modifiers) (type_identifier) @name)"#,
         r#"(property_declaration (variable_declaration (simple_identifier) @name))"#,
         r#"(parameter (simple_identifier) @name)"#,
         r#"(class_parameter (simple_identifier) @name)"#,
@@ -220,7 +225,7 @@ pub fn extract_imports_from_source(source: &str) -> Vec<String> {
 pub fn resolve_symbol_with_imports(
     symbol_name: &str,
     source: &str,
-    _dependency_cache: &Arc<DependencyCache>,
+    dependency_cache: &Arc<DependencyCache>,
 ) -> Option<String> {
     let imports = extract_imports_from_source(source);
 
@@ -244,20 +249,43 @@ pub fn resolve_symbol_with_imports(
         }
     }
 
-    // Check common Kotlin imports
-    for common_import in KOTLIN_COMMON_IMPORTS {
-        if common_import.ends_with(&format!(".{}", symbol_name)) {
-            return Some(common_import.to_string());
+    // For basic Kotlin types, try common kotlin stdlib patterns FIRST
+    // This prevents incorrect resolution to current package or star imports
+    let common_kotlin_types = ["String", "Int", "Long", "Double", "Float", "Boolean", "Char", "Byte", "Short", "Any", "Unit", "Nothing", "List", "MutableList", "Set", "MutableSet", "Map", "MutableMap", "Collection", "MutableCollection", "Array", "BooleanArray", "ByteArray", "CharArray", "DoubleArray", "FloatArray", "IntArray", "LongArray", "ShortArray"];
+    if common_kotlin_types.contains(&symbol_name.as_ref()) {
+        // Collection types are in kotlin.collections, others are in kotlin
+        let kotlin_stdlib_candidates = if ["List", "MutableList", "Set", "MutableSet", "Map", "MutableMap", "Collection", "MutableCollection", "Array", "BooleanArray", "ByteArray", "CharArray", "DoubleArray", "FloatArray", "IntArray", "LongArray", "ShortArray"].contains(&symbol_name.as_ref()) {
+            [
+                format!("commonMain.kotlin.collections.{}", symbol_name),
+                format!("jvmMain.kotlin.collections.{}", symbol_name), 
+                format!("kotlin.collections.{}", symbol_name),
+            ]
+        } else {
+            [
+                format!("commonMain.kotlin.{}", symbol_name),
+                format!("jvmMain.kotlin.{}", symbol_name), 
+                format!("kotlin.{}", symbol_name),
+            ]
+        };
+        
+        for candidate in &kotlin_stdlib_candidates {
+            if dependency_cache.find_builtin_info(candidate).is_some() {
+                return Some(candidate.clone());
+            }
         }
+        
+        // For basic types, if not found in builtins, just return the simple name
+        // The external dependency system should find it
+        return Some(symbol_name.to_string());
     }
 
-    // Try with current package first (higher priority than star imports)
+    // Try with current package (but only for non-basic types)
     if let Some(package) = extract_package_from_source(source) {
         let result = format!("{}.{}", package, symbol_name);
-        return Some(result);
+        // Only return if we can verify it exists - but for now just fall through
     }
 
-    // Use star imports as fallback (only after checking current package)
+    // Use star imports as fallback 
     if !star_imports.is_empty() {
         // For services, prefer service packages over param packages
         let preferred_package = if symbol_name.ends_with("Service") {

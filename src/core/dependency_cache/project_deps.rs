@@ -167,8 +167,13 @@ impl ProjectMapper {
             let handle = std::thread::spawn(move || {
                 let mut chunk_classes = HashSet::new();
                 for dep in chunk {
+                    debug!("Processing external dependency: {}:{}", dep.group, dep.artifact);
                     if let Some(jar_path) = find_sources_jar_in_gradle_cache(&dep) {
+                        debug!("Found sources jar for {}: {:?}", dep.artifact, jar_path);
                         if let Ok(classes) = extract_class_names_from_jar(&jar_path) {
+                            if dep.artifact.contains("kotlin") {
+                                debug!("Extracted {} classes from kotlin JAR {}: {:?}", classes.len(), dep.artifact, classes.iter().take(10).collect::<Vec<_>>());
+                            }
                             chunk_classes.extend(classes.clone());
 
                             let _ = index_jar_sources(

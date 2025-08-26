@@ -162,10 +162,22 @@ impl BuiltinResolver {
                     let handle = thread::spawn(move || -> Result<()> {
                         for file_name in chunk {
                             // Convert file path to fully qualified name
-                            let package_path = file_name
+                            let mut package_path = file_name
                                 .trim_end_matches(".java")
                                 .trim_end_matches(".groovy")
                                 .replace('/', ".");
+                            
+                            // Handle Java 9+ modular format: remove module prefix (java.base.java.lang.String -> java.lang.String)
+                            if package_path.starts_with("java.base.java.") {
+                                package_path = package_path.strip_prefix("java.base.").unwrap().to_string();
+                            } else if package_path.starts_with("java.desktop.java.") {
+                                package_path = package_path.strip_prefix("java.desktop.").unwrap().to_string();
+                            } else if package_path.contains(".java.") {
+                                // Generic handling for other modules: module_name.java.lang.String -> java.lang.String
+                                if let Some(java_pos) = package_path.find(".java.") {
+                                    package_path = package_path[java_pos + 1..].to_string();
+                                }
+                            }
 
                             parse_and_cache_builtin(
                                 &package_path,
@@ -217,12 +229,19 @@ fn find_package_source_directory(
                 }
             }
 
-            let src_zip = java_home.join("src.zip");
-            if src_zip.exists() {
-                let classes = find_classes_in_zip(&src_zip, &package_path)?;
+            // Try both old (Java 8) and new (Java 9+) src.zip locations
+            let src_zip_candidates = [
+                java_home.join("src.zip"),      // Java 8 and earlier
+                java_home.join("lib/src.zip"),  // Java 9 and later
+            ];
+            
+            for src_zip in &src_zip_candidates {
+                if src_zip.exists() {
+                    let classes = find_classes_in_zip(src_zip, &package_path)?;
 
-                if !classes.is_empty() {
-                    return Ok(src_zip);
+                    if !classes.is_empty() {
+                        return Ok(src_zip.clone());
+                    }
                 }
             }
         }
@@ -254,14 +273,22 @@ fn find_classes_in_zip(zip_path: &PathBuf, package: &str) -> Result<Vec<String>>
     let archive = ZipArchive::new(file)?;
 
     let package_prefix = format!("{}/", package.replace('.', "/"));
+    // Also check for modular format (Java 9+): module_name/package/path/
+    let modular_package_prefix = format!("/{}", package_prefix);
 
     let classes: Vec<String> = archive
         .file_names()
         .filter(|name| {
-            // Same level only
-            name.starts_with(&package_prefix)
+            // Handle both old format (java/lang/) and new modular format (java.base/java/lang/)
+            let matches_old_format = name.starts_with(&package_prefix)
                 && (name.ends_with(".java") || name.ends_with(".groovy"))
-                && name.matches('/').count() == package_prefix.matches('/').count()
+                && name.matches('/').count() == package_prefix.matches('/').count();
+                
+            let matches_modular_format = name.contains(&modular_package_prefix)
+                && (name.ends_with(".java") || name.ends_with(".groovy"))
+                && name.split('/').last().map(|f| !f.is_empty()).unwrap_or(false);
+                
+            matches_old_format || matches_modular_format
         })
         .map(|name| {
             name.split('/')

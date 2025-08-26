@@ -41,12 +41,6 @@ pub trait LanguageSupport: Send + Sync + QueryProvider {
         source: &str,
     ) -> Result<SymbolType>;
 
-    fn can_resolve_cross_language(&self, target_language: &str) -> bool {
-        // Default JVM language interop rules
-        let jvm_languages = ["java", "groovy", "kotlin"];
-        jvm_languages.contains(&self.language_id()) && jvm_languages.contains(&target_language)
-    }
-
     fn find_definition_chain(
         &self,
         tree: &Tree,

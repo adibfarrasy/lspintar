@@ -1,6 +1,5 @@
 use std::{path::PathBuf, sync::Arc};
 
-use anyhow::Context;
 use tower_lsp::lsp_types::Location;
 use tree_sitter::Node;
 
@@ -71,11 +70,27 @@ async fn find_project_external(
     };
 
     // First try current project
-    if let Some(source_info) = dependency_cache
-        .find_project_external_info(&current_project, &resolved_symbol)
-        .await
-    {
-        return search_external_definition_and_convert(&symbol_name, source_info);
+    // For basic types and collections, also try with kotlin prefix
+    let common_kotlin_types = ["String", "Int", "Long", "Double", "Float", "Boolean", "Char", "Byte", "Short", "Any", "Unit", "Nothing", "List", "MutableList", "Set", "MutableSet", "Map", "MutableMap", "Collection", "MutableCollection", "Array", "BooleanArray", "ByteArray", "CharArray", "DoubleArray", "FloatArray", "IntArray", "LongArray", "ShortArray"];
+    let collection_types = ["List", "MutableList", "Set", "MutableSet", "Map", "MutableMap", "Collection", "MutableCollection", "Array", "BooleanArray", "ByteArray", "CharArray", "DoubleArray", "FloatArray", "IntArray", "LongArray", "ShortArray"];
+    
+    let kotlin_candidates = if common_kotlin_types.contains(&resolved_symbol.as_str()) {
+        if collection_types.contains(&resolved_symbol.as_str()) {
+            vec![resolved_symbol.clone(), format!("kotlin.collections.{}", resolved_symbol)]
+        } else {
+            vec![resolved_symbol.clone(), format!("kotlin.{}", resolved_symbol)]
+        }
+    } else {
+        vec![resolved_symbol.clone()]
+    };
+    
+    for candidate in &kotlin_candidates {
+        if let Some(source_info) = dependency_cache
+            .find_project_external_info(&current_project, candidate)
+            .await
+        {
+            return search_external_definition_and_convert(&symbol_name, source_info);
+        }
     }
 
     // Then try projects this project depends on (using project_metadata)
@@ -102,8 +117,10 @@ async fn find_project_external(
     }
 
     // Fallback: try builtin sources (Kotlin standard library, etc.)
-    if let Some(builtin_info) = dependency_cache.find_builtin_info(&resolved_symbol) {
-        return search_external_definition_and_convert(&symbol_name, builtin_info);
+    for candidate in &kotlin_candidates {
+        if let Some(builtin_info) = dependency_cache.find_builtin_info(candidate) {
+            return search_external_definition_and_convert(&symbol_name, builtin_info);
+        }
     }
 
     None
@@ -114,17 +131,9 @@ fn search_external_definition_and_convert(
     source_info: SourceFileInfo,
 ) -> Option<Location> {
     let tree = source_info.get_tree().ok()?;
-    
-    let content = source_info
-        .get_content()
-        .context(format!("failed to get content for {symbol_name}"))
-        .ok()?;
-
+    let content = source_info.get_content().ok()?;
     let definition_node = search_definition(&tree, &content, symbol_name)?;
-
-    let file_uri = get_uri(&source_info)
-        .context(format!("file_uri for {symbol_name} not found"))
-        .ok()?;
-
+    let file_uri = get_uri(&source_info)?;
     node_to_lsp_location(&definition_node, &file_uri)
 }
+

@@ -92,6 +92,26 @@ impl QueryProvider for KotlinSupport {
         (class_parameter
           (simple_identifier) @param_decl)
 
+        ; Argument types
+        (function_declaration
+          (function_value_parameter
+            (parameter
+              (user_type (type_identifier) @type_name))))
+
+        (function_declaration
+          (function_value_parameter
+            (parameter
+              (_
+                (user_type (type_identifier) @type_name)))))
+
+        ; Function return type
+        (function_declaration
+          (_
+            (user_type (type_identifier) @type_name)))
+
+        (function_declaration
+          (user_type (type_identifier) @type_name))
+
         ; INHERITANCE
         ; Super class/interface in class declaration (treat as generic type)
         (class_declaration
@@ -164,11 +184,6 @@ impl LanguageSupport for KotlinSupport {
         uri: &str,
         dependency_cache: Arc<DependencyCache>,
     ) -> Result<Location> {
-        debug!(
-            "DEBUG: find_definition called for position {:?} in {}",
-            position, uri
-        );
-
         if let Some(identifier_node) = find_identifier_at_position(tree, source, position) {
             let identifier_text = identifier_node.utf8_text(source.as_bytes()).unwrap_or("?");
 
@@ -260,7 +275,7 @@ impl LanguageSupport for KotlinSupport {
             }
         }
 
-        if !found {}
+        debug!("result: {:#?}", result);
 
         result
     }
@@ -348,9 +363,7 @@ impl LanguageSupport for KotlinSupport {
             .or_else(|| {
                 self.find_in_workspace(source, file_uri, usage_node, dependency_cache.clone())
             })
-            .or_else(|| {
-                self.find_external(source, file_uri, usage_node, dependency_cache.clone())
-            })
+            .or_else(|| self.find_external(source, file_uri, usage_node, dependency_cache.clone()))
             .and_then(|location| {
                 // If the definition is in the same file, don't call set_start_position
                 // as it may find the wrong identifier with the same name

@@ -275,6 +275,7 @@ impl DependencyCache {
     }
 
     /// Synchronous lazy lookup for symbol file path, checking in-memory cache first, then database
+    #[tracing::instrument(skip_all)]
     pub fn find_symbol_sync(&self, project_root: &PathBuf, fqn: &str) -> Option<PathBuf> {
         let key = (project_root.clone(), fqn.to_string());
 
@@ -297,17 +298,14 @@ impl DependencyCache {
                     return Some(file_path);
                 }
                 Ok(None) => {
-                    debug!("find_symbol_sync: symbol '{}' not found in database", fqn);
+                    debug!("symbol '{}' not found in database", fqn);
                 }
                 Err(e) => {
-                    debug!(
-                        "find_symbol_sync: database query error for symbol '{}': {}",
-                        fqn, e
-                    );
+                    debug!("database query error for symbol '{}': {}", fqn, e);
                 }
             }
         } else {
-            debug!("find_symbol_sync: no persistence layer available");
+            debug!("no persistence layer available");
         }
 
         None
@@ -315,7 +313,6 @@ impl DependencyCache {
 
     /// Lazy lookup for symbol file path, checking in-memory cache first, then database
     pub async fn find_symbol(&self, project_root: &PathBuf, fqn: &str) -> Option<PathBuf> {
-
         let key = (project_root.clone(), fqn.to_string());
 
         // First check in-memory cache
@@ -348,6 +345,7 @@ impl DependencyCache {
     }
 
     /// Synchronous lazy lookup for builtin info, checking in-memory cache first, then database
+    #[tracing::instrument(skip_all)]
     pub fn find_builtin_info(&self, class_name: &str) -> Option<SourceFileInfo> {
         // First check in-memory cache
         if let Some(info) = self.builtin_infos.get(class_name) {
@@ -368,20 +366,14 @@ impl DependencyCache {
                     return Some(info);
                 }
                 Ok(None) => {
-                    debug!(
-                        "find_builtin_info: builtin '{}' not found in database",
-                        class_name
-                    );
+                    debug!("builtin '{}' not found in database", class_name);
                 }
                 Err(e) => {
-                    debug!(
-                        "find_builtin_info: database query error for builtin '{}': {}",
-                        class_name, e
-                    );
+                    debug!("database query error for builtin '{}': {}", class_name, e);
                 }
             }
         } else {
-            debug!("find_builtin_info: no persistence layer available");
+            debug!("no persistence layer available");
         }
 
         None
@@ -417,6 +409,7 @@ impl DependencyCache {
     }
 
     /// Lazy lookup for inheritance index, checking in-memory cache first, then database
+    #[tracing::instrument(skip_all)]
     pub async fn find_inheritance_implementations(
         &self,
         project_root: &PathBuf,
@@ -448,14 +441,11 @@ impl DependencyCache {
                     }
                 }
                 Err(e) => {
-                    debug!(
-                        "find_inheritance_implementations: database query error: {}",
-                        e
-                    );
+                    debug!("database query error: {}", e);
                 }
             }
         } else {
-            debug!("find_inheritance_implementations: no persistence layer available");
+            debug!("no persistence layer available");
         }
 
         None

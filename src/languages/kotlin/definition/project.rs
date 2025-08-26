@@ -21,7 +21,6 @@ pub async fn find_in_project(
     dependency_cache: Arc<DependencyCache>,
     language_support: &dyn LanguageSupport,
 ) -> Option<Location> {
-    // First try wildcard resolution with import support
     let symbol_key = prepare_symbol_lookup_key_with_wildcard_support(
         usage_node,
         source,
@@ -33,13 +32,14 @@ pub async fn find_in_project(
     let (project_root, fqn) = if let Some(key) = symbol_key {
         key
     } else {
-        // Fallback: try direct symbol lookup
         let symbol_name = usage_node.utf8_text(source.as_bytes()).ok()?.to_string();
         let project_root = crate::core::utils::uri_to_path(file_uri)
             .and_then(|path| crate::core::utils::find_project_root(&path))?;
 
         // Try to resolve FQN using imports first, then fallback to current package
-        let fqn = if let Some(resolved_fqn) = resolve_symbol_with_imports(&symbol_name, source, &dependency_cache) {
+        let fqn = if let Some(resolved_fqn) =
+            resolve_symbol_with_imports(&symbol_name, source, &dependency_cache)
+        {
             resolved_fqn
         } else if let Some(package) = extract_package_from_source(source) {
             if !package.is_empty() {
@@ -65,4 +65,3 @@ pub async fn find_in_project(
 
     search_definition_in_project(file_uri, source, usage_node, &other_uri, language_support)
 }
-

@@ -98,6 +98,15 @@ impl SourceFileInfo {
                 .unwrap_or(false)
         {
             GROOVY_PARSER.get_or_init(|| tree_sitter_groovy::language())
+        } else if self.source_path.extension().and_then(|s| s.to_str()) == Some("kt")
+            || self
+                .zip_internal_path
+                .as_ref()
+                .map(|p| p.ends_with(".kt"))
+                .unwrap_or(false)
+        {
+            use crate::core::constants::KOTLIN_PARSER;
+            KOTLIN_PARSER.get_or_init(|| tree_sitter_kotlin::language())
         } else {
             JAVA_PARSER.get_or_init(|| tree_sitter_java::LANGUAGE.into())
         };
