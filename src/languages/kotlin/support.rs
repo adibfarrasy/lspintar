@@ -2,19 +2,19 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
 use tower_lsp::lsp_types::{Diagnostic, Hover, Location, Position};
-use tree_sitter::{Node, Parser, Tree, Query, QueryCursor, StreamingIterator};
-use tracing::warn;
+use tracing::{debug, warn};
+use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator, Tree};
 
 use crate::core::queries::QueryProvider;
 use crate::core::{dependency_cache::DependencyCache, symbols::SymbolType};
 use crate::languages::traits::LanguageSupport;
 
+use super::definition::utils::set_start_position;
 use super::definition::{external, local, project, workspace};
 use super::diagnostics::collect_syntax_errors;
 use super::hover;
 use super::implementation;
 use super::utils::find_identifier_at_position;
-use super::definition::utils::set_start_position;
 
 pub struct KotlinSupport;
 
@@ -48,7 +48,7 @@ impl QueryProvider for KotlinSupport {
     }
 
     fn interface_declaration_queries(&self) -> &[&'static str] {
-        &[r#"(class_declaration) @interface"#]
+        &[r#"(interface_declaration) @interface"#]
     }
 
     fn parameter_queries(&self) -> &[&'static str] {
@@ -82,11 +82,26 @@ impl QueryProvider for KotlinSupport {
         (object_declaration
           (type_identifier) @object_decl)
 
+        ; Interface declarations
+        (interface_declaration
+          (type_identifier) @interface_decl)
+
         ; Parameters
         (parameter
           (simple_identifier) @param_decl)
         (class_parameter
           (simple_identifier) @param_decl)
+
+        ; INHERITANCE
+        ; Super class/interface in class declaration (treat as generic type)
+        (class_declaration
+          (delegation_specifier
+            (user_type (type_identifier) @type_name)))
+              
+        ; Super interface in interface declaration (treat as generic type)
+        (interface_declaration
+          (delegation_specifier
+            (user_type (type_identifier) @type_name)))
 
         ; USAGES
         ; Call expressions
@@ -149,17 +164,28 @@ impl LanguageSupport for KotlinSupport {
         uri: &str,
         dependency_cache: Arc<DependencyCache>,
     ) -> Result<Location> {
+        debug!(
+            "DEBUG: find_definition called for position {:?} in {}",
+            position, uri
+        );
 
         if let Some(identifier_node) = find_identifier_at_position(tree, source, position) {
             let identifier_text = identifier_node.utf8_text(source.as_bytes()).unwrap_or("?");
 
-            let result = self.find_definition_chain(tree, source, dependency_cache, uri, &identifier_node);
+            let result =
+                self.find_definition_chain(tree, source, dependency_cache, uri, &identifier_node);
             if let Err(e) = &result {
-                warn!("Kotlin: Failed to find definition for '{}': {:?}", identifier_text, e);
+                warn!(
+                    "Kotlin: Failed to find definition for '{}': {:?}",
+                    identifier_text, e
+                );
             }
             result
         } else {
-            warn!("Kotlin: No identifier found at position {:?} in {}", position, uri);
+            warn!(
+                "Kotlin: No identifier found at position {:?} in {}",
+                position, uri
+            );
             let root_node = tree.root_node();
             self.find_definition_chain(tree, source, dependency_cache, uri, &root_node)
         }
@@ -188,8 +214,12 @@ impl LanguageSupport for KotlinSupport {
         let node_text = node.utf8_text(source.as_bytes())?;
 
         let query_text = self.symbol_type_detection_query();
-        let query = Query::new(&tree_sitter_kotlin::language(), query_text)
-            .map_err(|e| anyhow!("Failed to create Kotlin symbol type detection query: {:?}", e))?;
+        let query = Query::new(&tree_sitter_kotlin::language(), query_text).map_err(|e| {
+            anyhow!(
+                "Failed to create Kotlin symbol type detection query: {:?}",
+                e
+            )
+        })?;
 
         let mut cursor = QueryCursor::new();
         let mut found = false;
@@ -214,6 +244,7 @@ impl LanguageSupport for KotlinSupport {
                         "method_decl" => SymbolType::MethodDeclaration,
                         "class_decl" => SymbolType::ClassDeclaration,
                         "object_decl" => SymbolType::ClassDeclaration,
+                        "interface_decl" => SymbolType::InterfaceDeclaration,
                         "param_decl" => SymbolType::ParameterDeclaration,
                         "method_call" => SymbolType::MethodCall,
                         "field_usage" => SymbolType::FieldUsage,
@@ -229,8 +260,7 @@ impl LanguageSupport for KotlinSupport {
             }
         }
 
-        if !found {
-        }
+        if !found {}
 
         result
     }
@@ -309,14 +339,18 @@ impl LanguageSupport for KotlinSupport {
         usage_node: &Node,
     ) -> Result<Location> {
         // Use the standard definition resolution chain
-        self.find_local(tree, source, file_uri, usage_node)
+        let local_result = self.find_local(tree, source, file_uri, usage_node);
+
+        local_result
             .or_else(|| {
                 self.find_in_project(source, file_uri, usage_node, dependency_cache.clone())
             })
             .or_else(|| {
                 self.find_in_workspace(source, file_uri, usage_node, dependency_cache.clone())
             })
-            .or_else(|| self.find_external(source, file_uri, usage_node, dependency_cache.clone()))
+            .or_else(|| {
+                self.find_external(source, file_uri, usage_node, dependency_cache.clone())
+            })
             .and_then(|location| {
                 // If the definition is in the same file, don't call set_start_position
                 // as it may find the wrong identifier with the same name

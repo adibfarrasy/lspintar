@@ -11,6 +11,7 @@ use super::constants::{PROJECT_ROOT_MARKER, TEMP_DIR_PREFIX};
 use crate::languages::{java::JavaSupport, groovy::GroovySupport, kotlin::KotlinSupport, LanguageSupport};
 use crate::languages::groovy::definition::utils::search_definition_in_project as groovy_search_definition_in_project;
 use crate::languages::java::definition::utils::search_definition_in_project as java_search_definition_in_project;
+use crate::languages::kotlin::definition::utils::search_definition_in_project as kotlin_search_definition_in_project;
 
 #[tracing::instrument(skip_all)]
 pub fn path_to_file_uri(file_path: &PathBuf) -> Option<String> {
@@ -29,7 +30,12 @@ pub fn uri_to_path(uri: &str) -> Option<PathBuf> {
 }
 
 pub fn find_project_root(file_path: &Path) -> Option<PathBuf> {
-    let mut current = file_path.parent()?;
+    // Start with the current path (for directory inputs) or parent (for file inputs)
+    let mut current = if file_path.is_dir() {
+        file_path
+    } else {
+        file_path.parent()?
+    };
 
     loop {
         if PROJECT_ROOT_MARKER
@@ -105,6 +111,12 @@ pub fn create_parser_for_language(language: &str) -> Option<Parser> {
                 .inspect_err(|e| debug!("Cannot set java parser: {e}"))
                 .ok()?;
         }
+        "kotlin" => {
+            parser
+                .set_language(&tree_sitter_kotlin::language())
+                .inspect_err(|e| debug!("Cannot set kotlin parser: {e}"))
+                .ok()?;
+        }
         _ => return None,
     };
 
@@ -169,8 +181,13 @@ pub fn search_definition_in_project_cross_language(
             )
         }
         "kotlin" => {
-            // TODO: Implement Kotlin search_definition_in_project
-            None
+            kotlin_search_definition_in_project(
+                current_file_uri,
+                current_source,
+                usage_node,
+                target_file_uri,
+                target_language_support.as_ref(),
+            )
         }
         _ => {
             // Fallback to the provided language support (usually the current file's language)
@@ -283,9 +300,17 @@ fn find_node_at_position<'a>(tree: &'a Tree, position: Position) -> Option<Node<
 }
 
 pub fn is_project_root(current: &PathBuf) -> bool {
-    PROJECT_ROOT_MARKER
-        .iter()
-        .any(|marker| current.join(marker).exists())
+    tracing::debug!("Checking if {:?} is project root", current);
+    
+    for marker in PROJECT_ROOT_MARKER.iter() {
+        let marker_path = current.join(marker);
+        let exists = marker_path.exists();
+        tracing::debug!("  Checking {:?}: {}", marker_path, exists);
+        if exists {
+            return true;
+        }
+    }
+    false
 }
 
 pub fn is_external_dependency(dir: &PathBuf) -> bool {
@@ -304,10 +329,13 @@ pub fn set_start_position_for_language(
     use tree_sitter::{QueryCursor, StreamingIterator};
     
     let symbol_name = usage_node.utf8_text(source.as_bytes()).ok()?;
-
     let other_source = read_to_string(uri_to_path(file_uri)?).ok()?;
 
-    let query_text = r#"(identifier) @name"#;
+    // Use broader query that captures both identifier and type_identifier
+    let query_text = match language {
+        "kotlin" => r#"(identifier) @name (type_identifier) @name"#,
+        _ => r#"(identifier) @name"#,
+    };
 
     // Create parser for the specified language
     let mut parser = create_parser_for_language(language)?;
@@ -317,11 +345,11 @@ pub fn set_start_position_for_language(
     let language_obj = match language {
         "groovy" => tree_sitter_groovy::language(),
         "java" => tree_sitter_java::LANGUAGE.into(),
+        "kotlin" => tree_sitter_kotlin::language(),
         _ => return None,
     };
     
     let query = tree_sitter::Query::new(&language_obj, query_text).ok()?;
-
     let mut cursor = QueryCursor::new();
 
     // Search for the symbol in the target file

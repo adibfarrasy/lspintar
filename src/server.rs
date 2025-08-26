@@ -15,7 +15,7 @@ use tracing::debug;
 use tree_sitter::Tree;
 
 use crate::core::build_tools::{detect_build_tool, run_gradle_build, BuildTool};
-use crate::core::constants::{BUILD_ON_INIT, GRADLE_CACHE_DIR};
+use crate::core::constants::{BUILD_ON_INIT, GRADLE_CACHE_DIR, PROJECT_ROOT_MARKER};
 use crate::core::dependency_cache::symbol_index::find_workspace_root;
 use crate::core::dependency_cache::DependencyCache;
 use crate::core::logging_service;
@@ -131,6 +131,10 @@ impl LanguageServer for LspServer {
             })?;
         }
 
+        tracing::debug!("Initialize params root_uri: {:?}", params.root_uri);
+        tracing::debug!("Initialize params workspace_folders: {:?}", params.workspace_folders);
+        tracing::debug!("env::current_dir: {:?}", env::current_dir().unwrap());
+        
         let client_root = params
             .root_uri
             .and_then(|uri| uri.to_file_path().ok())
@@ -145,6 +149,7 @@ impl LanguageServer for LspServer {
             })
             .or_else(|| Some(env::current_dir().unwrap()));
 
+        tracing::debug!("client_root resolved to: {:?}", client_root);
         let effective_root = self.find_true_workspace_root(&client_root.unwrap()).await;
 
         *self.workspace_root.write().await = Some(effective_root.clone());
@@ -661,12 +666,18 @@ impl LspServer {
 
     #[tracing::instrument(skip_all)]
     async fn build_on_init(&self) -> anyhow::Result<()> {
-        let current_dir = env::current_dir().context("Failed to get current directory")?;
+        let workspace_root = {
+            let root_guard = self.workspace_root.read().await;
+            root_guard
+                .as_ref()
+                .context("Workspace root not initialized")?
+                .clone()
+        };
 
-        let project_root = if is_project_root(&current_dir) {
-            current_dir
+        let project_root = if is_project_root(&workspace_root) {
+            workspace_root
         } else {
-            find_project_root(&current_dir.to_path_buf()).context("Cannot find project root")?
+            find_project_root(&workspace_root).context("Cannot find project root")?
         };
 
         let build_tool = detect_build_tool(&project_root).context("Cannot detect build tool")?;
@@ -681,20 +692,80 @@ impl LspServer {
     }
 
     async fn find_true_workspace_root(&self, suggested_root: &PathBuf) -> PathBuf {
+        tracing::debug!("find_true_workspace_root called with: {:?}", suggested_root);
+        
         if is_path_in_external_dependency(suggested_root) {
             if let Some(dep_root) = find_external_dependency_root(suggested_root) {
+                tracing::debug!("Found external dependency root: {:?}", dep_root);
                 return dep_root;
             }
         }
 
+        // First, try to find workspace root starting from suggested root
         if let Some(root) = find_workspace_root(suggested_root) {
+            tracing::debug!("find_workspace_root returned: {:?}", root);
             return root;
         }
 
+        // If no workspace root found from suggested directory, try to find project root directly
+        if let Some(project_root) = find_project_root(suggested_root) {
+            tracing::debug!("Found project root: {:?}", project_root);
+            return project_root;
+        }
+
+        // If still no project root found, search in subdirectories (for cases where LSP client provides parent dir)
+        if let Some(project_root) = self.search_for_project_in_subdirectories(suggested_root) {
+            tracing::debug!("Found project root in subdirectory: {:?}", project_root);
+            return project_root;
+        }
+
+        tracing::debug!("No project found, returning suggested_root: {:?}", suggested_root);
         suggested_root.clone()
     }
 
+    fn search_for_project_in_subdirectories(&self, dir: &PathBuf) -> Option<PathBuf> {
+        use std::fs;
+        
+        // Search up to 3 levels deep to avoid infinite recursion and performance issues
+        fn search_recursive(current_dir: &PathBuf, depth: usize, max_depth: usize) -> Option<PathBuf> {
+            if depth > max_depth {
+                return None;
+            }
+            
+            // Check if current directory is a project root
+            if PROJECT_ROOT_MARKER.iter().any(|marker| current_dir.join(marker).exists()) {
+                return Some(current_dir.clone());
+            }
+            
+            // Search subdirectories if we haven't reached max depth
+            if depth < max_depth {
+                if let Ok(entries) = fs::read_dir(current_dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_dir() {
+                            // Skip common non-project directories to improve performance
+                            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                                if name.starts_with('.') || name == "node_modules" || name == "target" || name == "build" {
+                                    continue;
+                                }
+                            }
+                            
+                            if let Some(found) = search_recursive(&path, depth + 1, max_depth) {
+                                return Some(found);
+                            }
+                        }
+                    }
+                }
+            }
+            
+            None
+        }
+        
+        search_recursive(dir, 0, 3)
+    }
+
     async fn update_cache(&self, path: Option<PathBuf>) {
+        tracing::debug!("update_cache called with path: {:?}", path);
         if let Some(dir) = path {
             let cache_loaded = if !is_external_dependency(&dir) {
                 match self.dependency_cache.check_and_initialize_cache(&dir).await {

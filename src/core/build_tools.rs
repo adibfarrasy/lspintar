@@ -9,7 +9,7 @@ use std::{
 use tokio::process::Command;
 use zip::ZipArchive;
 
-use crate::lsp_info;
+use crate::{lsp_error, lsp_info};
 
 use super::{
     constants::GRADLE_CACHE_DIR,
@@ -34,11 +34,17 @@ pub fn detect_build_tool(project_root: &Path) -> Option<BuildTool> {
 #[tracing::instrument(skip_all)]
 pub async fn parse_settings_gradle(project_root: &PathBuf) -> Result<HashMap<String, PathBuf>> {
     let settings_file = project_root.join("settings.gradle");
-    if !settings_file.exists() {
+    let settings_kts_file = project_root.join("settings.gradle.kts");
+    
+    let (_settings_file, content) = if settings_file.exists() {
+        let content = tokio::fs::read_to_string(&settings_file).await?;
+        (settings_file, content)
+    } else if settings_kts_file.exists() {
+        let content = tokio::fs::read_to_string(&settings_kts_file).await?;
+        (settings_kts_file, content)
+    } else {
         return Ok(HashMap::new());
-    }
-
-    let content = tokio::fs::read_to_string(&settings_file).await?;
+    };
     let mut project_map = HashMap::new();
 
     let mut in_include_block = false;
@@ -124,7 +130,6 @@ pub async fn run_gradle_build(project_root: &PathBuf) -> anyhow::Result<()> {
     .context("Gradle build timed out after 5 minutes")??;
 
     if !output.status.success() {
-
         return Err(anyhow::anyhow!("Gradle build failed. See logs for detail."));
     }
 
@@ -143,9 +148,7 @@ pub async fn execute_gradle_dependencies(
         "gradle"
     };
 
-
     let mut results = GradleDependenciesResult::new();
-
 
     // Optimized: Run both configurations in a single command when possible
     let output = tokio::time::timeout(
@@ -192,6 +195,8 @@ pub async fn execute_gradle_dependencies(
                 let output_text = String::from_utf8(output.stdout)?;
                 results.insert(config.to_string(), output_text);
             } else {
+                let stderr = String::from_utf8(output.stderr).unwrap_or("ERROR".to_string());
+                lsp_error!("failed to get project dependencies: {}", stderr);
             }
         }
     }
@@ -242,7 +247,6 @@ pub fn parse_gradle_dependencies_output(
 ) -> Result<ParsedGradleDependencies> {
     let mut external_deps = Vec::new();
     let mut project_deps = Vec::new();
-
 
     // Parse both compile and test configurations
     for (_config_name, output) in &gradle_result.configurations {
@@ -514,7 +518,6 @@ pub fn get_gradle_cache_base() -> Option<PathBuf> {
     let fallback_path = dirs::home_dir()
         .map(|home| home.join(".gradle/caches/modules-2/files-2.1"))
         .filter(|path| path.exists());
-
 
     fallback_path
 }

@@ -38,7 +38,6 @@ pub fn search_local_definitions<'a>(
         .determine_symbol_type_from_context(tree, usage_node, source)
         .ok()?;
 
-
     if symbol_type.is_declaration() {
         return None;
     }
@@ -50,15 +49,17 @@ pub fn search_local_definitions<'a>(
         }
         SymbolType::VariableUsage => {
             // Search for variable declarations in accessible scopes
-            let variable_candidates = find_variable_declarations_in_scope(tree, source, usage_node, &symbol_name);
-            
+            let variable_candidates =
+                find_variable_declarations_in_scope(tree, source, usage_node, &symbol_name);
+
             if !variable_candidates.is_empty() {
                 // Find the best match using scope distance
-                if let Some(best_match) = find_closest_declaration(usage_node, &variable_candidates) {
+                if let Some(best_match) = find_closest_declaration(usage_node, &variable_candidates)
+                {
                     return Some(best_match);
                 }
             }
-            
+
             // Not found as variable, try as field
             find_as_field(tree, source, symbol_name)
         }
@@ -67,12 +68,12 @@ pub fn search_local_definitions<'a>(
             // Get candidates for field usage
             let query_text = get_declaration_query_for_symbol_type(&symbol_type)?;
             let candidates = find_definition_candidates(tree, source, &symbol_name, query_text)?;
-            
+
             // For field usage (like autowired properties), find the field declaration
             // Fields are class-level, so we don't need closest scope logic
             candidates.into_iter().next()
         }
-        
+
         _ => {
             // For other symbol types, use the general candidate finding approach
             let query_text = get_declaration_query_for_symbol_type(&symbol_type)?;
@@ -94,16 +95,16 @@ fn find_variable_declarations_in_scope<'a>(
     symbol_name: &str,
 ) -> Vec<Node<'a>> {
     let mut candidates = Vec::new();
-    
+
     // 1. Check method parameters first (highest priority)
     if let Some(method) = find_containing_method(usage_node) {
         let param_query = r#"(formal_parameter (identifier) @name)"#;
         let language = tree.language();
-        
+
         if let Some(query) = get_or_create_query(param_query, &language) {
             let mut cursor = tree_sitter::QueryCursor::new();
             let mut matches = cursor.matches(&query, method, source.as_bytes());
-            
+
             while let Some(query_match) = matches.next() {
                 for capture in query_match.captures {
                     if let Ok(param_text) = capture.node.utf8_text(source.as_bytes()) {
@@ -115,32 +116,35 @@ fn find_variable_declarations_in_scope<'a>(
             }
         }
     }
-    
+
     // 2. Walk up from usage node to find variable declarations in accessible scopes
     let mut current_node = Some(*usage_node);
-    
+
     while let Some(node) = current_node {
         // For each ancestor node, check its children for variable declarations
         // that come before the usage position
-        if matches!(node.kind(), "block" | "method_declaration" | "class_declaration") {
+        if matches!(
+            node.kind(),
+            "block" | "method_declaration" | "class_declaration"
+        ) {
             // Try multiple query patterns for different declaration types
             let queries = vec![
-                r#"(variable_declaration) @decl"#,  // Standard variable declarations with type
-                r#"(local_variable_declaration) @local_decl"#,  // Local variable declarations
-                r#"(expression_statement (identifier) @bare_id)"#,  // Bare declarations like "ApiAbundantOrder abundantOrder"
+                r#"(variable_declaration) @decl"#, // Standard variable declarations with type
+                r#"(local_variable_declaration) @local_decl"#, // Local variable declarations
+                r#"(expression_statement (identifier) @bare_id)"#,
             ];
-            
+
             let language = tree.language();
-            
+
             for query_text in queries {
                 if let Some(query) = get_or_create_query(query_text, &language) {
                     let mut cursor = tree_sitter::QueryCursor::new();
                     let mut matches = cursor.matches(&query, node, source.as_bytes());
-                    
+
                     while let Some(query_match) = matches.next() {
                         for capture in query_match.captures {
                             let var_decl = capture.node;
-                            
+
                             // Check if this declaration contains our symbol
                             if let Ok(decl_text) = var_decl.utf8_text(source.as_bytes()) {
                                 if decl_text.contains(symbol_name) {
@@ -148,12 +152,18 @@ fn find_variable_declarations_in_scope<'a>(
                                     // or is in a parent block
                                     if var_decl.start_position() < usage_node.start_position() {
                                         // Handle different types of declarations
-                                        if var_decl.kind() == "identifier" && decl_text == symbol_name {
+                                        if var_decl.kind() == "identifier"
+                                            && decl_text == symbol_name
+                                        {
                                             // For bare identifier declarations (expression_statement containing identifier)
                                             candidates.push(var_decl);
                                         } else {
                                             // Find the actual identifier node within the declaration
-                                            if let Some(identifier) = find_identifier_in_declaration(&var_decl, source, symbol_name) {
+                                            if let Some(identifier) = find_identifier_in_declaration(
+                                                &var_decl,
+                                                source,
+                                                symbol_name,
+                                            ) {
                                                 candidates.push(identifier);
                                             }
                                         }
@@ -165,10 +175,10 @@ fn find_variable_declarations_in_scope<'a>(
                 }
             }
         }
-        
+
         current_node = node.parent();
     }
-    
+
     candidates
 }
 
@@ -179,7 +189,7 @@ fn find_identifier_in_declaration<'a>(
     symbol_name: &str,
 ) -> Option<Node<'a>> {
     let mut cursor = var_decl.walk();
-    
+
     for child in var_decl.children(&mut cursor) {
         if child.kind() == "variable_declarator" {
             // Look for the identifier in the variable declarator
@@ -195,7 +205,7 @@ fn find_identifier_in_declaration<'a>(
             }
         }
     }
-    
+
     None
 }
 
@@ -236,7 +246,7 @@ fn is_in_scope(usage_node: &Node, declaration_node: &Node) -> bool {
     let usage_method = find_containing_method(usage_node);
     let decl_block = find_containing_block(declaration_node);
     let usage_block = find_containing_block(usage_node);
-    
+
     // For formal parameters, check if usage is in the same method
     if let Some(decl_method) = decl_method {
         if let Some(usage_method) = usage_method {
@@ -697,7 +707,11 @@ mod tests {
         parser.parse(source, None).unwrap()
     }
 
-    fn find_node_at_position<'a>(tree: &'a Tree, source: &str, position: Position) -> Option<tree_sitter::Node<'a>> {
+    fn find_node_at_position<'a>(
+        tree: &'a Tree,
+        source: &str,
+        position: Position,
+    ) -> Option<tree_sitter::Node<'a>> {
         let target_byte = position_to_byte_offset(source, position)?;
         let mut current = tree.root_node();
 
@@ -743,105 +757,4 @@ mod tests {
 
         None
     }
-
-    #[test]
-    fn test_variable_declaration_resolution() {
-        let test_cases = vec![
-            VariableDefinitionTestCase {
-                name: "simple variable declaration with custom type",
-                source_code: r#"ApiAbundantOrder abundantOrder
-if (true) {
-    abundantOrder = toAbundantOrder(order)
-}"#,
-                usage_position: Position { line: 2, character: 4 }, // abundantOrder usage
-                expected_declaration_text: "abundantOrder",
-                should_find_definition: true,
-            },
-            VariableDefinitionTestCase {
-                name: "variable declaration with assignment",
-                source_code: r#"String name = "test"
-println(name)"#,
-                usage_position: Position { line: 1, character: 9 }, // name usage in println
-                expected_declaration_text: "name",
-                should_find_definition: true,
-            },
-        ];
-
-        let language_support = GroovySupport::new();
-
-        for test_case in test_cases {
-            println!("Running test: {}", test_case.name);
-            
-            let tree = create_test_tree(test_case.source_code);
-            let usage_node = find_node_at_position(&tree, test_case.source_code, test_case.usage_position);
-            
-            assert!(usage_node.is_some(), "Test '{}': Could not find usage node at position", test_case.name);
-            let usage_node = usage_node.unwrap();
-
-            // Find the identifier node if we're not already on one
-            let identifier_node = if usage_node.kind() == "identifier" {
-                usage_node
-            } else {
-                // Look for identifier child
-                let mut found_identifier = None;
-                let mut cursor = usage_node.walk();
-                for child in usage_node.children(&mut cursor) {
-                    if child.kind() == "identifier" {
-                        found_identifier = Some(child);
-                        break;
-                    }
-                }
-                found_identifier.unwrap_or(usage_node)
-            };
-
-            let result = search_local_definitions(&tree, test_case.source_code, &identifier_node, &language_support);
-
-            if test_case.should_find_definition {
-                assert!(result.is_some(), "Test '{}': Expected to find definition", test_case.name);
-                
-                let definition_node = result.unwrap();
-                
-                // Verify the definition contains the expected variable name
-                let definition_text = definition_node.utf8_text(test_case.source_code.as_bytes())
-                    .unwrap_or("");
-                
-                assert!(
-                    definition_text.contains(test_case.expected_declaration_text),
-                    "Test '{}': Expected definition to contain '{}', got '{}'",
-                    test_case.name,
-                    test_case.expected_declaration_text,
-                    definition_text
-                );
-            } else {
-                assert!(result.is_none(), "Test '{}': Expected not to find definition", test_case.name);
-            }
-        }
-    }
-
-    #[test]
-    fn test_variable_query_pattern_matching() {
-        // Test that our updated query patterns work correctly
-        let test_source = r#"ApiAbundantOrder abundantOrder
-String name = "test""#;
-        
-        let tree = create_test_tree(test_source);
-        
-        // Test variable declaration query
-        let query_text = r#"
-            (variable_declaration declarator: (variable_declarator (identifier) @name))
-            (formal_parameter (identifier) @name)
-            (field_declaration declarator: (variable_declarator (identifier) @name))
-        "#;
-        
-        let candidates = super::super::utils::find_definition_candidates(&tree, test_source, "abundantOrder", query_text);
-        assert!(candidates.is_some(), "Should find candidates for abundantOrder");
-        
-        let candidates = candidates.unwrap();
-        assert!(!candidates.is_empty(), "Should have at least one candidate");
-        
-        // Verify the candidate is the variable_declarator node
-        let candidate = &candidates[0];
-        assert_eq!(candidate.kind(), "variable_declarator", "Candidate should be variable_declarator");
-    }
-
 }

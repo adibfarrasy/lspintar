@@ -6,7 +6,11 @@ use crate::{
         symbols::SymbolType,
         utils::{create_parser_for_language, detect_language_from_path, find_project_root},
     },
-    languages::{groovy::symbols::extract_groovy_symbols, java::symbols::extract_java_symbols},
+    languages::{
+        groovy::symbols::extract_groovy_symbols, 
+        java::symbols::extract_java_symbols,
+        kotlin::symbols::extract_kotlin_symbols,
+    },
 };
 use anyhow::{Context, Result};
 use tokio::{fs, task::spawn_blocking};
@@ -16,21 +20,41 @@ use walkdir::WalkDir;
 
 #[tracing::instrument(skip_all)]
 pub fn find_workspace_root(dir: &PathBuf) -> Option<PathBuf> {
-    let mut current_dir = dir.clone();
-    loop {
-        match find_project_root(&current_dir) {
-            Some(project_dir) => {
-                if let Some(parent) = project_dir.parent() {
-                    current_dir = parent.to_path_buf();
-                } else {
-                    break; // Reached filesystem root
+    // First, find the immediate project root for this directory
+    let project_root = find_project_root(dir)?;
+    
+    // Check if parent directory is a proper multi-project workspace
+    // (has workspace-level configuration like settings.gradle.kts)
+    if let Some(parent) = project_root.parent() {
+        // Check if parent has workspace-level markers
+        let workspace_markers = ["settings.gradle", "settings.gradle.kts", ".git"];
+        if workspace_markers.iter().any(|marker| parent.join(marker).exists()) {
+            // Count project directories in this workspace
+            let mut project_count = 0;
+            
+            if let Ok(entries) = std::fs::read_dir(parent) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        // Check if this directory has project markers (but not workspace markers)
+                        let has_project_marker = PROJECT_ROOT_MARKER.iter().any(|marker| path.join(marker).exists());
+                        let has_workspace_marker = workspace_markers.iter().any(|marker| path.join(marker).exists());
+                        
+                        if has_project_marker && !has_workspace_marker {
+                            project_count += 1;
+                            if project_count > 1 {
+                                // Found multiple projects in a proper workspace, parent is workspace root
+                                return Some(parent.to_path_buf());
+                            }
+                        }
+                    }
                 }
             }
-            None => break,
         }
     }
-
-    Some(current_dir)
+    
+    // Single project workspace or no proper multi-project structure - project root is workspace root
+    Some(project_root)
 }
 
 #[tracing::instrument(skip_all)]
@@ -189,10 +213,7 @@ fn extract_symbols_from_tree_by_language(
     let result = match parsed_file.language.as_str() {
         "groovy" => extract_groovy_symbols(parsed_file),
         "java" => extract_java_symbols(parsed_file),
-        "kotlin" => {
-            // TODO: Implement Kotlin symbol extraction
-            Ok(vec![])
-        }
+        "kotlin" => extract_kotlin_symbols(parsed_file),
         _ => {
             // Unsupported language, skip
             debug!("Unsupported language: {}", parsed_file.language);

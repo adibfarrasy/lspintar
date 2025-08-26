@@ -623,12 +623,6 @@ fn is_assignment_before_position(assignment_node: &Node, current_position: &Node
 }
 
 fn infer_type_from_field_name(field_name: &str) -> Option<String> {
-    // Convert camelCase field name to PascalCase class name
-    // Examples:
-    // apiOrderTransfer -> ApiOrderTransfer
-    // userService -> UserService
-    // orderRepository -> OrderRepository
-
     if field_name.is_empty() {
         return None;
     }
@@ -990,7 +984,6 @@ fn resolve_same_package(
                     let explicit_key = (project_root.clone(), fqn.clone());
                     if dependency_cache.find_symbol_sync(&explicit_key.0, &explicit_key.1).is_some()
                         || dependency_cache.find_builtin_info(&explicit_key.1).is_some() {
-                        debug!("resolve_same_package: found same package symbol: '{}'", fqn);
                         result = Some(explicit_key);
                         return;
                     }

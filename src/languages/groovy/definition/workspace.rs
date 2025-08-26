@@ -157,7 +157,7 @@ fn fallback_impl(
             }
         }
 
-        // Also try wildcard imports (for backward compatibility with OrderService case)
+        // Also try wildcard imports
         let wildcard_packages = get_wildcard_imports_from_source(source);
         if let Some(packages) = wildcard_packages {
             for package in packages {

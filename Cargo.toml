@@ -11,6 +11,8 @@ tokio = { version = "1.45.1", features = ["full"] }
 tower-lsp = "0.20.0"
 tree-sitter = "0.25.6"
 tree-sitter-groovy = { git = "https://github.com/adibfarrasy/tree-sitter-groovy" }
+tree-sitter-java = { git = "https://github.com/adibfarrasy/tree-sitter-java" }
+tree-sitter-kotlin = { git = "https://github.com/adibfarrasy/tree-sitter-kotlin" }
 walkdir = "2.0"
 num_cpus = "1.0"
 futures = "0.3"
@@ -21,8 +23,6 @@ just = "1.40.0"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 zip = "4.1.0"
-tree-sitter-java = { git = "https://github.com/adibfarrasy/tree-sitter-java" }
-tree-sitter-kotlin = { git = "https://github.com/fwcd/tree-sitter-kotlin" }
 rayon = "1.10.0"
 serde = { version = "1.0.219", features = ["derive"] }
 rusqlite = { version = "0.37.0", features = ["bundled"] }

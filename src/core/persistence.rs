@@ -10,6 +10,7 @@ use std::{
     sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
 };
+use tracing::debug;
 
 use crate::core::{
     build_tools::ExternalDependency,
@@ -284,6 +285,7 @@ impl PersistenceLayer {
     /// Store symbol index to database
     /// Called from: After indexing project files, textDocument/didSave (incremental)
     pub fn store_symbol_index(&self, map: &DashMap<(PathBuf, String), PathBuf>) -> Result<()> {
+        tracing::debug!("store_symbol_index: storing {} symbols", map.len());
         let conn = self.conn.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
 
@@ -309,8 +311,10 @@ impl PersistenceLayer {
                 // Store all project-related entries (allow subdirectories)
                 // Skip only if the project_path is not under our workspace
                 if !project_path.starts_with(&self.project_path) {
+                    tracing::debug!("store_symbol_index: skipping symbol '{}' - project_path {:?} doesn't start with workspace {:?}", fqn, project_path, self.project_path);
                     continue;
                 }
+                
 
                 // Get file metadata
                 let (mtime, size) = match fs::metadata(file_path) {
@@ -954,7 +958,10 @@ impl PersistenceLayer {
     /// Lazy lookup for a single symbol from database
     /// Called from: go-to-definition requests when symbol not in memory cache
     pub fn lookup_symbol(&self, project_root: &PathBuf, fqn: &str) -> Result<Option<PathBuf>> {
+
         let conn = self.conn.lock().unwrap();
+
+        // First try project-specific lookup (current behavior)
         let mut stmt = conn.prepare(
             "SELECT file_path FROM symbol_index WHERE project_path = ? AND fully_qualified_name = ?"
         )?;
@@ -964,9 +971,61 @@ impl PersistenceLayer {
             Ok(PathBuf::from(file_path))
         });
 
+        // If found in current project, return it
         match result {
-            Ok(file_path) => Ok(Some(file_path)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Ok(file_path) => {
+                return Ok(Some(file_path));
+            }
+            Err(rusqlite::Error::QueryReturnedNoRows) => {
+                // Continue to workspace search below
+            }
+            Err(e) => return Err(e.into()),
+        }
+
+        let workspace_root = self.project_path.clone();
+        let workspace_pattern = format!("{}%", workspace_root.to_string_lossy());
+
+
+        let mut stmt = conn.prepare(
+            "SELECT file_path FROM symbol_index WHERE project_path LIKE ? AND fully_qualified_name = ?"
+        )?;
+
+        let result = stmt.query_row(params![workspace_pattern, fqn], |row| {
+            let file_path: String = row.get(0)?;
+            Ok(PathBuf::from(file_path))
+        });
+
+        match result {
+            Ok(file_path) => {
+                Ok(Some(file_path))
+            }
+            Err(rusqlite::Error::QueryReturnedNoRows) => {
+                // Symbol not found in workspace
+                {
+                    let mut debug_stmt = conn.prepare("SELECT fully_qualified_name, project_path FROM symbol_index WHERE fully_qualified_name LIKE ? LIMIT 5")?;
+                    let pattern = format!("%{}%", fqn.split('.').last().unwrap_or(fqn));
+                    debug!(
+                        "DEBUG: Searching for similar symbols with pattern: {}",
+                        pattern
+                    );
+
+                    let rows = debug_stmt.query_map(params![pattern], |row| {
+                        let fqn_db: String = row.get(0)?;
+                        let project_path_db: String = row.get(1)?;
+                        Ok((fqn_db, project_path_db))
+                    })?;
+
+                    for row in rows {
+                        if let Ok((fqn_db, project_path_db)) = row {
+                            debug!(
+                                "DEBUG: Similar symbol found: '{}' in project '{}'",
+                                fqn_db, project_path_db
+                            );
+                        }
+                    }
+                }
+                Ok(None)
+            }
             Err(e) => Err(e.into()),
         }
     }
@@ -1051,7 +1110,9 @@ impl PersistenceLayer {
         project_metadata: &DashMap<PathBuf, ProjectMetadata>,
     ) -> Result<()> {
         // Store each cache separately to handle partial failures better
-        let _ = self.store_symbol_index(symbol_index);
+        if let Err(e) = self.store_symbol_index(symbol_index) {
+            tracing::error!("Failed to store symbol index: {}", e);
+        }
 
         let _ = self.store_builtin_infos(builtin_infos);
 

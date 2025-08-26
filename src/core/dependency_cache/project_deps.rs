@@ -83,7 +83,9 @@ impl ProjectMapper {
         let project_map = parse_settings_gradle(&project_root).await?;
 
         // Synchronous dependency resolution
-        let all_gradle_results = self.execute_gradle_dependencies_synchronous(&project_root, &project_map).await?;
+        let all_gradle_results = self
+            .execute_gradle_dependencies_synchronous(&project_root, &project_map)
+            .await?;
 
         let mut all_parsed_deps = HashMap::new();
         for (project_name, gradle_result) in &all_gradle_results {
@@ -201,7 +203,7 @@ impl ProjectMapper {
         project_map: &HashMap<String, PathBuf>,
     ) -> Result<HashMap<String, GradleDependenciesResult>> {
         let mut all_gradle_results = HashMap::new();
-        
+
         // Process root project first
         match execute_gradle_dependencies(project_root).await {
             Ok(gradle_result) => {
@@ -213,7 +215,7 @@ impl ProjectMapper {
                 debug!("ProjectMapper: Root project failed with error: {}", e);
             }
         }
-        
+
         // Process each subproject sequentially
         for (project_name, project_path) in project_map {
             match execute_gradle_dependencies(project_path).await {
@@ -223,151 +225,17 @@ impl ProjectMapper {
                     }
                 }
                 Err(e) => {
-                    debug!("ProjectMapper: Project '{}' at {:?} failed with error: {}", project_name, project_path, e);
+                    debug!(
+                        "ProjectMapper: Project '{}' at {:?} failed with error: {}",
+                        project_name, project_path, e
+                    );
                 }
-            }
-        }
-        
-        if all_gradle_results.is_empty() {
-            return Err(anyhow!("Failed to resolve dependencies for any project"));
-        }
-        Ok(all_gradle_results)
-    }
-
-    /// Optimized parallel Gradle dependency resolution with batching and resource management
-    #[tracing::instrument(skip_all)]
-    async fn execute_gradle_dependencies_optimized(
-        &self,
-        project_root: &PathBuf,
-        project_map: &HashMap<String, PathBuf>,
-    ) -> Result<HashMap<String, GradleDependenciesResult>> {
-        use tokio::sync::Semaphore;
-        use std::sync::Arc;
-
-        // Strategy 1: Try single multi-project command first (fastest if it works)
-        // TEMPORARILY DISABLED FOR DEBUGGING - the single command doesn't parse multi-project output correctly
-        // if let Ok(result) = self.try_single_gradle_command(project_root).await {
-        //     return Ok(result);
-        // }
-
-        // Strategy 2: Controlled parallel execution with resource limits
-        let max_concurrent = std::cmp::min(3, std::cmp::max(1, num_cpus::get() / 2)); // Conservative limit
-        let semaphore = Arc::new(Semaphore::new(max_concurrent));
-        
-        let mut tasks = Vec::new();
-        let mut all_projects = vec![("".to_string(), project_root.clone())];
-        
-        // Add all subprojects
-        for (name, path) in project_map {
-            all_projects.push((name.clone(), path.clone()));
-        }
-        
-
-        // Strategy 3: Batch execution - process projects in small groups
-        for batch in all_projects.chunks(max_concurrent) {
-            let mut batch_tasks = Vec::new();
-            
-            for (project_name, project_path) in batch {
-                let project_name = project_name.clone();
-                let project_path = project_path.clone();
-                let semaphore = semaphore.clone();
-                
-                let task = tokio::spawn(async move {
-                    let _permit = semaphore.acquire().await.unwrap();
-                    
-                    // Add small delay to reduce resource contention
-                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                    
-                    let result = execute_gradle_dependencies(&project_path).await;
-                    (project_name, result)
-                });
-                
-                batch_tasks.push(task);
-            }
-            
-            // Wait for current batch to complete before starting next batch
-            for task in batch_tasks {
-                tasks.push(task);
-            }
-            
-            // Small delay between batches to let Gradle daemon settle
-            tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
-        }
-
-        // Collect all results
-        let mut all_gradle_results = HashMap::new();
-        for task in tasks {
-            if let Ok((project_name, result)) = task.await {
-                match result {
-                    Ok(gradle_result) => {
-                        if !gradle_result.is_empty() {
-                            all_gradle_results.insert(project_name, gradle_result);
-                        }
-                    }
-                    Err(e) => {
-                        debug!("ProjectMapper: Failed to get dependencies for project '{}': {}", project_name, e);
-                        // Continue with other projects instead of failing completely
-                    }
-                }
-            } else {
-                debug!("ProjectMapper: Task join failed for a project");
             }
         }
 
         if all_gradle_results.is_empty() {
             return Err(anyhow!("Failed to resolve dependencies for any project"));
         }
-
         Ok(all_gradle_results)
-    }
-
-    /// Try to use a single Gradle command to get all dependencies at once
-    async fn try_single_gradle_command(
-        &self,
-        project_root: &PathBuf,
-    ) -> Result<HashMap<String, GradleDependenciesResult>> {
-        use tokio::process::Command;
-
-
-        let gradle_command = if project_root.join("gradlew").exists() {
-            "./gradlew"
-        } else if project_root.join("gradlew.bat").exists() {
-            "./gradlew.bat"
-        } else {
-            "gradle"
-        };
-
-
-        // Try to get all dependencies with a single command
-        // This uses Gradle's ability to run tasks on all subprojects
-        let output = tokio::time::timeout(
-            std::time::Duration::from_secs(45), // Shorter timeout for this attempt
-            Command::new(gradle_command)
-                .args(&[
-                    "dependencies",
-                    "--configuration", "compileClasspath",
-                    "--quiet",
-                    "--parallel", // Enable Gradle's internal parallelism
-                    "--max-workers=4", // Limit Gradle workers
-                ])
-                .current_dir(project_root)
-                .output(),
-        )
-        .await??;
-
-        if output.status.success() {
-            let output_text = String::from_utf8(output.stdout)?;
-            
-            let mut result = GradleDependenciesResult::new();
-            result.insert("compileClasspath".to_string(), output_text);
-            
-            // For single command, return as root project
-            let mut results = HashMap::new();
-            results.insert("".to_string(), result);
-            return Ok(results);
-        } else {
-        }
-
-        Err(anyhow!("Single command approach failed"))
     }
 }

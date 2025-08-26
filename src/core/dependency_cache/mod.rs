@@ -18,7 +18,7 @@ use tracing::debug;
 
 use crate::{
     core::{state_manager::set_global, utils::is_project_root},
-    lsp_info, lsp_warning,
+    lsp_error, lsp_info, lsp_warning,
 };
 
 use super::{
@@ -77,11 +77,9 @@ impl DependencyCache {
             Err(_) => return Ok(false),
         };
 
-        // Check if cache is stale
         let is_cache_valid = match persistence.is_git_state_stale() {
-            Ok(false) => true, // Cache is not stale
-            Ok(true) => false, // Cache is stale
-            Err(_) => false,   // Error checking, assume stale
+            Ok(is_stale) => !is_stale,
+            Err(_) => false,
         };
 
         if is_cache_valid {
@@ -165,11 +163,20 @@ impl DependencyCache {
     }
 
     #[tracing::instrument(skip_all)]
-    pub async fn index_workspace(self: Arc<Self>, current_dir: PathBuf) -> Result<()> {
-        let project_root = if is_project_root(&current_dir) {
-            current_dir.clone()
+    pub async fn index_workspace(self: Arc<Self>, workspace_root: PathBuf) -> Result<()> {
+        tracing::debug!(
+            "Checking workspace root for project markers: {:?}",
+            workspace_root
+        );
+
+        // The workspace root provided by the LSP client should be the project root
+        // If it's not a direct project root, try to find one within it
+        let project_root = if is_project_root(&workspace_root) {
+            tracing::debug!("Workspace root is a project root");
+            workspace_root.clone()
         } else {
-            find_project_root(&current_dir.to_path_buf()).context("Cannot find project root")?
+            tracing::debug!("Workspace root is not a project root, searching...");
+            find_project_root(&workspace_root).context("Cannot find project root")?
         };
 
         let build_tool =
@@ -204,8 +211,9 @@ impl DependencyCache {
         lsp_info!("Indexing completed in {:.2}s", duration.as_secs_f64());
         set_global("is_indexing_completed", true);
 
-        // Save to persistent storage
-        let _ = self.save_to_disk(&project_root).await;
+        if let Err(error) = self.save_to_disk(&project_root).await {
+            lsp_error!("Failed to save cache to disk: {}", error);
+        }
 
         Ok(())
     }
@@ -270,12 +278,10 @@ impl DependencyCache {
     pub fn find_symbol_sync(&self, project_root: &PathBuf, fqn: &str) -> Option<PathBuf> {
         let key = (project_root.clone(), fqn.to_string());
 
-
         // First check in-memory cache
         if let Some(file_path) = self.symbol_index.get(&key) {
             return Some(file_path.value().clone());
         }
-
 
         // If not found in memory, try database lookup
         let persistence_guard = tokio::task::block_in_place(|| {
@@ -309,14 +315,13 @@ impl DependencyCache {
 
     /// Lazy lookup for symbol file path, checking in-memory cache first, then database
     pub async fn find_symbol(&self, project_root: &PathBuf, fqn: &str) -> Option<PathBuf> {
-        let key = (project_root.clone(), fqn.to_string());
 
+        let key = (project_root.clone(), fqn.to_string());
 
         // First check in-memory cache
         if let Some(file_path) = self.symbol_index.get(&key) {
             return Some(file_path.value().clone());
         }
-
 
         // If not found in memory, try database lookup
         let persistence_guard = self.persistence.read().await;
@@ -329,17 +334,14 @@ impl DependencyCache {
                     return Some(file_path);
                 }
                 Ok(None) => {
-                    debug!("find_symbol: symbol '{}' not found in database", fqn);
+                    // Not found in database
                 }
-                Err(e) => {
-                    debug!(
-                        "find_symbol: database query error for symbol '{}': {}",
-                        fqn, e
-                    );
+                Err(_e) => {
+                    // Database error
                 }
             }
         } else {
-            debug!("find_symbol: no persistence layer available");
+            // No persistence layer available
         }
 
         None
@@ -422,12 +424,10 @@ impl DependencyCache {
     ) -> Option<Vec<(PathBuf, usize, usize)>> {
         let key = (project_root.clone(), type_name.to_string());
 
-
         // First check in-memory cache
         if let Some(implementations) = self.inheritance_index.get(&key) {
             return Some(implementations.value().clone());
         }
-
 
         // If not found in memory, try database lookup
         let persistence_guard = self.persistence.read().await;
@@ -437,10 +437,11 @@ impl DependencyCache {
                     // Cache all loaded inheritance data in memory for future lookups
                     for entry in inheritance_index_map.iter() {
                         let (db_key, db_implementations) = (entry.key(), entry.value());
-                        self.inheritance_index.insert(db_key.clone(), db_implementations.clone());
+                        self.inheritance_index
+                            .insert(db_key.clone(), db_implementations.clone());
                     }
                     drop(persistence_guard);
-                    
+
                     // Now check if we have the requested type
                     if let Some(implementations) = self.inheritance_index.get(&key) {
                         return Some(implementations.value().clone());
@@ -682,7 +683,7 @@ mod tests {
         ];
 
         for test_case in test_cases {
-            println!("Running test: {}", test_case.name);
+            debug!("Running test: {}", test_case.name);
 
             let cache = (test_case.setup)();
             let input = &test_case.input;
@@ -801,7 +802,7 @@ mod tests {
         ];
 
         for test_case in test_cases {
-            println!("Running inheritance test: {}", test_case.name);
+            debug!("Running inheritance test: {}", test_case.name);
 
             let cache = DependencyCache::new();
             let project_root = PathBuf::from("/test/project");
