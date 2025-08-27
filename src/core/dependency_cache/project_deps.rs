@@ -8,8 +8,8 @@ use std::{
 use tracing::debug;
 
 use crate::core::build_tools::{
-    execute_gradle_dependencies, extract_class_names_from_jar, find_sources_jar_in_gradle_cache,
-    index_jar_sources, parse_gradle_dependencies_output, parse_settings_gradle, BuildTool,
+    execute_gradle_dependencies, extract_class_names_from_jar, find_jar_in_gradle_cache,
+    index_jar_with_decompilation, parse_gradle_dependencies_output, parse_settings_gradle, BuildTool,
     ExternalDependency, GradleDependenciesResult,
 };
 
@@ -168,15 +168,15 @@ impl ProjectMapper {
                 let mut chunk_classes = HashSet::new();
                 for dep in chunk {
                     debug!("Processing external dependency: {}:{}", dep.group, dep.artifact);
-                    if let Some(jar_path) = find_sources_jar_in_gradle_cache(&dep) {
-                        debug!("Found sources jar for {}: {:?}", dep.artifact, jar_path);
+                    if let Some(jar_path) = find_jar_in_gradle_cache(&dep) {
+                        debug!("Found jar for {}: {:?}", dep.artifact, jar_path);
                         if let Ok(classes) = extract_class_names_from_jar(&jar_path) {
                             if dep.artifact.contains("kotlin") {
                                 debug!("Extracted {} classes from kotlin JAR {}: {:?}", classes.len(), dep.artifact, classes.iter().take(10).collect::<Vec<_>>());
                             }
                             chunk_classes.extend(classes.clone());
 
-                            let _ = index_jar_sources(
+                            let _ = index_jar_with_decompilation(
                                 &jar_path,
                                 &project_path,
                                 cache.clone(),
@@ -184,6 +184,8 @@ impl ProjectMapper {
                                 &dep,
                             );
                         }
+                    } else {
+                        debug!("No jar found for {}:{}, skipping indexing", dep.group, dep.artifact);
                     }
                 }
                 chunk_classes

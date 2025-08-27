@@ -12,6 +12,7 @@ use crate::{
         kotlin::symbols::extract_kotlin_symbols,
     },
 };
+use super::source_file_info::SourceFileInfo;
 use anyhow::{Context, Result};
 use tokio::{fs, task::spawn_blocking};
 use tracing::debug;
@@ -247,4 +248,38 @@ pub struct SymbolDefinition {
     pub column: usize,
     pub extends: Option<String>,
     pub implements: Vec<String>,
+}
+
+/// Extract symbol definitions from a SourceFileInfo (for decompiled content)
+pub fn extract_symbols_from_source_file_info(source_info: &SourceFileInfo) -> Result<Vec<SymbolDefinition>> {
+    let content = source_info.get_content()?;
+    let tree = source_info.get_tree()?;
+    
+    // Determine language from the source path or zip internal path
+    let language = if let Some(zip_path) = &source_info.zip_internal_path {
+        if zip_path.ends_with(".groovy") {
+            "groovy"
+        } else if zip_path.ends_with(".kt") {
+            "kotlin"
+        } else {
+            "java" // Default to Java for decompiled content
+        }
+    } else if let Some(ext) = source_info.source_path.extension().and_then(|s| s.to_str()) {
+        match ext {
+            "groovy" => "groovy",
+            "kt" | "kts" => "kotlin",
+            _ => "java",
+        }
+    } else {
+        "java" // Default to Java for decompiled content
+    };
+
+    let parsed_file = ParsedSourceFile {
+        file_path: source_info.source_path.clone(),
+        content,
+        tree,
+        language: language.to_string(),
+    };
+
+    extract_symbols_from_tree_by_language(&parsed_file)
 }

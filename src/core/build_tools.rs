@@ -383,6 +383,17 @@ pub struct ExternalDependency {
 }
 
 #[tracing::instrument(skip_all)]
+pub fn find_jar_in_gradle_cache(dep: &ExternalDependency) -> Option<PathBuf> {
+    // Try sources JAR first
+    if let Some(sources_jar) = find_sources_jar_in_gradle_cache(dep) {
+        return Some(sources_jar);
+    }
+    
+    // Fallback to regular JAR
+    find_regular_jar_in_gradle_cache(dep)
+}
+
+#[tracing::instrument(skip_all)]
 pub fn find_sources_jar_in_gradle_cache(dep: &ExternalDependency) -> Option<PathBuf> {
     let cache_base = get_gradle_cache_base()?;
 
@@ -422,13 +433,54 @@ pub fn find_sources_jar_in_gradle_cache(dep: &ExternalDependency) -> Option<Path
 }
 
 #[tracing::instrument(skip_all)]
+pub fn find_regular_jar_in_gradle_cache(dep: &ExternalDependency) -> Option<PathBuf> {
+    let cache_base = get_gradle_cache_base()?;
+
+    let mut artifact_dir = cache_base
+        .join(&dep.group)
+        .join(&dep.artifact)
+        .join(&dep.version);
+
+    if !artifact_dir.exists() {
+        let group_path = dep.group.replace('.', "/");
+
+        artifact_dir = cache_base
+            .join(&group_path)
+            .join(&dep.artifact)
+            .join(&dep.version);
+
+        if !artifact_dir.exists() {
+            return None;
+        }
+    }
+
+    // There should be only one hash directory
+    let mut read_dir = fs::read_dir(&artifact_dir).ok()?;
+    while let Some(entry) = read_dir.next() {
+        let entry = entry.ok()?;
+        if entry.file_type().ok()?.is_dir() {
+            let jar_name = format!("{}-{}.jar", dep.artifact, dep.version);
+            let jar_path = entry.path().join(&jar_name);
+
+            if jar_path.exists() {
+                return Some(jar_path);
+            }
+        }
+    }
+
+    None
+}
+
+#[tracing::instrument(skip_all)]
 pub fn extract_class_names_from_jar(jar_path: &PathBuf) -> Result<HashSet<String>> {
     let jar_data = fs::read(jar_path)?;
 
-    let cursor = Cursor::new(jar_data);
+    let cursor = Cursor::new(jar_data.clone());
     let mut archive = ZipArchive::new(cursor)?;
     let mut class_names = HashSet::new();
 
+    // First pass: look for source files
+    let mut has_source_files = false;
     for i in 0..archive.len() {
         let file = archive.by_index(i)?;
         let file_name = file.name();
@@ -436,6 +488,7 @@ pub fn extract_class_names_from_jar(jar_path: &PathBuf) -> Result<HashSet<String
         if (file_name.ends_with(".java") || file_name.ends_with(".groovy") || file_name.ends_with(".kt"))
             && should_index_source_file(file_name)
         {
+            has_source_files = true;
             if file_name.contains("String.kt") {
                 debug!("Found String.kt file: {}", file_name);
             }
@@ -444,6 +497,27 @@ pub fn extract_class_names_from_jar(jar_path: &PathBuf) -> Result<HashSet<String
                     debug!("Extracted String class: '{}' from file '{}'", class_name, file_name);
                 }
                 class_names.insert(class_name);
+            }
+        }
+    }
+
+    // If no source files found, extract class names from .class files
+    if !has_source_files {
+        debug!("No source files found in JAR, extracting class names from .class files: {}", jar_path.display());
+        let cursor = Cursor::new(jar_data);
+        let mut archive = ZipArchive::new(cursor)?;
+        
+        for i in 0..archive.len() {
+            let file = archive.by_index(i)?;
+            let file_name = file.name();
+
+            if file_name.ends_with(".class") && should_index_class_file(file_name) {
+                if let Some(class_name) = class_path_to_class_name(file_name) {
+                    if class_name.contains("Service") {
+                        debug!("Found Service-related class: {}", class_name);
+                    }
+                    class_names.insert(class_name);
+                }
             }
         }
     }
@@ -467,6 +541,22 @@ fn should_index_source_file(file_path: &str) -> bool {
     !SKIP_PACKAGES.iter().any(|skip| file_path.starts_with(skip))
 }
 
+fn should_index_class_file(file_path: &str) -> bool {
+    // Similar filtering as source files, but for .class files
+    if file_path.contains('$') {
+        return false;
+    }
+
+    if file_path.contains("/test/") || file_path.contains("/tests/") {
+        return false;
+    }
+
+    // Skip common build/framework artifacts that aren't user-accessible
+    const SKIP_PACKAGES: &[&str] = &["META-INF/", "WEB-INF/", "org/gradle/", "org/apache/maven/"];
+
+    !SKIP_PACKAGES.iter().any(|skip| file_path.starts_with(skip))
+}
+
 fn source_path_to_class_name(source_path: &str) -> Option<String> {
     // Convert "com/example/MyClass.java", "com/example/MyClass.groovy", or "com/example/MyClass.kt" to "com.example.MyClass"
     let without_extension = source_path
@@ -474,6 +564,12 @@ fn source_path_to_class_name(source_path: &str) -> Option<String> {
         .or_else(|| source_path.strip_suffix(".groovy"))
         .or_else(|| source_path.strip_suffix(".kt"))?;
 
+    Some(without_extension.replace('/', "."))
+}
+
+fn class_path_to_class_name(class_path: &str) -> Option<String> {
+    // Convert "com/example/MyClass.class" to "com.example.MyClass"
+    let without_extension = class_path.strip_suffix(".class")?;
     Some(without_extension.replace('/', "."))
 }
 
@@ -531,6 +627,33 @@ pub fn get_gradle_cache_base() -> Option<PathBuf> {
 }
 
 #[tracing::instrument(skip_all)]
+pub fn index_jar_with_decompilation(
+    jar_path: &PathBuf,
+    project_path: &PathBuf,
+    cache: Arc<DependencyCache>,
+    class_fqn_names: &HashSet<String>,
+    dependency: &ExternalDependency,
+) -> Result<()> {
+    debug!("index_jar_with_decompilation called for JAR: {} with {} target classes", jar_path.display(), class_fqn_names.len());
+    
+    if dependency.artifact.contains("spring") && class_fqn_names.iter().any(|s| s.contains("Service")) {
+        debug!("Processing Spring JAR {} with Service classes: {:?}", 
+               dependency.artifact, class_fqn_names.iter().filter(|s| s.contains("Service")).collect::<Vec<_>>());
+    }
+
+    // Try indexing source files first (fast)
+    if let Ok(()) = index_jar_sources(jar_path, project_path, cache.clone(), class_fqn_names, dependency) {
+        debug!("index_jar_sources succeeded for {}", dependency.artifact);
+        return Ok(());
+    }
+    
+    debug!("index_jar_sources failed for {}, marking for on-demand decompilation", dependency.artifact);
+    
+    // Fallback: index .class files as "needs decompilation" 
+    index_jar_classes_metadata(jar_path, project_path, cache, class_fqn_names, dependency)
+}
+
+#[tracing::instrument(skip_all)]
 pub fn index_jar_sources(
     jar_path: &PathBuf,
     project_path: &PathBuf,
@@ -542,6 +665,7 @@ pub fn index_jar_sources(
 
     let cursor = Cursor::new(jar_data);
     let mut archive = ZipArchive::new(cursor)?;
+    let mut source_files_processed = 0;
 
     for i in 0..archive.len() {
         let mut file = archive.by_index(i)?;
@@ -596,6 +720,12 @@ pub fn index_jar_sources(
             dependency,
             cache.clone(),
         );
+        
+        source_files_processed += 1;
+    }
+
+    if source_files_processed == 0 {
+        return Err(anyhow::anyhow!("No source files found in JAR"));
     }
 
     Ok(())
@@ -621,6 +751,47 @@ fn extract_package_name(content: &str) -> Option<String> {
 
     None
 }
+
+/// Index .class files as metadata only, marking them for on-demand decompilation
+#[tracing::instrument(skip_all)]
+pub fn index_jar_classes_metadata(
+    jar_path: &PathBuf,
+    project_path: &PathBuf,
+    cache: Arc<DependencyCache>,
+    _class_fqn_names: &HashSet<String>,
+    dependency: &ExternalDependency,
+) -> Result<()> {
+    debug!("Indexing .class metadata for on-demand decompilation: {}", jar_path.display());
+    
+    let jar_data = fs::read(jar_path)?;
+    let cursor = Cursor::new(jar_data);
+    let mut archive = ZipArchive::new(cursor)?;
+    let mut classes_indexed = 0;
+
+    for i in 0..archive.len() {
+        let file = archive.by_index(i)?;
+        let file_name = file.name();
+
+        if file_name.ends_with(".class") && should_index_class_file(file_name) {
+            if let Some(class_name) = class_path_to_class_name(file_name) {
+                // Create SourceFileInfo that indicates decompilation is needed
+                let source_info = SourceFileInfo::new_for_decompilation(
+                    jar_path.clone(),
+                    Some(file_name.to_string()),
+                    Some(dependency.clone()),
+                );
+
+                let key = (project_path.clone(), class_name);
+                cache.project_external_infos.insert(key, source_info);
+                classes_indexed += 1;
+            }
+        }
+    }
+
+    debug!("Indexed {} .class files for on-demand decompilation from {}", classes_indexed, dependency.artifact);
+    Ok(())
+}
+
 
 #[tracing::instrument(skip_all)]
 fn parse_and_cache_project_external(

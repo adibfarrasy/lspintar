@@ -17,62 +17,61 @@ fn get_extract_symbol_queries() -> &'static [(Query, SymbolType)] {
         [
             (
                 r#"(class_declaration 
-                    name: (type_identifier) @name
-                    supertype_list: (delegation_specifiers
-                        (delegation_specifier (user_type (type_identifier) @extends))*
-                        (delegation_specifier (user_type (type_identifier) @implements))*
-                    )?
+                    (modifiers)?
+                    (type_identifier) @name
                 )"#,
                 SymbolType::ClassDeclaration,
             ),
             (
                 r#"(interface_declaration
+                    (modifiers)?
                     (type_identifier) @name
                 )"#,
                 SymbolType::InterfaceDeclaration,
             ),
             (
                 r#"(class_declaration
-                    (modifiers "enum")
-                    name: (type_identifier) @name
-                    supertype_list: (delegation_specifiers
-                        (delegation_specifier (user_type (type_identifier) @implements))*
-                    )?
+                    (modifiers
+                        "enum")
+                    (type_identifier) @name
                 )"#,
                 SymbolType::EnumDeclaration,
             ),
             (
                 r#"(class_declaration
-                    (modifiers "annotation")
-                    name: (type_identifier) @name
+                    (modifiers
+                        "annotation")
+                    (type_identifier) @name
                 )"#,
                 SymbolType::AnnotationDeclaration,
             ),
             (
                 r#"(object_declaration 
-                    name: (type_identifier) @name
-                    supertype_list: (delegation_specifiers
-                        (delegation_specifier (user_type (type_identifier) @implements))*
-                    )?
+                    (modifiers)?
+                    (type_identifier) @name
                 )"#,
                 SymbolType::ClassDeclaration, // Objects are treated as special classes
             ),
             (
                 r#"(type_alias
-                    name: (type_identifier) @name
+                    (modifiers)?
+                    (type_identifier) @name
                 )"#,
                 SymbolType::Type,
             ),
             (
                 r#"(function_declaration
-                    name: (simple_identifier) @name
+                    (modifiers)?
+                    (simple_identifier) @name
                 )"#,
                 SymbolType::MethodDeclaration,
             ),
             (
                 r#"(property_declaration
+                    (modifiers)?
+                    (binding_pattern_kind)?
                     (variable_declaration
-                        name: (simple_identifier) @name
+                        (simple_identifier) @name
                     )
                 )"#,
                 SymbolType::FieldDeclaration,
@@ -80,9 +79,13 @@ fn get_extract_symbol_queries() -> &'static [(Query, SymbolType)] {
         ]
         .iter()
         .filter_map(|(text, sym_type)| {
-            Query::new(language, text)
-                .ok()
-                .map(|q| (q, sym_type.clone()))
+            match Query::new(language, text) {
+                Ok(query) => Some((query, sym_type.clone())),
+                Err(e) => {
+                    tracing::error!("Failed to create TreeSitter query for {:?}: {} - Query: {}", sym_type, e, text);
+                    None
+                }
+            }
         })
         .collect()
     })
@@ -91,8 +94,6 @@ fn get_extract_symbol_queries() -> &'static [(Query, SymbolType)] {
 pub fn extract_kotlin_symbols(parsed_file: &ParsedSourceFile) -> Result<Vec<SymbolDefinition>> {
     let mut symbols = Vec::new();
 
-    // Add debug logging to track file processing
-    tracing::debug!("extract_kotlin_symbols: processing file {:?}", parsed_file.file_path);
 
     let package = extract_kotlin_package(&parsed_file.tree, &parsed_file.content);
     let queries = get_extract_symbol_queries();
@@ -116,7 +117,9 @@ pub fn extract_kotlin_symbols(parsed_file: &ParsedSourceFile) -> Result<Vec<Symb
 
                 if let Ok(text) = capture.node.utf8_text(parsed_file.content.as_bytes()) {
                     match capture_name {
-                        "name" => symbol_name = Some(text.to_string()),
+                        "name" => {
+                            symbol_name = Some(text.to_string());
+                        },
                         "extends" => extends = Some(text.to_string()),
                         "implements" => implements.push(text.to_string()),
                         _ => {}
@@ -160,6 +163,7 @@ pub fn extract_kotlin_symbols(parsed_file: &ParsedSourceFile) -> Result<Vec<Symb
     
     Ok(symbols)
 }
+
 
 fn extract_kotlin_package(tree: &Tree, source: &str) -> Option<String> {
     let query_text = r#"(package_header (identifier) @package)"#;

@@ -6,6 +6,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 use zip::ZipArchive;
+use tracing::debug;
 
 use tree_sitter::Tree;
 
@@ -42,6 +43,36 @@ impl SourceFileInfo {
         }
     }
 
+    pub fn new_with_decompiled_content(
+        source_path: PathBuf,
+        zip_internal_path: Option<String>,
+        dependency: Option<ExternalDependency>,
+        decompiled_content: String,
+    ) -> Self {
+        Self {
+            source_path,
+            zip_internal_path,
+            dependency,
+            inner: Arc::new(RwLock::new(SourceFileInfoInner {
+                tree: None,
+                content: Some(decompiled_content),
+            })),
+        }
+    }
+
+    pub fn new_for_decompilation(
+        source_path: PathBuf,
+        zip_internal_path: Option<String>,
+        dependency: Option<ExternalDependency>,
+    ) -> Self {
+        Self {
+            source_path,
+            zip_internal_path,
+            dependency,
+            inner: Arc::new(RwLock::new(SourceFileInfoInner::default())),
+        }
+    }
+
     pub fn get_content(&self) -> Result<String> {
         {
             let inner = self.inner.read().unwrap();
@@ -50,9 +81,23 @@ impl SourceFileInfo {
             }
         }
 
-        let content = self.load_content()?;
-        self.inner.write().unwrap().content = Some(content.clone());
-        Ok(content)
+        // Try loading from source first
+        if let Ok(content) = self.load_content() {
+            self.inner.write().unwrap().content = Some(content.clone());
+            return Ok(content);
+        }
+
+        // If loading failed and we have a .class file, try decompilation
+        if let Some(zip_path) = &self.zip_internal_path {
+            if zip_path.ends_with(".class") {
+                if let Ok(content) = self.decompile_on_demand() {
+                    self.inner.write().unwrap().content = Some(content.clone());
+                    return Ok(content);
+                }
+            }
+        }
+
+        Err(anyhow::anyhow!("Failed to load or decompile content"))
     }
 
     pub fn get_tree(&self) -> Result<Tree> {
@@ -73,6 +118,42 @@ impl SourceFileInfo {
         let mut inner = self.inner.write().unwrap();
         inner.tree = None;
         inner.content = None;
+    }
+
+    /// Decompile a .class file on-demand when content is requested
+    fn decompile_on_demand(&self) -> Result<String> {
+        use crate::core::decompiler::JavaDecompiler;
+        use std::io::Read;
+        use zip::ZipArchive;
+        use std::io::Cursor;
+
+        let zip_path = self.zip_internal_path.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No internal path for decompilation"))?;
+
+        if !zip_path.ends_with(".class") {
+            return Err(anyhow::anyhow!("Not a .class file: {}", zip_path));
+        }
+
+        debug!("On-demand decompiling: {} from {}", zip_path, self.source_path.display());
+
+        // Read the .class file from the JAR
+        let jar_data = std::fs::read(&self.source_path)?;
+        let mut archive = ZipArchive::new(Cursor::new(jar_data))?;
+        let mut class_file = archive.by_name(zip_path)?;
+        let mut class_bytes = Vec::new();
+        class_file.read_to_end(&mut class_bytes)?;
+
+        // Extract class name from path
+        let class_name = zip_path.strip_suffix(".class")
+            .ok_or_else(|| anyhow::anyhow!("Invalid class file path"))?
+            .replace('/', ".");
+
+        // Decompile using JavaDecompiler
+        let decompiler = JavaDecompiler::new()?;
+        let decompiled_content = decompiler.decompile_class(&class_name, &class_bytes)?;
+
+        debug!("Successfully decompiled {} on-demand ({} bytes)", class_name, decompiled_content.len());
+        Ok(decompiled_content)
     }
 
     fn load_content(&self) -> Result<String> {

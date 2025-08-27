@@ -8,10 +8,12 @@ use tracing::debug;
 use tree_sitter::{Node, Parser, Tree};
 
 use super::constants::{PROJECT_ROOT_MARKER, TEMP_DIR_PREFIX};
-use crate::languages::{java::JavaSupport, groovy::GroovySupport, kotlin::KotlinSupport, LanguageSupport};
 use crate::languages::groovy::definition::utils::search_definition_in_project as groovy_search_definition_in_project;
 use crate::languages::java::definition::utils::search_definition_in_project as java_search_definition_in_project;
 use crate::languages::kotlin::definition::utils::search_definition_in_project as kotlin_search_definition_in_project;
+use crate::languages::{
+    groovy::GroovySupport, java::JavaSupport, kotlin::KotlinSupport, LanguageSupport,
+};
 
 #[tracing::instrument(skip_all)]
 pub fn path_to_file_uri(file_path: &PathBuf) -> Option<String> {
@@ -151,44 +153,36 @@ pub fn search_definition_in_project_cross_language(
     target_file_uri: &str,
     fallback_language_support: &dyn crate::languages::LanguageSupport,
 ) -> Option<tower_lsp::lsp_types::Location> {
-    
     // Detect target file language
     let target_file_path = uri_to_path(target_file_uri)?;
     let target_language = detect_language_from_path(&target_file_path).unwrap_or("java");
-    
-    
+
     // Get the appropriate language support for the target file
     let target_language_support = get_language_support_for_file(&target_file_path)?;
-    
+
     // Dispatch to the appropriate language's search function
     match target_language {
-        "groovy" => {
-            groovy_search_definition_in_project(
-                current_file_uri,
-                current_source,
-                usage_node,
-                target_file_uri,
-                target_language_support.as_ref(),
-            )
-        }
-        "java" => {
-            java_search_definition_in_project(
-                current_file_uri,
-                current_source,
-                usage_node,
-                target_file_uri,
-                target_language_support.as_ref(),
-            )
-        }
-        "kotlin" => {
-            kotlin_search_definition_in_project(
-                current_file_uri,
-                current_source,
-                usage_node,
-                target_file_uri,
-                target_language_support.as_ref(),
-            )
-        }
+        "groovy" => groovy_search_definition_in_project(
+            current_file_uri,
+            current_source,
+            usage_node,
+            target_file_uri,
+            target_language_support.as_ref(),
+        ),
+        "java" => java_search_definition_in_project(
+            current_file_uri,
+            current_source,
+            usage_node,
+            target_file_uri,
+            target_language_support.as_ref(),
+        ),
+        "kotlin" => kotlin_search_definition_in_project(
+            current_file_uri,
+            current_source,
+            usage_node,
+            target_file_uri,
+            target_language_support.as_ref(),
+        ),
         _ => {
             // Fallback to the provided language support (usually the current file's language)
             match fallback_language_support.language_id() {
@@ -242,7 +236,6 @@ pub fn node_contains_position(node: &Node, position: Position) -> bool {
 pub fn node_to_lsp_location(node: &Node, file_uri: &str) -> Option<Location> {
     let start_pos = node.start_position();
     let end_pos = node.end_position();
-
 
     let range = Range {
         start: Position {
@@ -301,7 +294,7 @@ fn find_node_at_position<'a>(tree: &'a Tree, position: Position) -> Option<Node<
 
 pub fn is_project_root(current: &PathBuf) -> bool {
     tracing::debug!("Checking if {:?} is project root", current);
-    
+
     for marker in PROJECT_ROOT_MARKER.iter() {
         let marker_path = current.join(marker);
         let exists = marker_path.exists();
@@ -321,13 +314,13 @@ pub fn is_external_dependency(dir: &PathBuf) -> bool {
 /// This function works for any language by accepting a language parameter
 #[tracing::instrument(skip_all)]
 pub fn set_start_position_for_language(
-    source: &str, 
-    usage_node: &Node, 
-    file_uri: &str, 
-    language: &str
+    source: &str,
+    usage_node: &Node,
+    file_uri: &str,
+    language: &str,
 ) -> Option<Location> {
     use tree_sitter::{QueryCursor, StreamingIterator};
-    
+
     let symbol_name = usage_node.utf8_text(source.as_bytes()).ok()?;
     let other_source = read_to_string(uri_to_path(file_uri)?).ok()?;
 
@@ -340,7 +333,7 @@ pub fn set_start_position_for_language(
     // Create parser for the specified language
     let mut parser = create_parser_for_language(language)?;
     let tree = parser.parse(&other_source, None)?;
-    
+
     // Get the query for the language - we need to get the language object
     let language_obj = match language {
         "groovy" => tree_sitter_groovy::language(),
@@ -348,7 +341,7 @@ pub fn set_start_position_for_language(
         "kotlin" => tree_sitter_kotlin::language(),
         _ => return None,
     };
-    
+
     let query = tree_sitter::Query::new(&language_obj, query_text).ok()?;
     let mut cursor = QueryCursor::new();
 
@@ -370,8 +363,8 @@ pub fn set_start_position_for_language(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tower_lsp::lsp_types::{Position, Range, Url};
     use std::path::PathBuf;
+    use tower_lsp::lsp_types::{Position, Range, Url};
 
     struct UriConversionTestCase {
         name: &'static str,
@@ -514,12 +507,9 @@ mod tests {
         for test_case in test_cases {
             let result = detect_language_from_path(&test_case.file_path);
             assert_eq!(
-                result,
-                test_case.expected_language,
+                result, test_case.expected_language,
                 "Test '{}': expected {:?}, got {:?}",
-                test_case.name,
-                test_case.expected_language,
-                result
+                test_case.name, test_case.expected_language, result
             );
         }
     }
@@ -552,17 +542,14 @@ mod tests {
         for test_case in test_cases {
             let result = is_path_in_external_dependency(&test_case.path);
             assert_eq!(
-                result,
-                test_case.expected_is_external,
+                result, test_case.expected_is_external,
                 "Test '{}': expected {}, got {}",
-                test_case.name,
-                test_case.expected_is_external,
-                result
+                test_case.name, test_case.expected_is_external, result
             );
         }
     }
 
-    #[test] 
+    #[test]
     fn test_node_contains_position() {
         // Mock node implementation for testing
         struct MockNode {
@@ -571,54 +558,74 @@ mod tests {
             end_row: usize,
             end_col: usize,
         }
-        
+
         fn mock_node_contains_position(node: &MockNode, position: Position) -> bool {
             let pos_line = position.line as usize;
             let pos_char = position.character as usize;
 
-            (node.start_row < pos_line || (node.start_row == pos_line && node.start_col <= pos_char))
-                && (pos_line < node.end_row || (pos_line == node.end_row && pos_char <= node.end_col))
+            (node.start_row < pos_line
+                || (node.start_row == pos_line && node.start_col <= pos_char))
+                && (pos_line < node.end_row
+                    || (pos_line == node.end_row && pos_char <= node.end_col))
         }
 
         let test_cases = vec![
             NodePositionTestCase {
                 name: "position inside node",
-                position: Position { line: 5, character: 10 },
+                position: Position {
+                    line: 5,
+                    character: 10,
+                },
                 node_start: (5, 5),
                 node_end: (5, 15),
                 expected_contains: true,
             },
             NodePositionTestCase {
                 name: "position at start of node",
-                position: Position { line: 5, character: 5 },
+                position: Position {
+                    line: 5,
+                    character: 5,
+                },
                 node_start: (5, 5),
                 node_end: (5, 15),
                 expected_contains: true,
             },
             NodePositionTestCase {
                 name: "position at end of node",
-                position: Position { line: 5, character: 15 },
+                position: Position {
+                    line: 5,
+                    character: 15,
+                },
                 node_start: (5, 5),
                 node_end: (5, 15),
                 expected_contains: true,
             },
             NodePositionTestCase {
                 name: "position before node",
-                position: Position { line: 5, character: 3 },
+                position: Position {
+                    line: 5,
+                    character: 3,
+                },
                 node_start: (5, 5),
                 node_end: (5, 15),
                 expected_contains: false,
             },
             NodePositionTestCase {
                 name: "position after node",
-                position: Position { line: 5, character: 20 },
+                position: Position {
+                    line: 5,
+                    character: 20,
+                },
                 node_start: (5, 5),
                 node_end: (5, 15),
                 expected_contains: false,
             },
             NodePositionTestCase {
                 name: "position in multiline node",
-                position: Position { line: 6, character: 5 },
+                position: Position {
+                    line: 6,
+                    character: 5,
+                },
                 node_start: (5, 10),
                 node_end: (7, 5),
                 expected_contains: true,
@@ -635,12 +642,9 @@ mod tests {
 
             let result = mock_node_contains_position(&mock_node, test_case.position);
             assert_eq!(
-                result,
-                test_case.expected_contains,
+                result, test_case.expected_contains,
                 "Test '{}': expected {}, got {}",
-                test_case.name,
-                test_case.expected_contains,
-                result
+                test_case.name, test_case.expected_contains, result
             );
         }
     }
@@ -672,15 +676,21 @@ mod tests {
         // This test demonstrates the structure of the function
         // In a real scenario, you'd need actual tree-sitter nodes
         let file_uri = "file:///test/file.groovy";
-        
+
         // Test with a mock result
         let url = Url::parse(file_uri).expect("Valid URI");
         let range = Range {
-            start: Position { line: 0, character: 0 },
-            end: Position { line: 0, character: 10 },
+            start: Position {
+                line: 0,
+                character: 0,
+            },
+            end: Position {
+                line: 0,
+                character: 10,
+            },
         };
         let expected_location = Location { uri: url, range };
-        
+
         // The actual function would need a real tree-sitter Node
         // This test verifies the structure is correct
         assert_eq!(expected_location.range.start.line, 0);
@@ -705,3 +715,4 @@ mod tests {
         }
     }
 }
+

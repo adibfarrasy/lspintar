@@ -1,6 +1,7 @@
 pub mod build_tools;
 pub mod constants;
 pub mod cross_language;
+pub mod decompiler;
 pub mod dependency_cache;
 pub mod diagnostic_manager;
 pub mod document_manager;

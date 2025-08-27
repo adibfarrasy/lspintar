@@ -142,7 +142,11 @@ fn search_external_definition_and_convert(
         .context(format!("failed to get content for {symbol_name}"))
         .ok()?;
 
-    let definition_node = search_definition(&tree, &content, symbol_name)?;
+    let definition_node = {
+        // For decompiled .class files, use Java language support (same language)
+        // This ensures consistency with other languages
+        search_definition(&tree, &content, symbol_name)?
+    };
 
     let file_uri = get_uri(&source_info)
         .context(format!("file_uri for {symbol_name} not found"))

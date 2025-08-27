@@ -145,9 +145,17 @@ fn search_external_definition_and_convert(
         .context(format!("failed to get content for {symbol_name}"))
         .ok()?;
 
-    let definition_node = search_definition(&tree, &content, symbol_name, SymbolType::Type)
-        .context(format!("definition for {symbol_name} not found"))
-        .ok()?;
+    let definition_node = {
+        // For decompiled .class files, use Java language support instead of Groovy
+        if external_info.zip_internal_path.as_ref().map_or(false, |p| p.ends_with(".class")) {
+            use crate::languages::java::definition::utils::search_definition as java_search_definition;
+            java_search_definition(&tree, &content, symbol_name)?
+        } else {
+            search_definition(&tree, &content, symbol_name, SymbolType::Type)
+                .context(format!("definition for {symbol_name} not found"))
+                .ok()?
+        }
+    };
 
     let file_uri = get_uri(&external_info.clone())
         .context(format!("file_uri for {symbol_name} not found"))

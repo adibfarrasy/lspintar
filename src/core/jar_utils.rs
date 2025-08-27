@@ -80,14 +80,41 @@ pub fn extract_zip_file_to_temp(source_info: &SourceFileInfo) -> Option<()> {
 pub fn get_uri(external_info: &SourceFileInfo) -> Option<String> {
     if let Some(zip_internal_path) = &external_info.zip_internal_path {
         let temp_dir = dependency_temp_dir(external_info.dependency.clone());
-        let target_file = temp_dir.join(zip_internal_path);
         
-        // Always ensure the file exists - extract if directory doesn't exist or if specific file is missing
-        if !temp_dir.exists() || !target_file.exists() {
-            extract_zip_file_to_temp(external_info);
-        }
+        // Handle decompiled .class files - create .java file with decompiled content
+        if zip_internal_path.ends_with(".class") {
+            let java_file_path = temp_dir.join(zip_internal_path.replace(".class", ".java"));
+            
+            // Ensure temp directory exists
+            if let Some(parent) = java_file_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            
+            // Write decompiled content to .java file if it doesn't exist
+            if !java_file_path.exists() {
+                if let Ok(decompiled_content) = external_info.get_content() {
+                    if let Err(e) = std::fs::write(&java_file_path, decompiled_content) {
+                        tracing::debug!("Failed to write decompiled content to {}: {}", java_file_path.display(), e);
+                        return None;
+                    }
+                } else {
+                    tracing::debug!("Failed to get decompiled content for {}", zip_internal_path);
+                    return None;
+                }
+            }
+            
+            path_to_file_uri(&java_file_path)
+        } else {
+            // Regular source files - extract from JAR
+            let target_file = temp_dir.join(zip_internal_path);
+            
+            // Always ensure the file exists - extract if directory doesn't exist or if specific file is missing
+            if !temp_dir.exists() || !target_file.exists() {
+                extract_zip_file_to_temp(external_info);
+            }
 
-        path_to_file_uri(&target_file)
+            path_to_file_uri(&target_file)
+        }
     } else {
         path_to_file_uri(&external_info.source_path)
     }

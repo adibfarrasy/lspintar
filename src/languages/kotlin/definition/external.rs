@@ -15,7 +15,7 @@ use crate::{
     },
 };
 
-use super::utils::{prepare_symbol_lookup_key_with_wildcard_support, search_definition};
+use super::utils::prepare_symbol_lookup_key_with_wildcard_support;
 
 #[tracing::instrument(skip_all)]
 pub async fn find_external(
@@ -132,7 +132,18 @@ fn search_external_definition_and_convert(
 ) -> Option<Location> {
     let tree = source_info.get_tree().ok()?;
     let content = source_info.get_content().ok()?;
-    let definition_node = search_definition(&tree, &content, symbol_name)?;
+    
+    let definition_node = {
+        // For decompiled .class files, use Java language support instead of current language
+        if source_info.zip_internal_path.as_ref().map_or(false, |p| p.ends_with(".class")) {
+            use crate::languages::java::definition::utils::search_definition as java_search_definition;
+            java_search_definition(&tree, &content, symbol_name)?
+        } else {
+            use super::utils::search_definition;
+            search_definition(&tree, &content, symbol_name)?
+        }
+    };
+    
     let file_uri = get_uri(&source_info)?;
     node_to_lsp_location(&definition_node, &file_uri)
 }

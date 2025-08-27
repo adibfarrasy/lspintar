@@ -255,6 +255,51 @@ impl DependencyCache {
 
                 self.index_inheritance(&project_root, &symbol);
             }
+
+            // Also index decompiled content for this project
+            self.index_decompiled_content(&project_root).await?;
+        }
+
+        Ok(())
+    }
+
+    /// Index symbols from decompiled content stored in project_external_infos
+    #[tracing::instrument(skip_all)]
+    async fn index_decompiled_content(&self, project_root: &PathBuf) -> Result<()> {
+        use crate::core::dependency_cache::symbol_index::extract_symbols_from_source_file_info;
+        
+        // Get all external info entries for this project
+        let external_infos: Vec<_> = self.project_external_infos
+            .iter()
+            .filter_map(|entry| {
+                let ((entry_project_root, _fqn), source_info) = (entry.key(), entry.value());
+                if entry_project_root == project_root {
+                    Some(source_info.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Process each decompiled source file
+        for source_info in external_infos {
+            if let Ok(symbols) = extract_symbols_from_source_file_info(&source_info) {
+                for symbol in symbols {
+                    let key = (project_root.clone(), symbol.fully_qualified_name.clone());
+                    self.symbol_index.insert(key, symbol.source_file.clone());
+
+                    // Update class name index for wildcard import support
+                    if let Some(class_name) = symbol.fully_qualified_name.split('.').last() {
+                        let class_key = (project_root.clone(), class_name.to_string());
+                        self.class_name_index
+                            .entry(class_key)
+                            .or_insert_with(Vec::new)
+                            .push(symbol.fully_qualified_name.clone());
+                    }
+
+                    self.index_inheritance(project_root, &symbol);
+                }
+            }
         }
 
         Ok(())
@@ -312,6 +357,7 @@ impl DependencyCache {
     }
 
     /// Lazy lookup for symbol file path, checking in-memory cache first, then database
+    #[tracing::instrument(skip_all)]
     pub async fn find_symbol(&self, project_root: &PathBuf, fqn: &str) -> Option<PathBuf> {
         let key = (project_root.clone(), fqn.to_string());
 
@@ -331,14 +377,18 @@ impl DependencyCache {
                     return Some(file_path);
                 }
                 Ok(None) => {
-                    // Not found in database
+                    debug!(
+                        "({}, {}) not found in database",
+                        project_root.to_str().unwrap_or(""),
+                        fqn
+                    );
                 }
-                Err(_e) => {
-                    // Database error
+                Err(e) => {
+                    debug!("{:#?}", e);
                 }
             }
         } else {
-            // No persistence layer available
+            debug!("no persistence layer available");
         }
 
         None

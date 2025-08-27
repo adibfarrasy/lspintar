@@ -1,6 +1,7 @@
 use std::{fs::read_to_string, path::PathBuf, sync::Arc};
 
 use tower_lsp::lsp_types::Location;
+use tracing::debug;
 use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator, Tree};
 
 use crate::{
@@ -150,25 +151,22 @@ fn find_declaration_parent(identifier_node: Node) -> Option<Node> {
 
 /// Extract package name from Kotlin source code
 pub fn extract_package_from_source(source: &str) -> Option<String> {
-    // Parse the source to find package declaration
     let language = KOTLIN_PARSER.get_or_init(|| tree_sitter_kotlin::language());
     let mut parser = Parser::new();
     parser.set_language(language).ok()?;
 
     let tree = parser.parse(source, None)?;
-    let root = tree.root_node();
+    
+    let query_text = r#"(package_header (identifier) @package)"#;
+    let query = Query::new(language, query_text).ok()?;
+    let mut cursor = QueryCursor::new();
 
-    // Look for package_header node
-    for child in root.children(&mut root.walk()) {
-        if child.kind() == "package_header" {
-            // Find the package identifier
-            for package_child in child.children(&mut child.walk()) {
-                if package_child.kind() == "identifier" {
-                    return package_child
-                        .utf8_text(source.as_bytes())
-                        .ok()
-                        .map(String::from);
-                }
+    let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
+
+    while let Some(query_match) = matches.next() {
+        for capture in query_match.captures {
+            if let Ok(text) = capture.node.utf8_text(source.as_bytes()) {
+                return Some(text.to_string());
             }
         }
     }
@@ -222,6 +220,7 @@ pub fn extract_imports_from_source(source: &str) -> Vec<String> {
 }
 
 /// Resolve symbol name with import context
+#[tracing::instrument(skip_all)]
 pub fn resolve_symbol_with_imports(
     symbol_name: &str,
     source: &str,
@@ -229,16 +228,16 @@ pub fn resolve_symbol_with_imports(
 ) -> Option<String> {
     let imports = extract_imports_from_source(source);
 
-
     // First, check for exact matches and specific imports
     let mut star_imports = Vec::new();
-    
+
     for import in &imports {
         let expected_suffix = format!(".{}", symbol_name);
         let matches_suffix = import.ends_with(&expected_suffix);
         let exact_match = import == symbol_name;
 
         if matches_suffix || exact_match {
+            debug!("found exact match import {}", import);
             return Some(import.clone());
         }
 
@@ -251,29 +250,79 @@ pub fn resolve_symbol_with_imports(
 
     // For basic Kotlin types, try common kotlin stdlib patterns FIRST
     // This prevents incorrect resolution to current package or star imports
-    let common_kotlin_types = ["String", "Int", "Long", "Double", "Float", "Boolean", "Char", "Byte", "Short", "Any", "Unit", "Nothing", "List", "MutableList", "Set", "MutableSet", "Map", "MutableMap", "Collection", "MutableCollection", "Array", "BooleanArray", "ByteArray", "CharArray", "DoubleArray", "FloatArray", "IntArray", "LongArray", "ShortArray"];
+    let common_kotlin_types = [
+        "String",
+        "Int",
+        "Long",
+        "Double",
+        "Float",
+        "Boolean",
+        "Char",
+        "Byte",
+        "Short",
+        "Any",
+        "Unit",
+        "Nothing",
+        "List",
+        "MutableList",
+        "Set",
+        "MutableSet",
+        "Map",
+        "MutableMap",
+        "Collection",
+        "MutableCollection",
+        "Array",
+        "BooleanArray",
+        "ByteArray",
+        "CharArray",
+        "DoubleArray",
+        "FloatArray",
+        "IntArray",
+        "LongArray",
+        "ShortArray",
+    ];
     if common_kotlin_types.contains(&symbol_name.as_ref()) {
         // Collection types are in kotlin.collections, others are in kotlin
-        let kotlin_stdlib_candidates = if ["List", "MutableList", "Set", "MutableSet", "Map", "MutableMap", "Collection", "MutableCollection", "Array", "BooleanArray", "ByteArray", "CharArray", "DoubleArray", "FloatArray", "IntArray", "LongArray", "ShortArray"].contains(&symbol_name.as_ref()) {
+        let kotlin_stdlib_candidates = if [
+            "List",
+            "MutableList",
+            "Set",
+            "MutableSet",
+            "Map",
+            "MutableMap",
+            "Collection",
+            "MutableCollection",
+            "Array",
+            "BooleanArray",
+            "ByteArray",
+            "CharArray",
+            "DoubleArray",
+            "FloatArray",
+            "IntArray",
+            "LongArray",
+            "ShortArray",
+        ]
+        .contains(&symbol_name.as_ref())
+        {
             [
                 format!("commonMain.kotlin.collections.{}", symbol_name),
-                format!("jvmMain.kotlin.collections.{}", symbol_name), 
+                format!("jvmMain.kotlin.collections.{}", symbol_name),
                 format!("kotlin.collections.{}", symbol_name),
             ]
         } else {
             [
                 format!("commonMain.kotlin.{}", symbol_name),
-                format!("jvmMain.kotlin.{}", symbol_name), 
+                format!("jvmMain.kotlin.{}", symbol_name),
                 format!("kotlin.{}", symbol_name),
             ]
         };
-        
+
         for candidate in &kotlin_stdlib_candidates {
             if dependency_cache.find_builtin_info(candidate).is_some() {
                 return Some(candidate.clone());
             }
         }
-        
+
         // For basic types, if not found in builtins, just return the simple name
         // The external dependency system should find it
         return Some(symbol_name.to_string());
@@ -285,17 +334,18 @@ pub fn resolve_symbol_with_imports(
         // Only return if we can verify it exists - but for now just fall through
     }
 
-    // Use star imports as fallback 
+    // Use star imports as fallback
     if !star_imports.is_empty() {
         // For services, prefer service packages over param packages
         let preferred_package = if symbol_name.ends_with("Service") {
-            star_imports.iter()
+            star_imports
+                .iter()
                 .find(|p| p.ends_with(".service") || p.contains(".service."))
                 .or_else(|| star_imports.first())
         } else {
             star_imports.first()
         };
-        
+
         if let Some(package) = preferred_package {
             let result = format!("{}.{}", package, symbol_name);
             return Some(result);
@@ -334,7 +384,6 @@ pub fn search_definition_in_project(
     let symbol_name = usage_node.utf8_text(origin_source.as_bytes()).ok()?;
     let origin_tree = uri_to_tree(origin_file_uri)?;
 
-    // Get the appropriate language support for the origin file (where the symbol usage is)
     let origin_file_path = uri_to_path(origin_file_uri)?;
     let origin_language_support = get_language_support_for_file(&origin_file_path)?;
 
