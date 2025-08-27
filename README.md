@@ -1,10 +1,13 @@
 # LSPintar
 
-A Language Server Protocol (LSP) implementation for JVM-based languages, currently supporting Groovy with planned support for Java and Kotlin.
+A Language Server Protocol (LSP) implementation for JVM-based languages, supporting:
+- Java ![](https://github.com/devicons/devicon/blob/master/icons/java/java-original.svg)
+- Groovy ![](https://github.com/devicons/devicon/blob/master/icons/groovy/groovy-original.svg)
+- Kotlin ![](https://github.com/devicons/devicon/blob/master/icons/kotlin/kotlin-original.svg)
 
 ## Features
 
-### Current Support (Groovy)
+### Current Support
 - **Go to Definition**: Navigate to symbol definitions across local files, project files, workspace, and external dependencies
 - **Go to Implementation**: Find implementations of interfaces and abstract methods
 - **Hover Information**: Display detailed information about classes, methods, fields, and interfaces
