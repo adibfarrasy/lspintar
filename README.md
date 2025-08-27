@@ -1,9 +1,9 @@
 # LSPintar
 
 A Language Server Protocol (LSP) implementation for JVM-based languages, supporting:
-- Java <img src="https://github.com/devicons/devicon/blob/master/icons/java/java-original.svg" height="16" style="vertical-align: text-bottom">
-- Groovy <img src="https://github.com/devicons/devicon/blob/master/icons/groovy/groovy-original.svg" height="16" style="vertical-align: text-bottom">
-- Kotlin <img src="https://github.com/devicons/devicon/blob/master/icons/kotlin/kotlin-original.svg" height="16" style="vertical-align: text-bottom">
+- <span style="font-size: 2em;">Java <img src="https://github.com/devicons/devicon/blob/master/icons/java/java-original.svg" height="32" style="vertical-align: text-bottom"></span>
+- <span style="font-size: 2em;">Groovy <img src="https://github.com/devicons/devicon/blob/master/icons/groovy/groovy-original.svg" height="32" style="vertical-align: text-bottom"></span>
+- <span style="font-size: 2em;">Kotlin <img src="https://github.com/devicons/devicon/blob/master/icons/kotlin/kotlin-original.svg" height="32" style="vertical-align: text-bottom"></span>
 
 ## Features
 
