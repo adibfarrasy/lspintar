@@ -14,6 +14,7 @@ A Language Server Protocol (LSP) implementation for JVM-based languages, support
 - **Diagnostics**: Real-time syntax error detection and reporting
 - **Symbol Resolution**: Intelligent symbol lookup with context-aware type determination
 - **Dependency Cache**: Efficient caching system for external dependency resolution
+- **Java Bytecode Decompilation**: Automatic decompilation of .class files when source files are unavailable
 
 ### Planned Support
 Additional features under development:
@@ -70,6 +71,28 @@ cargo build --release
 ```
 
 The binary will be available at `target/release/lspintar`.
+
+## Decompiler Setup
+
+LSPintar includes Java bytecode decompilation capabilities to provide "go to definition" functionality for dependencies that don't have source files available (such as Spring Framework libraries).
+
+### Automatic Setup
+
+The decompiler will automatically download and set up the CFR decompiler on first use. No manual configuration is required.
+
+### Manual Setup (Optional)
+
+If you prefer to set up the decompiler manually:
+
+1. Download the CFR decompiler JAR from [CFR Releases](https://github.com/leibnitz27/cfr/releases)
+2. Place it in `~/.local/share/lspintar/cfr-0.152.jar`
+
+### How it Works
+
+- When navigating to symbols in external dependencies, LSPintar first tries to find source files
+- If source files are unavailable (e.g., only .class files in JAR), it automatically decompiles the bytecode
+- Decompiled content is cached and indexed for fast symbol resolution
+- Works with all JVM languages: Java, Kotlin, Groovy classes are all decompiled to Java source
 
 ## Configuration Options
 
