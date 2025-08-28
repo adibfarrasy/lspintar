@@ -9,7 +9,7 @@ use tracing::debug;
 
 use crate::core::build_tools::{
     execute_gradle_dependencies, extract_class_names_from_jar, find_jar_in_gradle_cache,
-    index_jar_with_decompilation, parse_gradle_dependencies_output, parse_settings_gradle, BuildTool,
+    index_jar_with_decompilation_with_paths, parse_gradle_dependencies_output, parse_settings_gradle, BuildTool,
     ExternalDependency, GradleDependenciesResult,
 };
 
@@ -170,19 +170,30 @@ impl ProjectMapper {
                     debug!("Processing external dependency: {}:{}", dep.group, dep.artifact);
                     if let Some(jar_path) = find_jar_in_gradle_cache(&dep) {
                         debug!("Found jar for {}: {:?}", dep.artifact, jar_path);
-                        if let Ok(classes) = extract_class_names_from_jar(&jar_path) {
-                            if dep.artifact.contains("kotlin") {
-                                debug!("Extracted {} classes from kotlin JAR {}: {:?}", classes.len(), dep.artifact, classes.iter().take(10).collect::<Vec<_>>());
+                        if let Ok(class_name_to_path) = extract_class_names_from_jar(&jar_path) {
+                            if dep.artifact.contains("kotlin") || dep.artifact.contains("stdlib") {
+                                debug!("Extracted {} classes from kotlin JAR {}: {:?}", class_name_to_path.len(), dep.artifact, class_name_to_path.keys().take(20).collect::<Vec<_>>());
+                                if class_name_to_path.keys().any(|s| s.contains("String")) {
+                                    debug!("Found String classes in kotlin JAR {}: {:?}", dep.artifact, class_name_to_path.keys().filter(|s| s.contains("String")).collect::<Vec<_>>());
+                                }
                             }
-                            chunk_classes.extend(classes.clone());
+                            chunk_classes.extend(class_name_to_path.keys().cloned());
 
-                            let _ = index_jar_with_decompilation(
+                            debug!("Calling index_jar_with_decompilation for {} with {} classes", dep.artifact, class_name_to_path.len());
+                            let result = index_jar_with_decompilation_with_paths(
                                 &jar_path,
                                 &project_path,
                                 cache.clone(),
-                                &classes,
+                                &class_name_to_path,
                                 &dep,
                             );
+                            if let Err(e) = result {
+                                debug!("index_jar_with_decompilation failed for {}: {}", dep.artifact, e);
+                            } else {
+                                debug!("index_jar_with_decompilation succeeded for {}", dep.artifact);
+                            }
+                        } else {
+                            debug!("Failed to extract classes from jar: {:?}", jar_path);
                         }
                     } else {
                         debug!("No jar found for {}:{}, skipping indexing", dep.group, dep.artifact);

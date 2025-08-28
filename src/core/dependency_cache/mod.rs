@@ -149,6 +149,7 @@ impl DependencyCache {
 
     #[tracing::instrument(skip_all)]
     pub async fn index_external_dependency(self: Arc<Self>, current_dir: PathBuf) -> Result<()> {
+        tracing::debug!("index_external_dependency called for: {:?}", current_dir);
         self.index_project_symbols(&current_dir)
             .await
             .context("Failed to index project symbols")?;
@@ -228,9 +229,12 @@ impl DependencyCache {
         };
 
         for project_root in project_roots {
+            tracing::debug!("Collecting source files for project_root: {:?}", project_root);
             let source_files = collect_source_files(&project_root, is_external_dependency)
                 .await
                 .context("Failed to collect source files")?;
+            
+            tracing::debug!("Found {} source files in project_root: {:?}", source_files.len(), project_root);
 
             let parsed_files = parse_source_files_parallel(source_files)
                 .await
@@ -240,7 +244,10 @@ impl DependencyCache {
                 .await
                 .context("Failed to extract symbol definitions")?;
 
+            tracing::debug!("Extracted {} symbol definitions for project_root: {:?}", symbol_definitions.len(), project_root);
+            
             for symbol in symbol_definitions {
+                tracing::debug!("Indexing symbol: {} at {:?}", symbol.fully_qualified_name, symbol.source_file);
                 let key = (project_root.clone(), symbol.fully_qualified_name.clone());
                 self.symbol_index.insert(key, symbol.source_file.clone());
 

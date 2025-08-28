@@ -69,22 +69,42 @@ async fn find_project_external(
         symbol_name.clone()
     };
 
-    // First try current project
+    // First try current project  
     // For basic types and collections, also try with kotlin prefix
     let common_kotlin_types = ["String", "Int", "Long", "Double", "Float", "Boolean", "Char", "Byte", "Short", "Any", "Unit", "Nothing", "List", "MutableList", "Set", "MutableSet", "Map", "MutableMap", "Collection", "MutableCollection", "Array", "BooleanArray", "ByteArray", "CharArray", "DoubleArray", "FloatArray", "IntArray", "LongArray", "ShortArray"];
     let collection_types = ["List", "MutableList", "Set", "MutableSet", "Map", "MutableMap", "Collection", "MutableCollection", "Array", "BooleanArray", "ByteArray", "CharArray", "DoubleArray", "FloatArray", "IntArray", "LongArray", "ShortArray"];
     
     let kotlin_candidates = if common_kotlin_types.contains(&resolved_symbol.as_str()) {
         if collection_types.contains(&resolved_symbol.as_str()) {
-            vec![resolved_symbol.clone(), format!("kotlin.collections.{}", resolved_symbol)]
+            vec![
+                resolved_symbol.clone(),
+                format!("commonMain.kotlin.collections.{}", resolved_symbol),
+                format!("jvmMain.kotlin.collections.{}", resolved_symbol),
+                format!("kotlin.collections.{}", resolved_symbol),
+            ]
         } else {
-            vec![resolved_symbol.clone(), format!("kotlin.{}", resolved_symbol)]
+            vec![
+                resolved_symbol.clone(),
+                format!("commonMain.kotlin.{}", resolved_symbol),
+                format!("jvmMain.kotlin.{}", resolved_symbol),
+                format!("kotlin.{}", resolved_symbol),
+            ]
         }
     } else {
         vec![resolved_symbol.clone()]
     };
     
     for candidate in &kotlin_candidates {
+        // First try symbol index (for source files like .kt)
+        if let Some(symbol_path) = dependency_cache
+            .find_symbol(&current_project, candidate)
+            .await
+        {
+            let source_info = SourceFileInfo::new(symbol_path, None, None);
+            return search_external_definition_and_convert(&symbol_name, source_info);
+        }
+        
+        // Then try external info (for decompiled .class files)
         if let Some(source_info) = dependency_cache
             .find_project_external_info(&current_project, candidate)
             .await
@@ -110,6 +130,38 @@ async fn find_project_external(
                 .await
             {
                 // Convert to external source info format
+                let source_info = SourceFileInfo::new(symbol_path, None, None);
+                return search_external_definition_and_convert(&symbol_name, source_info);
+            }
+        }
+    }
+
+    // Also try external dependency project roots (like kotlin-stdlib temp directory)
+    // First, try to find kotlin-stdlib specifically since we know it exists
+    let temp_dir_prefix = "lspintar_builtin_sources";
+    let mut external_project_roots = std::collections::HashSet::new();
+    
+    // Collect all external dependency project roots from the symbol index
+    for entry in dependency_cache.symbol_index.iter() {
+        let (project_root, _) = entry.key();
+        if crate::core::utils::is_external_dependency(project_root) {
+            external_project_roots.insert(project_root.clone());
+            tracing::debug!("Found external dependency project root: {:?}", project_root);
+        }
+    }
+    
+    tracing::debug!("Found {} external dependency project roots", external_project_roots.len());
+    
+    // Search in external dependency project roots
+    for external_root in external_project_roots {
+        tracing::debug!("Searching in external root: {:?}", external_root);
+        for candidate in &kotlin_candidates {
+            tracing::debug!("Trying candidate '{}' in external root {:?}", candidate, external_root);
+            if let Some(symbol_path) = dependency_cache
+                .find_symbol(&external_root, candidate)
+                .await
+            {
+                tracing::debug!("Found symbol '{}' at path {:?}", candidate, symbol_path);
                 let source_info = SourceFileInfo::new(symbol_path, None, None);
                 return search_external_definition_and_convert(&symbol_name, source_info);
             }

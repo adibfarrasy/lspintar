@@ -19,5 +19,4 @@ src/languages/groovy/definition/workspace.rs:107: Naive implementation, does not
 # WARN
 
 # NOTE
-src/core/build_tools.rs:735: use any reasonable number to get the first few lines
-src/core/dependency_cache/builtin.rs:356: include everything else that's not explicitly skipped
+src/core/dependency_cache/builtin.rs:384: include everything else that's not explicitly skipped

@@ -74,7 +74,7 @@ impl BuiltinResolver {
                         .path()
                         .extension()
                         .and_then(|ext| ext.to_str())
-                        .map(|ext| ext == "java" || ext == "groovy" || ext == "zip")
+                        .map(|ext| ext == "java" || ext == "groovy" || ext == "kt" || ext == "zip")
                         .unwrap_or(false)
             })
             .collect::<Vec<_>>();
@@ -97,6 +97,7 @@ impl BuiltinResolver {
                                     .trim_start_matches('/')
                                     .trim_end_matches(".java")
                                     .trim_end_matches(".groovy")
+                                    .trim_end_matches(".kt")
                                     .replace('/', ".")
                             } else {
                                 class_name.to_string()
@@ -139,7 +140,7 @@ impl BuiltinResolver {
                         let file = archive.by_index(i).ok()?;
                         let file_name = file.name().to_string();
 
-                        if !(file_name.ends_with(".java") || file_name.ends_with(".groovy")) {
+                        if !(file_name.ends_with(".java") || file_name.ends_with(".groovy") || file_name.ends_with(".kt")) {
                             return None;
                         }
 
@@ -165,6 +166,7 @@ impl BuiltinResolver {
                             let mut package_path = file_name
                                 .trim_end_matches(".java")
                                 .trim_end_matches(".groovy")
+                                .trim_end_matches(".kt")
                                 .replace('/', ".");
                             
                             // Handle Java 9+ modular format: remove module prefix (java.base.java.lang.String -> java.lang.String)
@@ -179,6 +181,31 @@ impl BuiltinResolver {
                                 }
                             }
 
+                            // For Kotlin Collections.kt, also index common collection interfaces
+                            if file_name.ends_with("Collections.kt") && package_path.contains("kotlin") {
+                                // Use the actual package names from kotlin.collections, not path-based names
+                                let collection_interfaces = [
+                                    "kotlin.collections.List",
+                                    "kotlin.collections.MutableList", 
+                                    "kotlin.collections.Collection",
+                                    "kotlin.collections.MutableCollection",
+                                    "kotlin.collections.Set",
+                                    "kotlin.collections.MutableSet",
+                                    "kotlin.collections.Map",
+                                    "kotlin.collections.MutableMap",
+                                ];
+                                
+                                for interface_name in &collection_interfaces {
+                                    parse_and_cache_builtin(
+                                        interface_name,
+                                        zip_path.clone(),
+                                        Some(file_name.clone()),
+                                        None,
+                                        &cache,
+                                    )?;
+                                }
+                            }
+                            
                             parse_and_cache_builtin(
                                 &package_path,
                                 zip_path.clone(),
@@ -281,11 +308,11 @@ fn find_classes_in_zip(zip_path: &PathBuf, package: &str) -> Result<Vec<String>>
         .filter(|name| {
             // Handle both old format (java/lang/) and new modular format (java.base/java/lang/)
             let matches_old_format = name.starts_with(&package_prefix)
-                && (name.ends_with(".java") || name.ends_with(".groovy"))
+                && (name.ends_with(".java") || name.ends_with(".groovy") || name.ends_with(".kt"))
                 && name.matches('/').count() == package_prefix.matches('/').count();
                 
             let matches_modular_format = name.contains(&modular_package_prefix)
-                && (name.ends_with(".java") || name.ends_with(".groovy"))
+                && (name.ends_with(".java") || name.ends_with(".groovy") || name.ends_with(".kt"))
                 && name.split('/').last().map(|f| !f.is_empty()).unwrap_or(false);
                 
             matches_old_format || matches_modular_format
@@ -296,6 +323,7 @@ fn find_classes_in_zip(zip_path: &PathBuf, package: &str) -> Result<Vec<String>>
                 .unwrap()
                 .trim_end_matches(".java")
                 .trim_end_matches(".groovy")
+                .trim_end_matches(".kt")
                 .to_string()
         })
         .collect();
