@@ -1,7 +1,7 @@
 use log::debug;
 use tree_sitter::{Query, QueryCursor, StreamingIterator, Tree};
 
-use super::utils::partition_modifiers;
+use crate::languages::common::hover::HoverSignature;
 
 #[tracing::instrument(skip_all)]
 pub fn extract_class_signature(tree: &Tree, source: &str) -> Option<String> {
@@ -9,14 +9,22 @@ pub fn extract_class_signature(tree: &Tree, source: &str) -> Option<String> {
     (package_declaration
       (scoped_identifier) @package_name)
 
-    (
-      (groovydoc_comment)? @groovydoc
-      (class_declaration
+    (class_declaration
         (modifiers)? @modifiers
         name: (identifier) @class_name
         interfaces: (super_interfaces)? @interface_line
         superclass: (superclass)? @superclass_line
-      )
+    )
+
+    (_
+        (groovydoc_comment) @groovydoc
+        .
+        (class_declaration
+            (modifiers)? @modifiers
+            name: (identifier) @class_name
+            interfaces: (super_interfaces)? @interface_line
+            superclass: (superclass)? @superclass_line
+        )
     )
     "#;
 
@@ -98,37 +106,35 @@ fn format_class_signature(
         return None;
     }
 
-    let mut parts = Vec::new();
+    use crate::languages::common::hover::partition_modifiers;
+    let (annotations, modifiers_vec) = partition_modifiers(&modifiers);
 
-    parts.push(package_name);
-    parts.push("\n".to_string());
+    // Build signature line with "class" keyword
+    let mut signature_line = String::new();
+    signature_line.push_str("class ");
+    signature_line.push_str(&class_name);
 
-    parts.push("```groovy".to_string());
-
-    let (annotation, modifiers) = partition_modifiers(modifiers);
-    annotation.into_iter().for_each(|a| parts.push(a));
-
-    if !modifiers.is_empty() {
-        let modifier_line = modifiers.join(" ");
-        parts.push(modifier_line);
-    }
-
-    parts.push(class_name);
-
+    // Combine inheritance clauses
+    let mut inheritance_parts = Vec::new();
     if !superclass_line.is_empty() {
-        parts.push(superclass_line);
+        inheritance_parts.push(superclass_line);
     }
-
     if !interface_line.is_empty() {
-        parts.push(interface_line);
+        inheritance_parts.push(interface_line);
     }
+    let inheritance = if inheritance_parts.is_empty() {
+        None
+    } else {
+        Some(inheritance_parts.join(", "))
+    };
 
-    parts.push("```".to_string());
-    parts.push("\n".to_string());
+    let hover = HoverSignature::new("groovy")
+        .with_package(if package_name.is_empty() { None } else { Some(package_name) })
+        .with_annotations(annotations)
+        .with_modifiers(modifiers_vec)
+        .with_signature_line(signature_line)
+        .with_inheritance(inheritance)
+        .with_documentation(if groovydoc.is_empty() { None } else { Some(groovydoc) });
 
-    parts.push("---".to_string());
-
-    parts.push(groovydoc);
-
-    Some(parts.join("\n"))
+    Some(hover.format())
 }

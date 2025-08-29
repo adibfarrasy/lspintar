@@ -1,20 +1,10 @@
-/// Partition modifiers into access modifiers and other modifiers for Kotlin
-/// Access modifiers: public, internal, protected, private
-/// Other modifiers: abstract, final, open, sealed, data, inner, inline, suspend, etc.
-pub fn partition_modifiers(modifiers: &str) -> (String, String) {
-    let access_modifiers = ["public", "internal", "protected", "private"];
-    let mut access = Vec::new();
-    let mut other = Vec::new();
-
-    for modifier in modifiers.split_whitespace() {
-        if access_modifiers.contains(&modifier) {
-            access.push(modifier);
-        } else {
-            other.push(modifier);
-        }
-    }
-
-    (access.join(" "), other.join(" "))
+/// Partition modifiers into annotations and other modifiers for Kotlin (like Java)
+/// Annotations start with '@', everything else is considered a modifier
+pub fn partition_modifiers(modifiers: &str) -> (Vec<String>, Vec<String>) {
+    modifiers
+        .split_whitespace()
+        .map(|s| s.to_string())
+        .partition(|m| m.starts_with('@'))
 }
 
 #[cfg(test)]
@@ -24,28 +14,28 @@ mod tests {
     #[test]
     fn test_partition_modifiers() {
         assert_eq!(
-            partition_modifiers("public abstract"),
-            ("public".to_string(), "abstract".to_string())
+            partition_modifiers("@Deprecated public abstract"),
+            (vec!["@Deprecated".to_string()], vec!["public".to_string(), "abstract".to_string()])
         );
 
         assert_eq!(
             partition_modifiers("private data class"),
-            ("private".to_string(), "data class".to_string())
+            (vec![], vec!["private".to_string(), "data".to_string(), "class".to_string()])
         );
 
         assert_eq!(
-            partition_modifiers("internal sealed"),
-            ("internal".to_string(), "sealed".to_string())
+            partition_modifiers("@Override @JvmStatic internal sealed"),
+            (vec!["@Override".to_string(), "@JvmStatic".to_string()], vec!["internal".to_string(), "sealed".to_string()])
         );
 
         assert_eq!(
             partition_modifiers("open"),
-            ("".to_string(), "open".to_string())
+            (vec![], vec!["open".to_string()])
         );
 
         assert_eq!(
-            partition_modifiers("protected"),
-            ("protected".to_string(), "".to_string())
+            partition_modifiers("@Suppress protected"),
+            (vec!["@Suppress".to_string()], vec!["protected".to_string()])
         );
     }
 }

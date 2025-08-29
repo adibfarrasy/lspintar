@@ -1,7 +1,7 @@
 use log::debug;
 use tree_sitter::{Node, Query, QueryCursor, StreamingIterator, Tree};
 
-use super::utils::partition_modifiers;
+use crate::languages::common::hover::HoverSignature;
 
 #[tracing::instrument(skip_all)]
 pub fn extract_method_signature(tree: &Tree, node: &Node, source: &str) -> Option<String> {
@@ -88,20 +88,11 @@ fn format_method_signature(
         return None;
     }
 
-    let mut parts = Vec::new();
-
-    parts.push("```java".to_string());
-
-    let (annotation, modifiers) = partition_modifiers(modifiers);
-    annotation.into_iter().for_each(|a| parts.push(a));
+    use crate::languages::common::hover::partition_modifiers;
+    let (annotations, modifiers_vec) = partition_modifiers(&modifiers);
 
     let mut signature_line = String::new();
-
-    if !modifiers.is_empty() {
-        signature_line.push_str(&modifiers.join(" "));
-        signature_line.push(' ');
-    }
-
+    
     if !return_type.is_empty() {
         signature_line.push_str(&return_type);
         signature_line.push(' ');
@@ -115,14 +106,11 @@ fn format_method_signature(
         signature_line.push_str(&throws_clause);
     }
 
-    parts.push(signature_line);
-    parts.push("```".to_string());
+    let hover = HoverSignature::new("java")
+        .with_annotations(annotations)
+        .with_modifiers(modifiers_vec)
+        .with_signature_line(signature_line)
+        .with_documentation(if javadoc.is_empty() { None } else { Some(javadoc) });
 
-    if !javadoc.is_empty() {
-        parts.push("\n".to_string());
-        parts.push("---".to_string());
-        parts.push(javadoc);
-    }
-
-    Some(parts.join("\n"))
+    Some(hover.format())
 }

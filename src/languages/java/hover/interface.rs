@@ -1,7 +1,7 @@
 use log::debug;
 use tree_sitter::{Query, QueryCursor, StreamingIterator, Tree};
 
-use super::utils::partition_modifiers;
+use crate::languages::common::hover::HoverSignature;
 
 #[tracing::instrument(skip_all)]
 pub fn extract_interface_signature(tree: &Tree, source: &str) -> Option<String> {
@@ -10,13 +10,20 @@ pub fn extract_interface_signature(tree: &Tree, source: &str) -> Option<String> 
     (package_declaration
       (scoped_identifier) @package_name)
 
-    (
-      (block_comment)? @javadoc
-      (interface_declaration
+    (interface_declaration
         (modifiers)? @modifiers
         name: (identifier) @interface_name
         (extends_interfaces)? @extends_line
-      )
+    )
+
+    (_
+        (block_comment) @javadoc
+        .
+        (interface_declaration
+            (modifiers)? @modifiers
+            name: (identifier) @interface_name
+            (extends_interfaces)? @extends_line
+        )
     )
     "#;
 
@@ -93,45 +100,21 @@ fn format_interface_signature(
         return None;
     }
 
-    let mut parts = Vec::new();
+    use crate::languages::common::hover::partition_modifiers;
+    let (annotations, modifiers_vec) = partition_modifiers(&modifiers);
 
-    if !package_name.is_empty() {
-        parts.push(package_name);
-        parts.push("\n".to_string());
-    }
+    // Build signature line
+    let mut signature_line = String::new();
+    signature_line.push_str("interface ");
+    signature_line.push_str(&interface_name);
 
-    parts.push("```java".to_string());
+    let hover = HoverSignature::new("java")
+        .with_package(if package_name.is_empty() { None } else { Some(package_name) })
+        .with_annotations(annotations)
+        .with_modifiers(modifiers_vec)
+        .with_signature_line(signature_line)
+        .with_inheritance(if extends_line.is_empty() { None } else { Some(extends_line) })
+        .with_documentation(if javadoc.is_empty() { None } else { Some(javadoc) });
 
-    let (annotation, modifier_vec) = partition_modifiers(modifiers);
-    
-    // Add annotations
-    annotation.into_iter().for_each(|a| parts.push(a));
-
-    // Build the interface declaration line
-    let mut interface_line = String::new();
-    
-    if !modifier_vec.is_empty() {
-        interface_line.push_str(&modifier_vec.join(" "));
-        interface_line.push(' ');
-    }
-    
-    interface_line.push_str("interface ");
-    interface_line.push_str(&interface_name);
-    
-    parts.push(interface_line);
-
-    // Add extends clause on separate line
-    if !extends_line.is_empty() {
-        parts.push(format!("    {}", extends_line));
-    }
-
-    parts.push("```".to_string());
-
-    if !javadoc.is_empty() {
-        parts.push("\n".to_string());
-        parts.push("---".to_string());
-        parts.push(javadoc);
-    }
-
-    Some(parts.join("\n"))
+    Some(hover.format())
 }

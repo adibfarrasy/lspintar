@@ -1,6 +1,8 @@
 use tree_sitter::{Query, QueryCursor, StreamingIterator, Tree};
 
-use super::utils::partition_modifiers;
+use crate::languages::common::hover::{
+    format_inheritance, parse_constructor_params, HoverSignature,
+};
 
 #[tracing::instrument(skip_all)]
 pub fn extract_class_signature(tree: &Tree, source: &str) -> Option<String> {
@@ -8,12 +10,20 @@ pub fn extract_class_signature(tree: &Tree, source: &str) -> Option<String> {
     (package_header (identifier) @package_name)
 
     (class_declaration
-        (modifiers)? @modifiers
-        name: (type_identifier) @class_name
+        (type_identifier) @class_name
         (type_parameters)? @type_params
         (primary_constructor)? @primary_constructor
-        supertype_list: (delegation_specifiers)? @supertypes
+        (delegation_specifier)* @supertypes
     )
+
+
+    (class_declaration (modifiers (annotation) @annotation))
+
+    (class_declaration (modifiers (visibility_modifier) @modifier))
+
+    (class_declaration (modifiers (class_modifier) @modifier))
+
+    (multiline_comment) @kdoc
     "#;
 
     let query = Query::new(&tree.language(), query_text).ok()?;
@@ -24,7 +34,9 @@ pub fn extract_class_signature(tree: &Tree, source: &str) -> Option<String> {
     let mut type_params = String::new();
     let mut primary_constructor = String::new();
     let mut supertypes = String::new();
-    let mut modifiers = String::new();
+    let mut annotations = std::collections::HashSet::new();
+    let mut modifiers = std::collections::HashSet::new();
+    let mut kdoc = String::new();
 
     let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
 
@@ -39,10 +51,11 @@ pub fn extract_class_signature(tree: &Tree, source: &str) -> Option<String> {
                         package_name.push_str(text);
                     }
                 }
-                "modifiers" => {
-                    if modifiers.is_empty() {
-                        modifiers.push_str(text);
-                    }
+                "annotation" => {
+                    annotations.insert(text.to_string());
+                }
+                "modifier" => {
+                    modifiers.insert(text.to_string());
                 }
                 "class_name" => {
                     if class_name.is_empty() {
@@ -64,6 +77,11 @@ pub fn extract_class_signature(tree: &Tree, source: &str) -> Option<String> {
                         supertypes.push_str(text);
                     }
                 }
+                "kdoc" => {
+                    if kdoc.is_empty() {
+                        kdoc.push_str(text);
+                    }
+                }
                 _ => {}
             }
         }
@@ -73,42 +91,106 @@ pub fn extract_class_signature(tree: &Tree, source: &str) -> Option<String> {
         return None;
     }
 
-    let (access_modifiers, other_modifiers) = partition_modifiers(&modifiers);
+    // Find the comment that immediately precedes this class
+    let kdoc = find_preceding_comment(tree, source, &class_name);
 
-    let mut signature = String::new();
-    signature.push_str("```kotlin\n");
-
-    if !access_modifiers.is_empty() {
-        signature.push_str(&access_modifiers);
-        signature.push(' ');
-    }
-
-    if !other_modifiers.is_empty() {
-        signature.push_str(&other_modifiers);
-        signature.push(' ');
-    }
-
-    signature.push_str("class ");
-    signature.push_str(&class_name);
+    // Build signature line
+    let mut signature_line = String::new();
+    signature_line.push_str("class ");
+    signature_line.push_str(&class_name);
 
     if !type_params.is_empty() {
-        signature.push_str(&type_params);
+        signature_line.push_str(&type_params.replace('\n', " "));
     }
 
-    if !primary_constructor.is_empty() {
-        signature.push_str(&primary_constructor.replace('\n', " "));
-    }
+    let hover = HoverSignature::new("kotlin")
+        .with_package(if package_name.is_empty() {
+            None
+        } else {
+            Some(package_name)
+        })
+        .with_annotations(annotations.into_iter().collect())
+        .with_modifiers(modifiers.into_iter().collect())
+        .with_signature_line(signature_line)
+        .with_constructor_params(parse_constructor_params(&primary_constructor))
+        .with_inheritance(format_inheritance(&supertypes))
+        .with_documentation(if kdoc.is_empty() { None } else { Some(kdoc) });
 
-    if !supertypes.is_empty() {
-        signature.push_str(" : ");
-        signature.push_str(&supertypes.replace('\n', " "));
-    }
-
-    signature.push_str("\n```");
-
-    if !package_name.is_empty() {
-        signature.push_str(&format!("\n\n**Package:** `{}`", package_name));
-    }
-
-    Some(signature)
+    Some(hover.format())
 }
+
+/// Find a comment that immediately precedes the class declaration
+fn find_preceding_comment(tree: &Tree, source: &str, class_name: &str) -> String {
+    let root = tree.root_node();
+    
+    // Find the class declaration node
+    let class_node = find_class_node(&root, source, class_name);
+    if let Some(class_node) = class_node {
+        // Look for a preceding sibling that is a multiline_comment
+        if let Some(parent) = class_node.parent() {
+            let mut cursor = parent.walk();
+            if cursor.goto_first_child() {
+                let mut prev_node: Option<tree_sitter::Node> = None;
+                loop {
+                    let current = cursor.node();
+                    if current == class_node {
+                        // Found our class, check if previous node was a comment
+                        if let Some(prev) = prev_node {
+                            if prev.kind() == "multiline_comment" {
+                                if let Ok(comment_text) = prev.utf8_text(source.as_bytes()) {
+                                    return comment_text.to_string();
+                                }
+                            }
+                        }
+                        break;
+                    }
+                    prev_node = Some(current);
+                    if !cursor.goto_next_sibling() {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    
+    String::new()
+}
+
+/// Find the class declaration node by name
+fn find_class_node<'a>(node: &tree_sitter::Node<'a>, source: &str, class_name: &str) -> Option<tree_sitter::Node<'a>> {
+    if node.kind() == "class_declaration" {
+        // Check if this is the class we're looking for
+        let mut cursor = node.walk();
+        if cursor.goto_first_child() {
+            loop {
+                let child = cursor.node();
+                if child.kind() == "type_identifier" {
+                    if let Ok(text) = child.utf8_text(source.as_bytes()) {
+                        if text == class_name {
+                            return Some(*node);
+                        }
+                    }
+                }
+                if !cursor.goto_next_sibling() {
+                    break;
+                }
+            }
+        }
+    }
+    
+    // Recursively search children
+    let mut cursor = node.walk();
+    if cursor.goto_first_child() {
+        loop {
+            if let Some(found) = find_class_node(&cursor.node(), source, class_name) {
+                return Some(found);
+            }
+            if !cursor.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+    
+    None
+}
+

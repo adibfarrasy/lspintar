@@ -1,20 +1,28 @@
 use log::debug;
 use tree_sitter::{Query, QueryCursor, StreamingIterator, Tree};
 
-use super::utils::partition_modifiers;
+use crate::languages::common::hover::HoverSignature;
 
 #[tracing::instrument(skip_all)]
 pub fn extract_interface_signature(tree: &Tree, source: &str) -> Option<String> {
     let query_text = r#"
     (package_declaration
       (scoped_identifier) @package_name)
-    (
-      (groovydoc_comment)? @groovydoc
-      (interface_declaration
+
+    (interface_declaration
         (modifiers)? @modifiers
         name: (identifier) @interface_name
         interfaces: (super_interfaces)? @extends_line
-      )
+    )
+
+    (_
+        (groovydoc_comment) @groovydoc
+        .
+        (interface_declaration
+            (modifiers)? @modifiers
+            name: (identifier) @interface_name
+            interfaces: (super_interfaces)? @extends_line
+        )
     )
     "#;
 
@@ -88,33 +96,21 @@ fn format_interface_signature(
         return None;
     }
 
-    let mut parts = Vec::new();
+    use crate::languages::common::hover::partition_modifiers;
+    let (annotations, modifiers_vec) = partition_modifiers(&modifiers);
 
-    parts.push(package_name);
-    parts.push("\n".to_string());
+    // Build signature line
+    let mut signature_line = String::new();
+    signature_line.push_str("interface ");
+    signature_line.push_str(&interface_name);
 
-    parts.push("```groovy".to_string());
+    let hover = HoverSignature::new("groovy")
+        .with_package(if package_name.is_empty() { None } else { Some(package_name) })
+        .with_annotations(annotations)
+        .with_modifiers(modifiers_vec)
+        .with_signature_line(signature_line)
+        .with_inheritance(if extends_line.is_empty() { None } else { Some(extends_line) })
+        .with_documentation(if groovydoc.is_empty() { None } else { Some(groovydoc) });
 
-    let (annotation, modifiers) = partition_modifiers(modifiers);
-    annotation.into_iter().for_each(|a| parts.push(a));
-
-    if !modifiers.is_empty() {
-        let modifier_line = modifiers.join(" ");
-        parts.push(modifier_line);
-    }
-
-    parts.push(interface_name);
-
-    if !extends_line.is_empty() {
-        parts.push(" ".to_string());
-        parts.push(extends_line);
-    }
-
-    parts.push("```".to_string());
-    parts.push("\n".to_string());
-
-    parts.push("---".to_string());
-    parts.push(groovydoc);
-
-    Some(parts.join("\n"))
+    Some(hover.format())
 }

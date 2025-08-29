@@ -9,13 +9,16 @@ pub fn extract_field_signature(tree: &Tree, node: &Node, source: &str) -> Option
 
     // Look for property declarations that match this field name
     let query_text = r#"
-    (property_declaration
-        (modifiers)? @modifiers
-        (variable_declaration
-            name: (simple_identifier) @field_name
-            type: (user_type)? @field_type
+    (
+        (multiline_comment)? @kdoc
+        (property_declaration
+            (modifiers)? @modifiers
+            (variable_declaration
+                (simple_identifier) @field_name
+                (user_type)? @field_type
+            )
+            ("=" (_))? @initializer
         )
-        ("=" (expression))? @initializer
     )
     "#;
 
@@ -29,6 +32,7 @@ pub fn extract_field_signature(tree: &Tree, node: &Node, source: &str) -> Option
         let mut modifiers = String::new();
         let mut field_type = String::new();
         let mut has_initializer = false;
+        let mut kdoc = String::new();
 
         for capture in query_match.captures.iter() {
             let capture_name = query.capture_names()[capture.index as usize];
@@ -49,52 +53,66 @@ pub fn extract_field_signature(tree: &Tree, node: &Node, source: &str) -> Option
                 "initializer" => {
                     has_initializer = true;
                 }
+                "kdoc" => {
+                    if kdoc.is_empty() {
+                        kdoc.push_str(text);
+                    }
+                }
                 _ => {}
             }
         }
 
         if found_field {
-            let (access_modifiers, other_modifiers) = partition_modifiers(&modifiers);
+            let (annotations, modifier_vec) = partition_modifiers(&modifiers);
 
-            let mut signature = String::new();
-            signature.push_str("```kotlin\n");
+            let mut parts = Vec::new();
+            parts.push("```kotlin".to_string());
 
-            if !access_modifiers.is_empty() {
-                signature.push_str(&access_modifiers);
-                signature.push(' ');
-            }
+            // Add annotations (each on separate lines)
+            annotations.into_iter().for_each(|a| parts.push(a));
 
-            if !other_modifiers.is_empty() {
-                signature.push_str(&other_modifiers);
-                signature.push(' ');
+            // Build the field declaration line
+            let mut field_line = String::new();
+
+            if !modifier_vec.is_empty() {
+                field_line.push_str(&modifier_vec.join(" "));
+                field_line.push(' ');
             }
 
             // Determine if it's val or var based on modifiers
             if modifiers.contains("var") {
-                signature.push_str("var ");
+                field_line.push_str("var ");
             } else {
-                signature.push_str("val ");
+                field_line.push_str("val ");
             }
 
-            signature.push_str(field_name);
+            field_line.push_str(field_name);
 
             if !field_type.is_empty() {
-                signature.push_str(": ");
-                signature.push_str(&field_type);
+                field_line.push_str(": ");
+                field_line.push_str(&field_type);
             }
 
             if has_initializer {
-                signature.push_str(" = ...");
+                field_line.push_str(" = ...");
             }
 
-            signature.push_str("\n```");
+            parts.push(field_line);
+            parts.push("```".to_string());
 
             // Try to find the containing class for additional context
             if let Some(class_info) = find_containing_class(tree, node, source) {
-                signature.push_str(&format!("\n\n**Declared in:** `{}`", class_info));
+                parts.push(format!("\n**Declared in:** `{}`", class_info));
             }
 
-            return Some(signature);
+            // Add KDoc documentation if present
+            if !kdoc.is_empty() {
+                parts.push("\n".to_string());
+                parts.push("---".to_string());
+                parts.push(kdoc);
+            }
+
+            return Some(parts.join("\n"));
         }
     }
 
@@ -104,8 +122,8 @@ pub fn extract_field_signature(tree: &Tree, node: &Node, source: &str) -> Option
         (class_parameters
             (class_parameter
                 (modifiers)? @modifiers
-                name: (simple_identifier) @param_name
-                type: (user_type) @param_type
+                (simple_identifier) @param_name
+                (user_type) @param_type
             )
         )
     )
@@ -142,36 +160,38 @@ pub fn extract_field_signature(tree: &Tree, node: &Node, source: &str) -> Option
         }
 
         if found_param {
-            let (access_modifiers, other_modifiers) = partition_modifiers(&modifiers);
+            let (annotations, modifier_vec) = partition_modifiers(&modifiers);
 
-            let mut signature = String::new();
-            signature.push_str("```kotlin\n");
+            let mut parts = Vec::new();
+            parts.push("```kotlin".to_string());
 
-            if !access_modifiers.is_empty() {
-                signature.push_str(&access_modifiers);
-                signature.push(' ');
-            }
+            // Add annotations (each on separate lines)
+            annotations.into_iter().for_each(|a| parts.push(a));
 
-            if !other_modifiers.is_empty() {
-                signature.push_str(&other_modifiers);
-                signature.push(' ');
+            // Build the parameter property line
+            let mut param_line = String::new();
+
+            if !modifier_vec.is_empty() {
+                param_line.push_str(&modifier_vec.join(" "));
+                param_line.push(' ');
             }
 
             // Check if it's val or var in modifiers, default to val for constructor parameters
             if modifiers.contains("var") {
-                signature.push_str("var ");
+                param_line.push_str("var ");
             } else {
-                signature.push_str("val ");
+                param_line.push_str("val ");
             }
 
-            signature.push_str(field_name);
-            signature.push_str(": ");
-            signature.push_str(&param_type);
+            param_line.push_str(field_name);
+            param_line.push_str(": ");
+            param_line.push_str(&param_type);
 
-            signature.push_str("\n```");
-            signature.push_str("\n\n*Constructor parameter property*");
+            parts.push(param_line);
+            parts.push("```".to_string());
+            parts.push("\n*Constructor parameter property*".to_string());
 
-            return Some(signature);
+            return Some(parts.join("\n"));
         }
     }
 
@@ -199,3 +219,4 @@ fn find_containing_class(tree: &Tree, field_node: &Node, source: &str) -> Option
 
     None
 }
+

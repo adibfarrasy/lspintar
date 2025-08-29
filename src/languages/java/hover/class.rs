@@ -1,7 +1,7 @@
 use log::debug;
 use tree_sitter::{Query, QueryCursor, StreamingIterator, Tree};
 
-use super::utils::partition_modifiers;
+use crate::languages::common::hover::HoverSignature;
 
 #[tracing::instrument(skip_all)]
 pub fn extract_class_signature(tree: &Tree, source: &str) -> Option<String> {
@@ -9,14 +9,22 @@ pub fn extract_class_signature(tree: &Tree, source: &str) -> Option<String> {
     (package_declaration
       (scoped_identifier) @package_name)
 
-    (
-      (block_comment)? @javadoc
-      (class_declaration
+    (class_declaration
         (modifiers)? @modifiers
         name: (identifier) @class_name
         superclass: (superclass)? @superclass_line
         interfaces: (super_interfaces)? @interface_line
-      )
+    )
+
+    (_
+        (block_comment) @javadoc
+        .
+        (class_declaration
+            (modifiers)? @modifiers
+            name: (identifier) @class_name
+            superclass: (superclass)? @superclass_line
+            interfaces: (super_interfaces)? @interface_line
+        )
     )
     "#;
 
@@ -75,7 +83,6 @@ pub fn extract_class_signature(tree: &Tree, source: &str) -> Option<String> {
         }
     }
 
-
     format_class_signature(
         package_name,
         modifiers,
@@ -98,51 +105,35 @@ fn format_class_signature(
         return None;
     }
 
-    let mut parts = Vec::new();
+    use crate::languages::common::hover::partition_modifiers;
+    let (annotations, modifiers_vec) = partition_modifiers(&modifiers);
 
-    if !package_name.is_empty() {
-        parts.push(package_name);
-        parts.push("\n".to_string());
-    }
+    // Build signature line
+    let mut signature_line = String::new();
+    signature_line.push_str("class ");
+    signature_line.push_str(&class_name);
 
-    parts.push("```java".to_string());
-
-    let (annotation, modifier_vec) = partition_modifiers(modifiers);
-
-    // Add annotations
-    annotation.into_iter().for_each(|a| parts.push(a));
-
-    // Build the class declaration line
-    let mut class_line = String::new();
-
-    if !modifier_vec.is_empty() {
-        class_line.push_str(&modifier_vec.join(" "));
-        class_line.push(' ');
-    }
-
-    class_line.push_str("class ");
-    class_line.push_str(&class_name);
-
-    parts.push(class_line);
-
-    // Add extends clause on separate line
+    // Combine inheritance clauses
+    let mut inheritance_parts = Vec::new();
     if !superclass_line.is_empty() {
-        parts.push(format!("{}", superclass_line));
+        inheritance_parts.push(superclass_line);
     }
-
-    // Add implements clause on separate line
     if !interface_line.is_empty() {
-        parts.push(format!("{}", interface_line));
+        inheritance_parts.push(interface_line);
     }
+    let inheritance = if inheritance_parts.is_empty() {
+        None
+    } else {
+        Some(inheritance_parts.join(", "))
+    };
 
-    parts.push("```".to_string());
+    let hover = HoverSignature::new("java")
+        .with_package(if package_name.is_empty() { None } else { Some(package_name) })
+        .with_annotations(annotations)
+        .with_modifiers(modifiers_vec)
+        .with_signature_line(signature_line)
+        .with_inheritance(inheritance)
+        .with_documentation(if javadoc.is_empty() { None } else { Some(javadoc) });
 
-    if !javadoc.is_empty() {
-        parts.push("\n".to_string());
-        parts.push("---".to_string());
-        parts.push(javadoc);
-    }
-
-    Some(parts.join("\n"))
+    Some(hover.format())
 }
-

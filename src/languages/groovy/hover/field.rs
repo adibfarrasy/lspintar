@@ -1,7 +1,7 @@
 use log::debug;
 use tree_sitter::{Node, Query, QueryCursor, StreamingIterator, Tree};
 
-use super::utils::partition_modifiers;
+use crate::languages::common::hover::HoverSignature;
 
 #[tracing::instrument(skip_all)]
 pub fn extract_field_signature(tree: &Tree, node: &Node, source: &str) -> Option<String> {
@@ -91,46 +91,31 @@ fn format_field_signature(
     initial_value: String,
     groovydoc: String,
 ) -> Option<String> {
-    let mut parts = Vec::new();
+    use crate::languages::common::hover::partition_modifiers;
+    let (annotations, modifiers_vec) = partition_modifiers(&modifiers);
 
-    if !package_name.is_empty() {
-        parts.push(package_name);
-        parts.push("\n".to_string());
-    }
-
-    parts.push("```groovy".to_string());
-
-    let (annotation, modifiers) = partition_modifiers(modifiers);
-    annotation.into_iter().for_each(|a| parts.push(a));
-
-    if !modifiers.is_empty() {
-        let modifier_line = modifiers.join(" ");
-        parts.push(modifier_line);
-    }
-
-    let mut signature = String::new();
-
+    let mut signature_line = String::new();
+    
     if !field_type.is_empty() {
-        signature.push_str(&field_type);
-        signature.push(' ');
+        signature_line.push_str(&field_type);
+        signature_line.push(' ');
     } else {
-        signature.push_str("def ");
+        signature_line.push_str("def ");
     }
 
-    signature.push_str(&field_name);
+    signature_line.push_str(&field_name);
 
     if !initial_value.is_empty() {
-        signature.push_str(" = ");
-        signature.push_str(&initial_value);
+        signature_line.push_str(" = ");
+        signature_line.push_str(&initial_value);
     }
 
-    parts.push(signature);
+    let hover = HoverSignature::new("groovy")
+        .with_package(if package_name.is_empty() { None } else { Some(package_name) })
+        .with_annotations(annotations)
+        .with_modifiers(modifiers_vec)
+        .with_signature_line(signature_line)
+        .with_documentation(if groovydoc.is_empty() { None } else { Some(groovydoc) });
 
-    parts.push("```".to_string());
-    parts.push("\n".to_string());
-
-    parts.push("---".to_string());
-    parts.push(groovydoc);
-
-    Some(parts.join("\n"))
+    Some(hover.format())
 }

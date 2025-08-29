@@ -1,17 +1,35 @@
 use tree_sitter::{Query, QueryCursor, StreamingIterator, Tree};
 
-use super::utils::partition_modifiers;
+use crate::languages::common::hover::{format_inheritance, HoverSignature};
 
 #[tracing::instrument(skip_all)]
 pub fn extract_interface_signature(tree: &Tree, source: &str) -> Option<String> {
     let query_text = r#"
     (package_header (identifier) @package_name)
 
-    (class_declaration
-        (modifiers)? @modifiers
-        name: (type_identifier) @interface_name
+    (interface_declaration
+        (type_identifier) @interface_name
         (type_parameters)? @type_params
-        supertype_list: (delegation_specifiers)? @supertypes
+        (delegation_specifier)* @supertypes
+    )
+
+    (interface_declaration (modifiers (annotation) @annotation))
+
+    (interface_declaration (modifiers (visibility_modifier) @modifier))
+
+    (interface_declaration (modifiers (class_modifier) @modifier))
+
+    (interface_declaration (modifiers (function_modifier) @modifier))
+
+    (_
+        (multiline_comment) @kdoc
+        .
+        (interface_declaration
+            (modifiers)?
+            (type_identifier) @interface_name
+            (type_parameters)? @type_params
+            (delegation_specifier)* @supertypes
+        )
     )
     "#;
 
@@ -22,7 +40,9 @@ pub fn extract_interface_signature(tree: &Tree, source: &str) -> Option<String> 
     let mut interface_name = String::new();
     let mut type_params = String::new();
     let mut supertypes = String::new();
-    let mut modifiers = String::new();
+    let mut annotations = Vec::new();
+    let mut modifiers = Vec::new();
+    let mut kdoc = String::new();
 
     let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
 
@@ -37,10 +57,11 @@ pub fn extract_interface_signature(tree: &Tree, source: &str) -> Option<String> 
                         package_name.push_str(text);
                     }
                 }
-                "modifiers" => {
-                    if modifiers.is_empty() {
-                        modifiers.push_str(text);
-                    }
+                "annotation" => {
+                    annotations.push(text.to_string());
+                }
+                "modifier" => {
+                    modifiers.push(text.to_string());
                 }
                 "interface_name" => {
                     if interface_name.is_empty() {
@@ -57,6 +78,11 @@ pub fn extract_interface_signature(tree: &Tree, source: &str) -> Option<String> 
                         supertypes.push_str(text);
                     }
                 }
+                "kdoc" => {
+                    if kdoc.is_empty() {
+                        kdoc.push_str(text);
+                    }
+                }
                 _ => {}
             }
         }
@@ -66,38 +92,28 @@ pub fn extract_interface_signature(tree: &Tree, source: &str) -> Option<String> 
         return None;
     }
 
-    let (access_modifiers, other_modifiers) = partition_modifiers(&modifiers);
+    // Annotations and modifiers are already separated by the query
 
-    let mut signature = String::new();
-    signature.push_str("```kotlin\n");
-
-    if !access_modifiers.is_empty() {
-        signature.push_str(&access_modifiers);
-        signature.push(' ');
-    }
-
-    if !other_modifiers.is_empty() {
-        signature.push_str(&other_modifiers);
-        signature.push(' ');
-    }
-
-    signature.push_str("interface ");
-    signature.push_str(&interface_name);
+    // Build signature line
+    let mut signature_line = String::new();
+    signature_line.push_str("interface ");
+    signature_line.push_str(&interface_name);
 
     if !type_params.is_empty() {
-        signature.push_str(&type_params);
+        signature_line.push_str(&type_params.replace('\n', " "));
     }
 
-    if !supertypes.is_empty() {
-        signature.push_str(" : ");
-        signature.push_str(&supertypes.replace('\n', " "));
-    }
+    let hover = HoverSignature::new("kotlin")
+        .with_package(if package_name.is_empty() {
+            None
+        } else {
+            Some(package_name)
+        })
+        .with_annotations(annotations)
+        .with_modifiers(modifiers)
+        .with_signature_line(signature_line)
+        .with_inheritance(format_inheritance(&supertypes))
+        .with_documentation(if kdoc.is_empty() { None } else { Some(kdoc) });
 
-    signature.push_str("\n```");
-
-    if !package_name.is_empty() {
-        signature.push_str(&format!("\n\n**Package:** `{}`", package_name));
-    }
-
-    Some(signature)
+    Some(hover.format())
 }
