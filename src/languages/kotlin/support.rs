@@ -101,7 +101,7 @@ impl QueryProvider for KotlinSupport {
         (function_declaration
           (function_value_parameters
             (parameter
-              type: (user_type (type_identifier) @type_name))))
+              (user_type (type_identifier) @type_name))))
 
         ; Interface method parameter types  
         (interface_declaration
@@ -116,17 +116,17 @@ impl QueryProvider for KotlinSupport {
             (function_declaration
               (function_value_parameters
                 (parameter
-                  type: (user_type (type_identifier) @type_name))))))
+                  (user_type (type_identifier) @type_name))))))
 
         ; Function return type
         (function_declaration
-          type: (user_type (type_identifier) @type_name))
+          (user_type (type_identifier) @type_name))
 
         ; Interface method return types
         (interface_declaration
           (class_body
             (function_declaration
-              type: (user_type (type_identifier) @type_name))))
+              (user_type (type_identifier) @type_name))))
 
         ; INHERITANCE
         ; Super class/interface in class declaration (treat as generic type)

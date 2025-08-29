@@ -154,9 +154,8 @@ async fn find_project_external(
         }
     }
 
-    // Also try external dependency project roots (like kotlin-stdlib temp directory)
-    // First, try to find kotlin-stdlib specifically since we know it exists
-    let temp_dir_prefix = "lspintar_builtin_sources";
+    // Also try external dependency project roots
+    let _temp_dir_prefix = "lspintar_builtin_sources";
     let mut external_project_roots = std::collections::HashSet::new();
     
     // Collect all external dependency project roots from the symbol index

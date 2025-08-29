@@ -137,6 +137,15 @@ pub fn extract_kotlin_symbols(parsed_file: &ParsedSourceFile) -> Result<Vec<Symb
                     .map(|capture| capture.node)
                     .unwrap_or_else(|| query_match.captures[0].node);
 
+                // For class and interface declarations, extract inheritance information
+                if matches!(symbol_type, SymbolType::ClassDeclaration | SymbolType::InterfaceDeclaration) {
+                    let declaration_node = find_declaration_node(&name_node);
+                    if let Some(declaration_node) = declaration_node {
+                        let inheritance_info = extract_kotlin_inheritance(&declaration_node, &parsed_file.content);
+                        extends = inheritance_info.extends;
+                        implements = inheritance_info.implements;
+                    }
+                }
 
                 if is_kotlin_symbol_accessible(&name_node, &parsed_file.content) {
                     let fully_qualified_name = if let Some(ref pkg) = package {
@@ -225,6 +234,80 @@ fn is_kotlin_symbol_accessible(name_node: &Node, source: &str) -> bool {
     
     // Default to accessible (public/internal)
     true
+}
+
+#[derive(Debug)]
+struct InheritanceInfo {
+    extends: Option<String>,
+    implements: Vec<String>,
+}
+
+/// Find the class_declaration or interface_declaration node that contains the name node
+fn find_declaration_node<'a>(name_node: &'a Node<'a>) -> Option<Node<'a>> {
+    let mut current = Some(*name_node);
+    
+    while let Some(node) = current {
+        if matches!(node.kind(), "class_declaration" | "interface_declaration" | "object_declaration") {
+            return Some(node);
+        }
+        current = node.parent();
+    }
+    
+    None
+}
+
+/// Extract inheritance information from a Kotlin class or interface declaration
+fn extract_kotlin_inheritance(declaration_node: &Node, source: &str) -> InheritanceInfo {
+    let mut extends = None;
+    let mut implements = Vec::new();
+    
+    // Look for delegation_specifier children
+    for child in declaration_node.children(&mut declaration_node.walk()) {
+        if child.kind() == "delegation_specifier" {
+            // Check if this is a constructor_invocation (extends) or user_type (implements)
+            for delegation_child in child.children(&mut child.walk()) {
+                match delegation_child.kind() {
+                    "constructor_invocation" => {
+                        // This is class inheritance (extends)
+                        if let Some(extends_name) = extract_type_name_from_constructor_invocation(&delegation_child, source) {
+                            extends = Some(extends_name);
+                        }
+                    }
+                    "user_type" => {
+                        // This is interface implementation (implements)
+                        if let Some(implements_name) = extract_type_name_from_user_type(&delegation_child, source) {
+                            implements.push(implements_name);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    
+    InheritanceInfo { extends, implements }
+}
+
+/// Extract type name from constructor_invocation node
+fn extract_type_name_from_constructor_invocation(constructor_node: &Node, source: &str) -> Option<String> {
+    for child in constructor_node.children(&mut constructor_node.walk()) {
+        if child.kind() == "user_type" {
+            return extract_type_name_from_user_type(&child, source);
+        }
+    }
+    None
+}
+
+/// Extract type name from user_type node
+fn extract_type_name_from_user_type(user_type_node: &Node, source: &str) -> Option<String> {
+    for child in user_type_node.children(&mut user_type_node.walk()) {
+        if child.kind() == "type_identifier" {
+            if let Ok(type_name) = child.utf8_text(source.as_bytes()) {
+                return Some(type_name.to_string());
+            }
+        }
+    }
+    None
 }
 
 #[cfg(test)]

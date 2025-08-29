@@ -1,7 +1,7 @@
 use class::extract_class_signature;
 use field::extract_field_signature;
 use interface::extract_interface_signature;
-use log::debug;
+// use log::debug;
 use method::extract_method_signature;
 use tower_lsp::lsp_types::{Hover, HoverContents, Location, MarkupContent, MarkupKind};
 use tree_sitter::{Node, Query, QueryCursor, StreamingIterator, Tree};
