@@ -22,7 +22,7 @@ use crate::{
 };
 
 use super::{
-    build_tools::detect_build_tool,
+    build_tools::{detect_build_tool, find_symbol_in_jar_content, ExternalDependency},
     persistence::PersistenceLayer,
     utils::{find_project_root, is_external_dependency},
 };
@@ -229,12 +229,15 @@ impl DependencyCache {
         };
 
         for project_root in project_roots {
-            tracing::debug!("Collecting source files for project_root: {:?}", project_root);
             let source_files = collect_source_files(&project_root, is_external_dependency)
                 .await
                 .context("Failed to collect source files")?;
-            
-            tracing::debug!("Found {} source files in project_root: {:?}", source_files.len(), project_root);
+
+            tracing::debug!(
+                "Found {} source files in project_root: {:?}",
+                source_files.len(),
+                project_root
+            );
 
             let parsed_files = parse_source_files_parallel(source_files)
                 .await
@@ -244,10 +247,7 @@ impl DependencyCache {
                 .await
                 .context("Failed to extract symbol definitions")?;
 
-            tracing::debug!("Extracted {} symbol definitions for project_root: {:?}", symbol_definitions.len(), project_root);
-            
             for symbol in symbol_definitions {
-                tracing::debug!("Indexing symbol: {} at {:?}", symbol.fully_qualified_name, symbol.source_file);
                 let key = (project_root.clone(), symbol.fully_qualified_name.clone());
                 self.symbol_index.insert(key, symbol.source_file.clone());
 
@@ -274,9 +274,10 @@ impl DependencyCache {
     #[tracing::instrument(skip_all)]
     async fn index_decompiled_content(&self, project_root: &PathBuf) -> Result<()> {
         use crate::core::dependency_cache::symbol_index::extract_symbols_from_source_file_info;
-        
+
         // Get all external info entries for this project
-        let external_infos: Vec<_> = self.project_external_infos
+        let external_infos: Vec<_> = self
+            .project_external_infos
             .iter()
             .filter_map(|entry| {
                 let ((entry_project_root, _fqn), source_info) = (entry.key(), entry.value());
@@ -462,6 +463,61 @@ impl DependencyCache {
             }
         }
 
+        None
+    }
+
+    /// Enhanced external symbol lookup with lazy content parsing fallback
+    /// This is the main entry point for finding external symbols with smart fallbacks
+    pub async fn find_external_symbol_with_lazy_parsing(
+        &self,
+        project_root: &PathBuf,
+        symbol_name: &str,
+    ) -> Option<SourceFileInfo> {
+        // 1. First try the standard lookup (fast)
+        if let Some(source_info) = self.find_project_external_info(project_root, symbol_name).await {
+            return Some(source_info);
+        }
+
+        // 2. If not found, try lazy content parsing in project's JARs
+        if let Some(project_metadata) = self.project_metadata.get(project_root) {
+            // Get all external class names for this project to understand which JARs to check
+            for external_class_name in project_metadata.external_dep_names.iter() {
+                // Try to find a JAR that contains this class - this tells us which JARs this project uses
+                if let Some((jar_path, dependency)) = self.find_jar_for_class(project_root, external_class_name.key()).await {
+                    // Now search this JAR for our target symbol using lazy content parsing
+                    if let Some(internal_path) = find_symbol_in_jar_content(&jar_path, symbol_name) {
+                        debug!("Found {} via lazy content parsing in JAR: {:?}", symbol_name, jar_path);
+                        
+                        // Create a new SourceFileInfo for this discovered symbol
+                        let source_info = SourceFileInfo::new_for_decompilation(
+                            jar_path,
+                            Some(internal_path),
+                            dependency,
+                        );
+
+                        // Cache it for future lookups
+                        let key = (project_root.clone(), symbol_name.to_string());
+                        self.project_external_infos.insert(key, source_info.clone());
+                        
+                        return Some(source_info);
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Helper function to find which JAR contains a specific class
+    async fn find_jar_for_class(
+        &self, 
+        project_root: &PathBuf, 
+        class_name: &str
+    ) -> Option<(PathBuf, Option<ExternalDependency>)> {
+        let key = (project_root.clone(), class_name.to_string());
+        if let Some(source_info) = self.project_external_infos.get(&key) {
+            return Some((source_info.source_path.clone(), source_info.dependency.clone()));
+        }
         None
     }
 

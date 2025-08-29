@@ -1,4 +1,5 @@
 # TODO
+src/core/build_tools.rs:874: Could also check file size here if we want to be more sophisticated
 src/languages/java/definition/local.rs:190: Implement proper scope distance calculation
 src/languages/java/implementation.rs:122: Implement method call implementation finding
 src/languages/java/implementation.rs:134: Implement method implementation finding

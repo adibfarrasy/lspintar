@@ -69,9 +69,17 @@ async fn find_project_external(
         symbol_name.clone()
     };
 
+    // For core Groovy/Java classes, check builtins first to avoid triggering decompilation
+    // when source files exist in JAVA_HOME/src.zip or Groovy standard library
+    if is_core_groovy_or_java_class(&resolved_symbol) {
+        if let Some(builtin_info) = dependency_cache.find_builtin_info(&resolved_symbol) {
+            return search_external_definition_and_convert(&symbol_name, builtin_info);
+        }
+    }
+
     // First try current project
     if let Some(external_info) = dependency_cache
-        .find_project_external_info(&current_project, &resolved_symbol)
+        .find_external_symbol_with_lazy_parsing(&current_project, &resolved_symbol)
         .await
     {
         return search_external_definition_and_convert(&symbol_name, external_info);
@@ -82,7 +90,7 @@ async fn find_project_external(
         for dependent_project_ref in project_metadata.inter_project_deps.iter() {
             let dependent_project = dependent_project_ref.clone();
             if let Some(external_info) = dependency_cache
-                .find_project_external_info(&dependent_project, &resolved_symbol)
+                .find_external_symbol_with_lazy_parsing(&dependent_project, &resolved_symbol)
                 .await
             {
                 return search_external_definition_and_convert(&symbol_name, external_info);
@@ -110,7 +118,7 @@ async fn find_project_external(
             if !checked_projects.contains(project_root) {
                 checked_projects.insert(project_root.clone());
                 if let Some(external_info) = dependency_cache
-                    .find_project_external_info(project_root, &resolved_symbol)
+                    .find_external_symbol_with_lazy_parsing(project_root, &resolved_symbol)
                     .await
                 {
                     return search_external_definition_and_convert(&symbol_name, external_info);
@@ -196,4 +204,21 @@ fn search_external_method_definition_and_convert(
         .ok()?;
 
     node_to_lsp_location(&definition_node, &file_uri)
+}
+
+/// Check if a class is a core Groovy or Java class that should prioritize builtin sources
+/// over JAR dependencies to avoid unnecessary decompilation
+fn is_core_groovy_or_java_class(fully_qualified_name: &str) -> bool {
+    use crate::languages::groovy::constants::GROOVY_DEFAULT_IMPORTS;
+    
+    // Convert import patterns to prefixes for matching
+    GROOVY_DEFAULT_IMPORTS.iter().any(|import| {
+        if import == &"groovy.*" {
+            // Special case: groovy.* matches groovy.lang., groovy.util., etc.
+            fully_qualified_name.starts_with("groovy.")
+        } else {
+            let prefix = import.strip_suffix(".*").unwrap_or(import);
+            fully_qualified_name.starts_with(&format!("{}.", prefix))
+        }
+    })
 }

@@ -12,7 +12,7 @@ use tree_sitter::{Parser, Query, QueryCursor, StreamingIterator};
 use zip::ZipArchive;
 
 use crate::{
-    core::constants::KOTLIN_PARSER,
+    core::constants::{GROOVY_PARSER, JAVA_PARSER, KOTLIN_PARSER},
     lsp_error, lsp_info,
 };
 
@@ -40,7 +40,7 @@ pub fn detect_build_tool(project_root: &Path) -> Option<BuildTool> {
 pub async fn parse_settings_gradle(project_root: &PathBuf) -> Result<HashMap<String, PathBuf>> {
     let settings_file = project_root.join("settings.gradle");
     let settings_kts_file = project_root.join("settings.gradle.kts");
-    
+
     let (_settings_file, content) = if settings_file.exists() {
         let content = tokio::fs::read_to_string(&settings_file).await?;
         (settings_file, content)
@@ -388,13 +388,7 @@ pub struct ExternalDependency {
 
 #[tracing::instrument(skip_all)]
 pub fn find_jar_in_gradle_cache(dep: &ExternalDependency) -> Option<PathBuf> {
-    // Try sources JAR first
-    if let Some(sources_jar) = find_sources_jar_in_gradle_cache(dep) {
-        return Some(sources_jar);
-    }
-    
-    // Fallback to regular JAR
-    find_regular_jar_in_gradle_cache(dep)
+    find_sources_jar_in_gradle_cache(dep).or_else(|| find_regular_jar_in_gradle_cache(dep))
 }
 
 #[tracing::instrument(skip_all)]
@@ -489,50 +483,30 @@ pub fn extract_class_names_from_jar(jar_path: &PathBuf) -> Result<HashMap<String
         let file = archive.by_index(i)?;
         let file_name = file.name().to_string();
 
-        if (file_name.ends_with(".java") || file_name.ends_with(".groovy") || file_name.ends_with(".kt"))
+        if (file_name.ends_with(".java")
+            || file_name.ends_with(".groovy")
+            || file_name.ends_with(".kt"))
             && should_index_source_file(&file_name)
         {
             has_source_files = true;
-            
-            // For Kotlin files, extract all interface/class definitions from content
-            if file_name.ends_with(".kt") {
-                drop(file); // Drop the first file handle
-                let mut file_content = archive.by_index(i)?;
-                let mut content = String::new();
-                if file_content.read_to_string(&mut content).is_ok() {
-                    if let Some(extracted_names) = extract_kotlin_definitions_from_content(&content) {
-                        for name in extracted_names {
-                            // For source files, use the actual source file path
-                            class_name_to_path.insert(name, file_name.clone());
-                        }
-                    } else {
-                        // Fallback to filename-based extraction
-                        if let Some(class_name) = source_path_to_class_name(&file_name) {
-                            class_name_to_path.insert(class_name, file_name.clone());
-                        }
-                    }
-                } else {
-                    // Fallback to filename-based extraction
-                    if let Some(class_name) = source_path_to_class_name(&file_name) {
-                        class_name_to_path.insert(class_name, file_name.clone());
-                    }
-                }
-            } else {
-                // For Java/Groovy files, use filename-based extraction
-                if let Some(class_name) = source_path_to_class_name(&file_name) {
-                    // For source files, use the actual source file path
-                    class_name_to_path.insert(class_name, file_name.to_string());
-                }
+
+            // Fast filename-based extraction only during indexing
+            // Content parsing will be done lazily during symbol lookup
+            if let Some(class_name) = source_path_to_class_name(&file_name) {
+                class_name_to_path.insert(class_name, file_name.to_string());
             }
         }
     }
 
     // If no source files found, extract class names from .class files
     if !has_source_files {
-        debug!("No source files found in JAR, extracting class names from .class files: {}", jar_path.display());
+        debug!(
+            "No source files found in JAR, extracting class names from .class files: {}",
+            jar_path.display()
+        );
         let cursor = Cursor::new(jar_data);
         let mut archive = ZipArchive::new(cursor)?;
-        
+
         for i in 0..archive.len() {
             let file = archive.by_index(i)?;
             let file_name = file.name();
@@ -606,30 +580,30 @@ fn extract_kotlin_definitions_from_content(content: &str) -> Option<Vec<String>>
         debug!("Failed to set Kotlin language in parser");
         return None;
     }
-    
+
     let tree = parser.parse(content, None);
     if tree.is_none() {
         debug!("Failed to parse Kotlin content (length: {})", content.len());
         return None;
     }
     let tree = tree.unwrap();
-    
+
     // Extract package declaration
     let package = extract_kotlin_package_from_content(&tree, content);
-    
+
     let mut definitions = Vec::new();
-    
+
     // Query for Kotlin definitions - capture the type_identifier directly
     let query_text = r#"
         (class_declaration (type_identifier) @name)
         (interface_declaration (type_identifier) @name) 
         (object_declaration (type_identifier) @name)
     "#;
-    
+
     let query = Query::new(language, query_text).ok()?;
     let mut cursor = QueryCursor::new();
     let mut matches = cursor.matches(&query, tree.root_node(), content.as_bytes());
-    
+
     while let Some(query_match) = matches.next() {
         for capture in query_match.captures {
             if let Ok(name) = capture.node.utf8_text(content.as_bytes()) {
@@ -642,7 +616,7 @@ fn extract_kotlin_definitions_from_content(content: &str) -> Option<Vec<String>>
             }
         }
     }
-    
+
     if definitions.is_empty() {
         None
     } else {
@@ -653,11 +627,11 @@ fn extract_kotlin_definitions_from_content(content: &str) -> Option<Vec<String>>
 fn extract_kotlin_package_from_content(tree: &tree_sitter::Tree, content: &str) -> Option<String> {
     let language = KOTLIN_PARSER.get_or_init(|| tree_sitter_kotlin::language());
     let query_text = r#"(package_header (identifier) @package)"#;
-    
+
     if let Ok(query) = Query::new(language, query_text) {
         let mut cursor = QueryCursor::new();
         let mut matches = cursor.matches(&query, tree.root_node(), content.as_bytes());
-        
+
         if let Some(query_match) = matches.next() {
             for capture in query_match.captures {
                 if let Ok(package_text) = capture.node.utf8_text(content.as_bytes()) {
@@ -666,10 +640,242 @@ fn extract_kotlin_package_from_content(tree: &tree_sitter::Tree, content: &str) 
             }
         }
     }
-    
+
     None
 }
 
+fn extract_java_definitions_from_content(content: &str) -> Option<Vec<String>> {
+    let language = JAVA_PARSER.get_or_init(|| tree_sitter_java::LANGUAGE.into());
+    let mut parser = Parser::new();
+    if parser.set_language(language).is_err() {
+        debug!("Failed to set Java language in parser");
+        return None;
+    }
+
+    let tree = parser.parse(content, None);
+    if tree.is_none() {
+        debug!("Failed to parse Java content (length: {})", content.len());
+        return None;
+    }
+    let tree = tree.unwrap();
+
+    // Extract package declaration
+    let package = extract_java_package_from_content(&tree, content);
+
+    let mut definitions = Vec::new();
+
+    // Query for Java definitions
+    let query_text = r#"
+        (class_declaration name: (identifier) @name)
+        (interface_declaration name: (identifier) @name) 
+        (enum_declaration name: (identifier) @name)
+        (annotation_type_declaration name: (identifier) @name)
+    "#;
+
+    let query = Query::new(language, query_text).ok()?;
+    let mut cursor = QueryCursor::new();
+    let mut matches = cursor.matches(&query, tree.root_node(), content.as_bytes());
+
+    while let Some(query_match) = matches.next() {
+        for capture in query_match.captures {
+            if let Ok(name) = capture.node.utf8_text(content.as_bytes()) {
+                let fully_qualified_name = if let Some(ref pkg) = package {
+                    format!("{}.{}", pkg, name)
+                } else {
+                    name.to_string()
+                };
+                definitions.push(fully_qualified_name);
+            }
+        }
+    }
+
+    if definitions.is_empty() {
+        None
+    } else {
+        Some(definitions)
+    }
+}
+
+fn extract_java_package_from_content(tree: &tree_sitter::Tree, content: &str) -> Option<String> {
+    let language = JAVA_PARSER.get_or_init(|| tree_sitter_java::LANGUAGE.into());
+    let query_text = r#"(package_declaration (scoped_identifier) @package)"#;
+
+    if let Ok(query) = Query::new(language, query_text) {
+        let mut cursor = QueryCursor::new();
+        let mut matches = cursor.matches(&query, tree.root_node(), content.as_bytes());
+
+        if let Some(query_match) = matches.next() {
+            for capture in query_match.captures {
+                if let Ok(package_text) = capture.node.utf8_text(content.as_bytes()) {
+                    return Some(package_text.to_string());
+                }
+            }
+        }
+    }
+
+    None
+}
+
+fn extract_groovy_definitions_from_content(content: &str) -> Option<Vec<String>> {
+    let language = GROOVY_PARSER.get_or_init(|| tree_sitter_groovy::language());
+    let mut parser = Parser::new();
+    if parser.set_language(language).is_err() {
+        debug!("Failed to set Groovy language in parser");
+        return None;
+    }
+
+    let tree = parser.parse(content, None);
+    if tree.is_none() {
+        debug!("Failed to parse Groovy content (length: {})", content.len());
+        return None;
+    }
+    let tree = tree.unwrap();
+
+    // Extract package declaration
+    let package = extract_groovy_package_from_content(&tree, content);
+
+    let mut definitions = Vec::new();
+
+    // Query for Groovy definitions
+    let query_text = r#"
+        (class_declaration name: (identifier) @name)
+        (interface_declaration name: (identifier) @name) 
+        (enum_declaration name: (identifier) @name)
+        (annotation_declaration name: (identifier) @name)
+        (trait_declaration name: (identifier) @name)
+    "#;
+
+    let query = Query::new(language, query_text).ok()?;
+    let mut cursor = QueryCursor::new();
+    let mut matches = cursor.matches(&query, tree.root_node(), content.as_bytes());
+
+    while let Some(query_match) = matches.next() {
+        for capture in query_match.captures {
+            if let Ok(name) = capture.node.utf8_text(content.as_bytes()) {
+                let fully_qualified_name = if let Some(ref pkg) = package {
+                    format!("{}.{}", pkg, name)
+                } else {
+                    name.to_string()
+                };
+                definitions.push(fully_qualified_name);
+            }
+        }
+    }
+
+    if definitions.is_empty() {
+        None
+    } else {
+        Some(definitions)
+    }
+}
+
+fn extract_groovy_package_from_content(tree: &tree_sitter::Tree, content: &str) -> Option<String> {
+    let language = GROOVY_PARSER.get_or_init(|| tree_sitter_groovy::language());
+    let query_text = r#"(package_declaration (dotted_identifier) @package)"#;
+
+    if let Ok(query) = Query::new(language, query_text) {
+        let mut cursor = QueryCursor::new();
+        let mut matches = cursor.matches(&query, tree.root_node(), content.as_bytes());
+
+        if let Some(query_match) = matches.next() {
+            for capture in query_match.captures {
+                if let Ok(package_text) = capture.node.utf8_text(content.as_bytes()) {
+                    return Some(package_text.to_string());
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Lazy content-based symbol search for when filename-based lookup fails
+#[tracing::instrument(skip_all)]
+pub fn find_symbol_in_jar_content(
+    jar_path: &PathBuf,
+    target_symbol: &str,
+) -> Option<String> {
+    let jar_data = std::fs::read(jar_path).ok()?;
+    let cursor = std::io::Cursor::new(jar_data);
+    let mut archive = ZipArchive::new(cursor).ok()?;
+
+    // Only check source files that are likely to contain multiple symbols
+    for i in 0..archive.len() {
+        let file = match archive.by_index(i) {
+            Ok(file) => file,
+            Err(_) => continue,
+        };
+        let file_name = file.name().to_string();
+
+        if !should_check_for_multiple_symbols(&file_name) {
+            continue;
+        }
+
+        drop(file); // Drop the first file handle
+        let mut file_content = match archive.by_index(i) {
+            Ok(file) => file,
+            Err(_) => continue,
+        };
+
+        let mut content = String::new();
+        if file_content.read_to_string(&mut content).is_err() {
+            continue;
+        }
+
+        let extracted_names = if file_name.ends_with(".kt") {
+            extract_kotlin_definitions_from_content(&content)
+        } else if file_name.ends_with(".java") {
+            extract_java_definitions_from_content(&content)
+        } else if file_name.ends_with(".groovy") {
+            extract_groovy_definitions_from_content(&content)
+        } else {
+            continue;
+        };
+
+        if let Some(names) = extracted_names {
+            for name in names {
+                if name == target_symbol {
+                    debug!("Found {} via content parsing in {}", target_symbol, file_name);
+                    return Some(file_name);
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Heuristics to determine if a file is likely to contain multiple symbols
+/// and worth parsing content for
+fn should_check_for_multiple_symbols(file_path: &str) -> bool {
+    // Skip files unlikely to have multiple symbols
+    if file_path.contains('$') || file_path.contains("/test/") {
+        return false;
+    }
+
+    // Check file naming patterns that often contain multiple symbols
+    let file_name = file_path.split('/').last().unwrap_or("");
+    let name_lower = file_name.to_lowercase();
+    
+    // Common patterns for files with multiple classes
+    let multiple_symbol_patterns = [
+        "util", "helper", "constants", "config", "builder", 
+        "factory", "manager", "service", "handler", "processor",
+        "adapter", "converter", "transformer", "validator"
+    ];
+
+    // Check if filename suggests multiple symbols
+    for pattern in &multiple_symbol_patterns {
+        if name_lower.contains(pattern) {
+            return true;
+        }
+    }
+
+    // TODO: Could also check file size here if we want to be more sophisticated
+    // Large files are more likely to have multiple symbols
+
+    false
+}
 
 pub fn get_gradle_cache_base() -> Option<PathBuf> {
     // 0. User-defined path
@@ -724,28 +930,8 @@ pub fn get_gradle_cache_base() -> Option<PathBuf> {
     fallback_path
 }
 
-#[tracing::instrument(skip_all)]
-pub fn index_jar_with_decompilation_with_paths(
-    jar_path: &PathBuf,
-    project_path: &PathBuf,
-    cache: Arc<DependencyCache>,
-    class_name_to_path: &HashMap<String, String>,
-    dependency: &ExternalDependency,
-) -> Result<()> {
-    debug!("index_jar_with_decompilation_with_paths called for JAR: {} with {} target classes", jar_path.display(), class_name_to_path.len());
-    
-    if dependency.artifact.contains("spring") && class_name_to_path.keys().any(|s| s.contains("Service")) {
-        debug!("Processing Spring JAR {} with Service classes: {:?}", 
-               dependency.artifact, class_name_to_path.keys().filter(|s| s.contains("Service")).collect::<Vec<_>>());
-    }
-
-    debug!("Using class indexing with paths for {}", dependency.artifact);
-    index_jar_classes_metadata_with_paths(jar_path, project_path, cache, class_name_to_path, dependency)
-}
-
-
 /// Index classes with internal paths for source extraction or decompilation
-#[tracing::instrument(skip_all)]  
+#[tracing::instrument(skip_all)]
 pub fn index_jar_classes_metadata_with_paths(
     jar_path: &PathBuf,
     project_path: &PathBuf,
@@ -753,33 +939,23 @@ pub fn index_jar_classes_metadata_with_paths(
     class_name_to_path: &HashMap<String, String>,
     dependency: &ExternalDependency,
 ) -> Result<()> {
-    debug!("Indexing classes with paths: {}", jar_path.display());
-    debug!("Received {} classes to index for {}", class_name_to_path.len(), dependency.artifact);
-    
-    if dependency.artifact.contains("kotlin") || dependency.artifact.contains("stdlib") {
-        debug!("kotlin-stdlib indexing: received {} classes", class_name_to_path.len());
-        if class_name_to_path.keys().any(|s| s.contains("String")) {
-            debug!("kotlin-stdlib has String classes: {:?}", class_name_to_path.keys().filter(|s| s.contains("String")).collect::<Vec<_>>());
-        }
-    }
-    
     let mut classes_indexed = 0;
-    
-    // Index all the extracted class names with their internal JAR paths
+
     for (class_name, internal_path) in class_name_to_path {
-        // Create SourceFileInfo - get_content() will handle source extraction or decompilation
         let source_info = SourceFileInfo::new_for_decompilation(
             jar_path.clone(),
-            Some(internal_path.clone()), 
+            Some(internal_path.clone()),
             Some(dependency.clone()),
         );
 
         let key = (project_path.clone(), class_name.clone());
-        debug!("Inserting into project_external_infos: project={:?}, class={}, path={}", project_path, class_name, internal_path);
         cache.project_external_infos.insert(key, source_info);
         classes_indexed += 1;
     }
 
-    debug!("Indexed {} classes with paths from {}", classes_indexed, dependency.artifact);
+    debug!(
+        "Indexed {} classes with paths from {}",
+        classes_indexed, dependency.artifact
+    );
     Ok(())
 }

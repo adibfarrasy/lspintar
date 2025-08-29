@@ -66,9 +66,17 @@ async fn find_project_external(
     };
 
 
-    // First try current project
+    // For core Java classes, check builtins first to avoid triggering decompilation
+    // when source files exist in JAVA_HOME/src.zip
+    if is_core_java_class(&resolved_symbol) {
+        if let Some(source_info) = dependency_cache.find_builtin_info(&resolved_symbol) {
+            return search_external_definition_and_convert(&symbol_name, source_info);
+        }
+    }
+
+    // First try current project with lazy parsing fallback
     if let Some(source_info) = dependency_cache
-        .find_project_external_info(&current_project, &resolved_symbol)
+        .find_external_symbol_with_lazy_parsing(&current_project, &resolved_symbol)
         .await
     {
         return search_external_definition_and_convert(&symbol_name, source_info);
@@ -79,7 +87,7 @@ async fn find_project_external(
         for dependent_project_ref in project_metadata.inter_project_deps.iter() {
             let dependent_project = dependent_project_ref.clone();
             if let Some(source_info) = dependency_cache
-                .find_project_external_info(&dependent_project, &resolved_symbol)
+                .find_external_symbol_with_lazy_parsing(&dependent_project, &resolved_symbol)
                 .await
             {
                 return search_external_definition_and_convert(&symbol_name, source_info);
@@ -107,7 +115,7 @@ async fn find_project_external(
             if !checked_projects.contains(project_root) {
                 checked_projects.insert(project_root.clone());
                 if let Some(source_info) = dependency_cache
-                    .find_project_external_info(project_root, &resolved_symbol)
+                    .find_external_symbol_with_lazy_parsing(project_root, &resolved_symbol)
                     .await
                 {
                     return search_external_definition_and_convert(&symbol_name, source_info);
@@ -153,5 +161,17 @@ fn search_external_definition_and_convert(
         .ok()?;
 
     node_to_lsp_location(&definition_node, &file_uri)
+}
+
+/// Check if a class is a core Java class that should prioritize builtin sources
+/// over JAR dependencies to avoid unnecessary decompilation  
+fn is_core_java_class(fully_qualified_name: &str) -> bool {
+    use crate::languages::java::constants::JAVA_COMMON_IMPORTS;
+    
+    // Convert import patterns (java.lang.*) to prefixes (java.lang.) for matching
+    JAVA_COMMON_IMPORTS.iter().any(|import| {
+        let prefix = import.strip_suffix(".*").unwrap_or(import);
+        fully_qualified_name.starts_with(&format!("{}.", prefix))
+    })
 }
 

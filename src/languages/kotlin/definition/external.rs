@@ -69,6 +69,24 @@ async fn find_project_external(
         symbol_name.clone()
     };
 
+    // For core Kotlin types, check builtins first to avoid triggering decompilation
+    // when source files exist in Kotlin standard library
+    if is_core_kotlin_type(&resolved_symbol) {
+        // Try multiple Kotlin builtin candidates
+        let builtin_candidates = vec![
+            resolved_symbol.clone(),
+            format!("commonMain.kotlin.{}", resolved_symbol),
+            format!("jvmMain.kotlin.{}", resolved_symbol),
+            format!("kotlin.{}", resolved_symbol),
+        ];
+        
+        for candidate in &builtin_candidates {
+            if let Some(builtin_info) = dependency_cache.find_builtin_info(candidate) {
+                return search_external_definition_and_convert(&symbol_name, builtin_info);
+            }
+        }
+    }
+
     // First try current project  
     // For basic types and collections, also try with kotlin prefix
     let common_kotlin_types = ["String", "Int", "Long", "Double", "Float", "Boolean", "Char", "Byte", "Short", "Any", "Unit", "Nothing", "List", "MutableList", "Set", "MutableSet", "Map", "MutableMap", "Collection", "MutableCollection", "Array", "BooleanArray", "ByteArray", "CharArray", "DoubleArray", "FloatArray", "IntArray", "LongArray", "ShortArray"];
@@ -106,7 +124,7 @@ async fn find_project_external(
         
         // Then try external info (for decompiled .class files)
         if let Some(source_info) = dependency_cache
-            .find_project_external_info(&current_project, candidate)
+            .find_external_symbol_with_lazy_parsing(&current_project, candidate)
             .await
         {
             return search_external_definition_and_convert(&symbol_name, source_info);
@@ -118,7 +136,7 @@ async fn find_project_external(
         for dependent_project_ref in project_metadata.inter_project_deps.iter() {
             let dependent_project = dependent_project_ref.clone();
             if let Some(source_info) = dependency_cache
-                .find_project_external_info(&dependent_project, &resolved_symbol)
+                .find_external_symbol_with_lazy_parsing(&dependent_project, &resolved_symbol)
                 .await
             {
                 return search_external_definition_and_convert(&symbol_name, source_info);
@@ -198,5 +216,20 @@ fn search_external_definition_and_convert(
     
     let file_uri = get_uri(&source_info)?;
     node_to_lsp_location(&definition_node, &file_uri)
+}
+
+/// Check if a type is a core Kotlin type that should prioritize builtin sources
+/// over JAR dependencies to avoid unnecessary decompilation
+fn is_core_kotlin_type(type_name: &str) -> bool {
+    const CORE_KOTLIN_TYPES: &[&str] = &[
+        "String", "Int", "Long", "Double", "Float", "Boolean", "Char", "Byte", "Short",
+        "Any", "Unit", "Nothing",
+        "List", "MutableList", "Set", "MutableSet", "Map", "MutableMap",
+        "Collection", "MutableCollection",
+        "Array", "BooleanArray", "ByteArray", "CharArray", "DoubleArray", 
+        "FloatArray", "IntArray", "LongArray", "ShortArray",
+    ];
+    
+    CORE_KOTLIN_TYPES.contains(&type_name)
 }
 
