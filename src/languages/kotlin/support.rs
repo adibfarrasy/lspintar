@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
 use tower_lsp::lsp_types::{Diagnostic, Hover, Location, Position};
-use tracing::{debug, warn};
+use tracing::warn;
 use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator, Tree};
 
 use crate::core::queries::QueryProvider;
@@ -291,7 +291,6 @@ impl LanguageSupport for KotlinSupport {
             }
         }
 
-        debug!("result: {:#?}", result);
 
         result
     }

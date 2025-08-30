@@ -3,7 +3,6 @@ use std::sync::Arc;
 use anyhow::Result;
 use tower_lsp::lsp_types::{Diagnostic, Hover, Location, Position};
 use tree_sitter::{Node, Parser, Tree};
-use tracing::debug;
 
 use crate::core::{dependency_cache::DependencyCache, queries::QueryProvider, symbols::SymbolType};
 

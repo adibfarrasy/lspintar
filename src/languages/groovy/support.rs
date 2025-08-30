@@ -464,11 +464,9 @@ impl LanguageSupport for GroovySupport {
         method_name: &str,
         call_signature: &crate::languages::common::method_resolution::CallSignature,
     ) -> Option<tree_sitter::Node<'a>> {
-        debug!("SIG: groovy trait method called for '{}'", method_name);
         let result = crate::languages::groovy::definition::method_resolution::find_method_with_signature(
             tree, source, method_name, call_signature
         );
-        debug!("SIG: groovy trait returning: {}", result.is_some());
         result
     }
 
@@ -654,7 +652,6 @@ impl GroovySupport {
 
         // First, try to find the class definition using existing resolution chain
         // We create a fake node with the class name for the search
-        // let class_usage_text = class_name.as_bytes();
 
         // Find the class first using the standard resolution chain
         let class_location = self

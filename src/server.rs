@@ -11,7 +11,6 @@ use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::LanguageServer;
-use tracing::debug;
 use tree_sitter::Tree;
 
 use crate::core::build_tools::{detect_build_tool, run_gradle_build, BuildTool};
@@ -131,9 +130,6 @@ impl LanguageServer for LspServer {
             })?;
         }
 
-        tracing::debug!("Initialize params root_uri: {:?}", params.root_uri);
-        tracing::debug!("Initialize params workspace_folders: {:?}", params.workspace_folders);
-        tracing::debug!("env::current_dir: {:?}", env::current_dir().unwrap());
         
         let client_root = params
             .root_uri
@@ -149,7 +145,6 @@ impl LanguageServer for LspServer {
             })
             .or_else(|| Some(env::current_dir().unwrap()));
 
-        tracing::debug!("client_root resolved to: {:?}", client_root);
         let effective_root = self.find_true_workspace_root(&client_root.unwrap()).await;
 
         *self.workspace_root.write().await = Some(effective_root.clone());
@@ -367,11 +362,9 @@ impl LanguageServer for LspServer {
                 if let Some(hover) = language_support.provide_hover(&tree, &content, location) {
                     return Ok(Some(hover));
                 } else {
-                    debug!("hover: provide_hover returned None for target file");
                 }
             }
             Err(e) => {
-                debug!("hover: find_definition failed with error: {}", e);
             }
         }
 
@@ -692,34 +685,28 @@ impl LspServer {
     }
 
     async fn find_true_workspace_root(&self, suggested_root: &PathBuf) -> PathBuf {
-        tracing::debug!("find_true_workspace_root called with: {:?}", suggested_root);
         
         if is_path_in_external_dependency(suggested_root) {
             if let Some(dep_root) = find_external_dependency_root(suggested_root) {
-                tracing::debug!("Found external dependency root: {:?}", dep_root);
                 return dep_root;
             }
         }
 
         // First, try to find workspace root starting from suggested root
         if let Some(root) = find_workspace_root(suggested_root) {
-            tracing::debug!("find_workspace_root returned: {:?}", root);
             return root;
         }
 
         // If no workspace root found from suggested directory, try to find project root directly
         if let Some(project_root) = find_project_root(suggested_root) {
-            tracing::debug!("Found project root: {:?}", project_root);
             return project_root;
         }
 
         // If still no project root found, search in subdirectories (for cases where LSP client provides parent dir)
         if let Some(project_root) = self.search_for_project_in_subdirectories(suggested_root) {
-            tracing::debug!("Found project root in subdirectory: {:?}", project_root);
             return project_root;
         }
 
-        tracing::debug!("No project found, returning suggested_root: {:?}", suggested_root);
         suggested_root.clone()
     }
 
@@ -765,7 +752,6 @@ impl LspServer {
     }
 
     async fn update_cache(&self, path: Option<PathBuf>) {
-        tracing::debug!("update_cache called with path: {:?}", path);
         if let Some(dir) = path {
             let cache_loaded = if !is_external_dependency(&dir) {
                 match self.dependency_cache.check_and_initialize_cache(&dir).await {

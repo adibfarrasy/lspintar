@@ -1,5 +1,4 @@
 use tree_sitter::{Node, Query, QueryCursor, StreamingIterator, Tree};
-use tracing::debug;
 
 #[derive(Debug, Clone)]
 pub struct CallSignature {
@@ -21,7 +20,6 @@ pub fn find_method_with_signature<'a>(
     method_name: &str,
     call_signature: &CallSignature,
 ) -> Option<Node<'a>> {
-    debug!("SIG: groovy impl called for '{}'", method_name);
     
     let query_text = r#"(method_declaration name: (identifier) @name)"#;
     

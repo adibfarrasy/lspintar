@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use tower_lsp::lsp_types::{Diagnostic, Hover, Location, Position};
 use tracing::warn;
 use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator, Tree};
@@ -431,8 +431,6 @@ impl LanguageSupport for JavaSupport {
     }
 
     fn find_field_declaration_type(&self, field_name: &str, tree: &Tree, source: &str) -> Option<String> {
-        use tracing::debug;
-        debug!("JAVA: find_field_declaration_type: looking for field '{}' in source", field_name);
         
         let query_text = r#"
             ; Field declaration with modifiers
@@ -468,7 +466,6 @@ impl LanguageSupport for JavaSupport {
         let query = match tree_sitter::Query::new(&language, query_text) {
             Ok(q) => q,
             Err(e) => {
-                debug!("JAVA: find_field_declaration_type: failed to create query: {:?}", e);
                 return None;
             }
         };
@@ -476,12 +473,10 @@ impl LanguageSupport for JavaSupport {
         let mut cursor = tree_sitter::QueryCursor::new();
         let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
         
-        debug!("JAVA: find_field_declaration_type: executing tree-sitter query for field declarations");
         let mut match_count = 0;
         
         while let Some(query_match) = matches.next() {
             match_count += 1;
-            debug!("JAVA: find_field_declaration_type: processing match #{}", match_count);
             
             let mut found_field_name = false;
             let mut field_type = None;
@@ -489,12 +484,10 @@ impl LanguageSupport for JavaSupport {
             for capture in query_match.captures {
                 let capture_name = query.capture_names()[capture.index as usize];
                 if let Ok(node_text) = capture.node.utf8_text(source.as_bytes()) {
-                    debug!("JAVA: find_field_declaration_type: found capture '{}' = '{}'", capture_name, node_text);
                     
                     match capture_name {
                         "field_name" | "generic_field_name" => {
                             if node_text == field_name {
-                                debug!("JAVA: find_field_declaration_type: found matching field name '{}'", field_name);
                                 found_field_name = true;
                             }
                         }
@@ -507,18 +500,14 @@ impl LanguageSupport for JavaSupport {
             }
             
             if found_field_name && field_type.is_some() {
-                debug!("JAVA: find_field_declaration_type: successfully found field '{}' with type '{:?}'", field_name, field_type);
                 return field_type;
             }
         }
         
-        debug!("JAVA: find_field_declaration_type: no field declaration found for '{}' (processed {} matches)", field_name, match_count);
         None
     }
     
     fn find_variable_declaration_type(&self, variable_name: &str, tree: &Tree, source: &str, _usage_node: &Node) -> Option<String> {
-        use tracing::debug;
-        debug!("JAVA: find_variable_declaration_type: looking for variable '{}' in source", variable_name);
         
         let query_text = r#"
             (local_variable_declaration 
@@ -554,18 +543,14 @@ impl LanguageSupport for JavaSupport {
             }
             
             if found_var_name && var_type.is_some() {
-                debug!("JAVA: find_variable_declaration_type: found variable '{}' with type '{:?}'", variable_name, var_type);
                 return var_type;
             }
         }
         
-        debug!("JAVA: find_variable_declaration_type: no variable declaration found for '{}'", variable_name);
         None
     }
     
     fn find_parameter_type(&self, param_name: &str, tree: &Tree, source: &str, _usage_node: &Node) -> Option<String> {
-        use tracing::debug;
-        debug!("JAVA: find_parameter_type: looking for parameter '{}' in source", param_name);
         
         let query_text = r#"
             (formal_parameter
@@ -600,12 +585,10 @@ impl LanguageSupport for JavaSupport {
             }
             
             if found_param_name && param_type.is_some() {
-                debug!("JAVA: find_parameter_type: found parameter '{}' with type '{:?}'", param_name, param_type);
                 return param_type;
             }
         }
         
-        debug!("JAVA: find_parameter_type: no parameter declaration found for '{}'", param_name);
         None
     }
 

@@ -21,11 +21,9 @@ pub fn extract_static_method_context(usage_node: &Node, source: &str) -> Option<
 
     let method_invocation = find_parent_method_invocation_node(usage_node);
     if method_invocation.is_none() {
-        debug!("extract_static_method_context: no method_invocation parent found");
         return None;
     }
     let method_invocation = method_invocation.unwrap();
-    debug!("extract_static_method_context: found method_invocation parent of kind '{}'", method_invocation.kind());
 
     // Check if this method invocation has an object field (static method pattern)
     let object_node = method_invocation.child_by_field_name("object");
@@ -87,11 +85,9 @@ pub fn extract_instance_method_context(
 
     let method_invocation = find_parent_method_invocation_node(usage_node);
     if method_invocation.is_none() {
-        debug!("extract_instance_method_context: no method_invocation parent found");
         return None;
     }
     let method_invocation = method_invocation.unwrap();
-    debug!("extract_instance_method_context: found method_invocation parent");
 
     // Check if this method invocation has an object field (instance method pattern)
     let object_node = method_invocation.child_by_field_name("object")?;
@@ -182,7 +178,6 @@ pub fn find_static_method_definition(
         if let Some(method_location) = search_method_in_class_file(
             &location, method_name, language_support
         ) {
-            debug!("find_static_method_definition: found method {} in class file", method_name);
             return Some(method_location);
         }
         

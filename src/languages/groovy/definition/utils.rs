@@ -1,7 +1,6 @@
 use std::{fs::read_to_string, path::PathBuf};
 
 use tower_lsp::lsp_types::Location;
-use tracing::debug;
 use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator, Tree};
 
 use crate::{
@@ -195,19 +194,12 @@ fn find_parent_method_invocation_node<'a>(node: &Node<'a>) -> Option<Node<'a>> {
 /// Detect if a method call is static and extract the class name
 pub fn extract_static_method_context(usage_node: &Node, source: &str) -> Option<(String, String)> {
     let usage_text = usage_node.utf8_text(source.as_bytes()).unwrap_or("");
-    debug!(
-        "extract_static_method_context: analyzing node '{}' of kind '{}'",
-        usage_text,
-        usage_node.kind()
-    );
 
     let method_invocation = find_parent_method_invocation_node(usage_node);
     if method_invocation.is_none() {
-        debug!("extract_static_method_context: no method_invocation parent found");
         return None;
     }
     let method_invocation = method_invocation.unwrap();
-    debug!("extract_static_method_context: found method_invocation parent");
 
     // Check if this method invocation has an object field (static method pattern)
     let object_node = method_invocation.child_by_field_name("object")?;
@@ -219,10 +211,6 @@ pub fn extract_static_method_context(usage_node: &Node, source: &str) -> Option<
         .ok()?
         .to_string();
 
-    debug!(
-        "extract_static_method_context: found class_name='{}', method_name='{}', usage_text='{}'",
-        class_name, method_name, usage_text
-    );
 
     // Only return Some for actual static method calls (class name starts with uppercase)
     if class_name
@@ -232,19 +220,14 @@ pub fn extract_static_method_context(usage_node: &Node, source: &str) -> Option<
     {
         // This looks like a static method call (ClassName.method)
         if usage_text == method_name {
-            debug!("extract_static_method_context: usage_node matches method name - static method call detected");
             Some((class_name, method_name))
         } else if usage_text == class_name {
-            debug!("extract_static_method_context: usage_node matches class name - returning static method context anyway");
             Some((class_name, method_name))
         } else {
-            debug!("extract_static_method_context: usage_node '{}' matches neither class '{}' nor method '{}'", 
-                   usage_text, class_name, method_name);
             None
         }
     } else {
         // This looks like an instance method call (variable.method) - not a static method call
-        debug!("extract_static_method_context: object '{}' looks like a variable (lowercase) - not a static method call", class_name);
         None
     }
 }
@@ -255,19 +238,12 @@ pub fn extract_instance_method_context(
     source: &str,
 ) -> Option<(String, String)> {
     let usage_text = usage_node.utf8_text(source.as_bytes()).unwrap_or("");
-    debug!(
-        "extract_instance_method_context: analyzing node '{}' of kind '{}'",
-        usage_text,
-        usage_node.kind()
-    );
 
     let method_invocation = find_parent_method_invocation_node(usage_node);
     if method_invocation.is_none() {
-        debug!("extract_instance_method_context: no method_invocation parent found");
         return None;
     }
     let method_invocation = method_invocation.unwrap();
-    debug!("extract_instance_method_context: found method_invocation parent");
 
     // Check if this method invocation has an object field (instance method pattern)
     let object_node = method_invocation.child_by_field_name("object")?;
@@ -279,24 +255,16 @@ pub fn extract_instance_method_context(
         .ok()?
         .to_string();
 
-    debug!("extract_instance_method_context: found variable_name='{}', method_name='{}', usage_text='{}'", 
-           variable_name, method_name, usage_text);
 
     // Verify that the usage_node is the method name part
     if usage_text == method_name {
         // Check if the object looks like a variable (lowercase first letter) vs class (uppercase first letter)
         if variable_name.chars().next()?.is_lowercase() {
-            debug!("extract_instance_method_context: usage_node matches method name and object is lowercase - instance method call detected");
             Some((variable_name, method_name))
         } else {
-            debug!("extract_instance_method_context: object '{}' looks like a class name (uppercase) - not an instance method call", variable_name);
             None // This looks like a static method call
         }
     } else {
-        debug!(
-            "extract_instance_method_context: usage_node '{}' doesn't match method name '{}'",
-            usage_text, method_name
-        );
         None
     }
 }
@@ -720,7 +688,6 @@ fn resolve_through_imports(
     project_root: &PathBuf,
     dependency_cache: &DependencyCache,
 ) -> Option<(PathBuf, String)> {
-    debug!("resolve_through_imports: looking for specific imports for '{}'", symbol_name);
     
     let query_text = r#"
         (import_declaration) @import_decl
@@ -748,68 +715,54 @@ fn resolve_through_imports(
                         .trim_end_matches(';')
                         .trim();
 
-                    debug!("resolve_through_imports: found import: '{}'", import_text);
 
                     // Only handle specific imports here - wildcard imports are handled in resolve_through_wildcard_imports
-                    debug!("resolve_through_imports: checking if import '{}' ends with '.{}'", import_text, symbol_name);
                     if import_text.ends_with(&format!(".{}", symbol_name)) {
-                        debug!("resolve_through_imports: import '{}' matches symbol '{}'", import_text, symbol_name);
                         // Check both local symbols, external dependencies, and builtin classes using read-through cache
                         let explicit_key = (project_root.clone(), import_text.to_string());
-                        debug!("resolve_through_imports: checking cache for key: ({:?}, '{}')", explicit_key.0, explicit_key.1);
                         
                         // First try current project (symbols and builtins)
                         if dependency_cache.find_symbol_sync(&explicit_key.0, &explicit_key.1).is_some()
                             || dependency_cache.find_builtin_info(&explicit_key.1).is_some() {
-                            debug!("resolve_through_imports: found specific import in current project: '{}'", import_text);
                             specific_import = Some(explicit_key.clone());
                             return;
                         }
                         
                         // Then try current project's external dependencies (JAR files)
-                        debug!("resolve_through_imports: checking external dependencies of current project for import '{}'", import_text);
                         if let Some(_) = tokio::task::block_in_place(|| {
                             tokio::runtime::Handle::current().block_on(async {
                                 dependency_cache.find_project_external_info(project_root, import_text).await
                             })
                         }) {
-                            debug!("resolve_through_imports: found specific import in external dependencies of current project: '{}'", import_text);
                             specific_import = Some(explicit_key);
                             return;
                         }
                         
                         // Then try dependency projects
                         if let Some(project_metadata) = dependency_cache.project_metadata.get(project_root) {
-                            debug!("resolve_through_imports: checking {} dependency projects for import", project_metadata.inter_project_deps.len());
                             for dependent_project_ref in project_metadata.inter_project_deps.iter() {
                                 let dependent_project = dependent_project_ref.clone();
                                 let dep_key = (dependent_project.clone(), import_text.to_string());
-                                debug!("resolve_through_imports: checking dependency project {:?} for import '{}'", dependent_project, import_text);
                                 
                                 if dependency_cache.find_symbol_sync(&dep_key.0, &dep_key.1).is_some()
                                     || dependency_cache.find_builtin_info(&dep_key.1).is_some() {
-                                    debug!("resolve_through_imports: found specific import in dependency project {:?}: '{}'", dependent_project, import_text);
                                     specific_import = Some(dep_key);
                                     return;
                                 }
                                 
                                 // Also check external dependencies of this dependency project
-                                debug!("resolve_through_imports: checking external dependencies of project {:?} for import '{}'", dependent_project, import_text);
                                 if let Some(_) = tokio::task::block_in_place(|| {
                                     tokio::runtime::Handle::current().block_on(async {
                                         dependency_cache.find_project_external_info(&dependent_project, import_text).await
                                     })
                                 }) {
-                                    debug!("resolve_through_imports: found specific import in external dependencies of project {:?}: '{}'", dependent_project, import_text);
                                     specific_import = Some(dep_key);
                                     return;
                                 }
                             }
                         }
                         
-                        debug!("resolve_through_imports: import '{}' not found in current project or dependencies", import_text);
                     } else if !import_text.ends_with("*") {
-                        debug!("resolve_through_imports: import '{}' does not match symbol '{}'", import_text, symbol_name);
                     }
                 };
             }
@@ -825,14 +778,11 @@ fn resolve_through_wildcard_imports(
     project_root: &PathBuf,
     dependency_cache: &DependencyCache,
 ) -> Option<(PathBuf, String)> {
-    debug!("resolve_through_wildcard_imports: resolving '{}'", symbol_name);
     
     // Get all wildcard imports from the source
     let wildcard_packages = get_wildcard_imports(source);
     if wildcard_packages.is_none() {
-        debug!("resolve_through_wildcard_imports: no wildcard packages found");
     } else {
-        debug!("resolve_through_wildcard_imports: wildcard packages: {:?}", wildcard_packages);
     }
     let wildcard_packages = wildcard_packages?;
 
@@ -850,7 +800,6 @@ fn resolve_through_wildcard_imports(
         if prefixes.iter().any(|prefix| fqn.starts_with(prefix)) {
             // Check if this symbol actually exists using read-through cache
             if dependency_cache.find_symbol_sync(project_root, &fqn).is_some() {
-                debug!("resolve_through_wildcard_imports: found project symbol via wildcard: '{}'", fqn);
                 return Some((project_root.clone(), fqn));
             }
         }
@@ -866,17 +815,14 @@ fn resolve_through_wildcard_imports(
         };
         
         let potential_fqn = format!("{}.{}", clean_package, symbol_name);
-        debug!("resolve_through_wildcard_imports: checking FQN: '{}'", potential_fqn);
         
         // First try project symbols (for static imports and regular classes)
         if dependency_cache.find_symbol_sync(project_root, &potential_fqn).is_some() {
-            debug!("resolve_through_wildcard_imports: found project symbol: '{}'", potential_fqn);
             return Some((project_root.clone(), potential_fqn));
         }
         
         // Then try builtin classes
         if dependency_cache.find_builtin_info(&potential_fqn).is_some() {
-            debug!("resolve_through_wildcard_imports: found builtin class: '{}'", potential_fqn);
             return Some((project_root.clone(), potential_fqn));
         }
     }
@@ -887,13 +833,10 @@ fn resolve_through_wildcard_imports(
     
     for package in &packages {
         let fqn = format!("{}.{}", package, symbol_name);
-        debug!("resolve_through_wildcard_imports: checking indexed package {} FQN: '{}'", package, fqn);
         if dependency_cache.find_builtin_info(&fqn).is_some() {
-            debug!("resolve_through_wildcard_imports: found indexed builtin class: '{}'", fqn);
             return Some((project_root.clone(), fqn));
         }
     }
-    debug!("resolve_through_wildcard_imports: symbol '{}' not found in indexed builtin packages", symbol_name);
 
     None
 }
@@ -1001,8 +944,7 @@ pub fn resolve_symbol_with_imports(
     source: &str,
     dependency_cache: &DependencyCache,
 ) -> Option<String> {
-    use tracing::debug;
-    
+        
     // Extract imports from source
     let imports = extract_imports_from_source(source);
     
@@ -1014,7 +956,6 @@ pub fn resolve_symbol_with_imports(
         let exact_match = import == symbol_name;
         
         if matches_suffix || exact_match {
-            debug!("Groovy resolve_symbol_with_imports: found exact match import {}", import);
             return Some(import.clone());
         }
         
@@ -1047,12 +988,10 @@ pub fn resolve_symbol_with_imports(
             "Collection", "List", "Set", "Map", "ArrayList", "HashMap", "HashSet",
             "LinkedList", "TreeMap", "TreeSet", "Queue", "Deque", "Stack", "Vector"].contains(&symbol_name.as_ref()) {
             let java_lang_fqn = format!("java.lang.{}", symbol_name);
-            debug!("Groovy resolve_symbol_with_imports: using java.lang for common type: {}", java_lang_fqn);
             return Some(java_lang_fqn);
         } else {
             // Try groovy.lang for Groovy-specific types
             let groovy_lang_fqn = format!("groovy.lang.{}", symbol_name);
-            debug!("Groovy resolve_symbol_with_imports: using groovy.lang for Groovy type: {}", groovy_lang_fqn);
             return Some(groovy_lang_fqn);
         }
     }
@@ -1061,11 +1000,9 @@ pub fn resolve_symbol_with_imports(
     for package in star_imports {
         let candidate_fqn = format!("{}.{}", package, symbol_name);
         // TODO: Could verify this FQN exists in cache/database, but for now assume it's correct
-        debug!("Groovy resolve_symbol_with_imports: trying star import: {}", candidate_fqn);
         return Some(candidate_fqn);
     }
     
-    debug!("Groovy resolve_symbol_with_imports: no resolution found for {}", symbol_name);
     None
 }
 

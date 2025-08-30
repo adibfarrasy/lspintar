@@ -23,7 +23,6 @@ pub fn handle(
     location: Location,
     language_support: &dyn LanguageSupport,
 ) -> Option<Hover> {
-    debug!("hover::handle: called with location {:?}", location);
     let node = location_to_node(&location, tree);
     if node.is_none() {
         debug!(
@@ -56,7 +55,6 @@ pub fn handle(
                 "interface_declaration" => extract_interface_signature(tree, source),
                 "enum_declaration" => extract_enum_signature(tree, source),
                 _ => {
-                    debug!("hover::handle: Type has unknown node kind '{}', trying interface extraction first", node.kind());
                     // Try interface extraction first, then fall back to generic type info
                     extract_interface_signature(tree, source)
                         .or_else(|| extract_class_signature(tree, source))
