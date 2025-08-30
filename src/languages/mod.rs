@@ -10,6 +10,13 @@ use std::sync::Arc;
 
 pub use traits::LanguageSupport;
 
+/// All supported language implementations for cross-language resolution
+pub const ALL_LANGUAGE_SUPPORTS: &[fn() -> Box<dyn LanguageSupport + Send + Sync>] = &[
+    || Box::new(crate::languages::java::support::JavaSupport::new()),
+    || Box::new(crate::languages::groovy::support::GroovySupport::new()),
+    || Box::new(crate::languages::kotlin::support::KotlinSupport::new()),
+];
+
 pub struct LanguageRegistry {
     languages: HashMap<String, Arc<dyn LanguageSupport>>,
     extension_map: HashMap<String, String>,

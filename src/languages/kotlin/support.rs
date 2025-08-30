@@ -361,6 +361,26 @@ impl LanguageSupport for KotlinSupport {
         set_start_position(source, usage_node, file_uri)
     }
 
+    fn find_method_with_signature<'a>(
+        &self,
+        tree: &'a Tree,
+        source: &str,
+        method_name: &str,
+        call_signature: &crate::languages::common::method_resolution::CallSignature,
+    ) -> Option<tree_sitter::Node<'a>> {
+        // Convert the common CallSignature to Kotlin's CallSignature
+        let kotlin_call_sig = crate::languages::kotlin::definition::method_resolution::CallSignature {
+            parameter_count: call_signature.arg_count,
+            parameter_types: call_signature.arg_types.iter()
+                .map(|t| t.as_deref().unwrap_or("Any").to_string())
+                .collect(),
+        };
+        
+        crate::languages::kotlin::definition::method_resolution::find_method_with_signature(
+            tree, source, method_name, &kotlin_call_sig
+        )
+    }
+
     fn find_definition_chain(
         &self,
         tree: &Tree,
@@ -369,33 +389,298 @@ impl LanguageSupport for KotlinSupport {
         file_uri: &str,
         usage_node: &Node,
     ) -> Result<Location> {
-        // Use the standard definition resolution chain
-        let local_result = self.find_local(tree, source, file_uri, usage_node);
+        // Use the common method resolution logic that handles static/instance method calls
+        crate::languages::common::method_resolution::find_definition_chain_with_method_resolution(
+            self, tree, source, dependency_cache, file_uri, usage_node
+        )
+    }
 
-        local_result
+    fn extract_instance_method_context(
+        &self,
+        usage_node: &Node,
+        source: &str,
+    ) -> Option<(String, String)> {
+        // Kotlin-specific: handle navigation_expression instead of method_invocation
+        
+        // Find parent navigation_expression or call_expression
+        let mut current = Some(*usage_node);
+        let mut nav_expr = None;
+        
+        while let Some(node) = current {
+            if node.kind() == "navigation_expression" {
+                nav_expr = Some(node);
+                break;
+            }
+            if node.kind() == "call_expression" {
+                // Check if it has a navigation_expression child
+                for i in 0..node.child_count() {
+                    if let Some(child) = node.child(i) {
+                        if child.kind() == "navigation_expression" {
+                            nav_expr = Some(child);
+                            break;
+                        }
+                    }
+                }
+                break;
+            }
+            current = node.parent();
+        }
+        
+        if let Some(nav_node) = nav_expr {
+            if let (Some(object_node), Some(nav_suffix)) = (nav_node.child(0), nav_node.child(1)) {
+                if nav_suffix.kind() == "navigation_suffix" {
+                    // Find the simple_identifier child (not the '.' token)
+                    let method_node = (0..nav_suffix.child_count())
+                        .filter_map(|i| nav_suffix.child(i))
+                        .find(|child| child.kind() == "simple_identifier");
+                    
+                    if let Some(method_node) = method_node {
+                        let variable_name = object_node.utf8_text(source.as_bytes()).ok()?.to_string();
+                        let method_name = method_node.utf8_text(source.as_bytes()).ok()?.to_string();
+                        
+                        // Check if this is an instance call (variable starts with lowercase)
+                        if variable_name.chars().next().map_or(false, |c| c.is_lowercase()) {
+                            return Some((variable_name, method_name));
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    fn extract_static_method_context(
+        &self,
+        usage_node: &Node,
+        source: &str,
+    ) -> Option<(String, String)> {
+        // Kotlin-specific: handle companion object calls and static imports
+        
+        // Find parent navigation_expression
+        let mut current = Some(*usage_node);
+        let mut nav_expr = None;
+        
+        while let Some(node) = current {
+            if node.kind() == "navigation_expression" {
+                nav_expr = Some(node);
+                break;
+            }
+            if node.kind() == "call_expression" {
+                // Check if it has a navigation_expression child
+                for i in 0..node.child_count() {
+                    if let Some(child) = node.child(i) {
+                        if child.kind() == "navigation_expression" {
+                            nav_expr = Some(child);
+                            break;
+                        }
+                    }
+                }
+                break;
+            }
+            current = node.parent();
+        }
+        
+        if let Some(nav_node) = nav_expr {
+            if let (Some(object_node), Some(nav_suffix)) = (nav_node.child(0), nav_node.child(1)) {
+                if nav_suffix.kind() == "navigation_suffix" {
+                    // Find the simple_identifier child (not the '.' token)
+                    let method_node = (0..nav_suffix.child_count())
+                        .filter_map(|i| nav_suffix.child(i))
+                        .find(|child| child.kind() == "simple_identifier");
+                    
+                    if let Some(method_node) = method_node {
+                        let class_name = object_node.utf8_text(source.as_bytes()).ok()?.to_string();
+                        let method_name = method_node.utf8_text(source.as_bytes()).ok()?.to_string();
+                        
+                        // Only return for static calls (class names start with uppercase)
+                        if class_name.chars().next().map_or(false, |c| c.is_uppercase()) {
+                            return Some((class_name, method_name));
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    fn find_static_method_definition(
+        &self,
+        tree: &Tree,
+        source: &str,
+        file_uri: &str,
+        usage_node: &Node,
+        class_name: &str,
+        method_name: &str,
+        dependency_cache: Arc<DependencyCache>,
+    ) -> Option<Location> {
+        // For Kotlin static methods (companion object methods)
+        // Find the class/interface definition first
+        self.find_local(tree, source, file_uri, usage_node)
             .or_else(|| {
                 self.find_in_project(source, file_uri, usage_node, dependency_cache.clone())
             })
             .or_else(|| {
                 self.find_in_workspace(source, file_uri, usage_node, dependency_cache.clone())
             })
-            .or_else(|| self.find_external(source, file_uri, usage_node, dependency_cache.clone()))
-            .and_then(|location| {
-                // If the definition is in the same file, don't call set_start_position
-                // as it may find the wrong identifier with the same name
-                if location.uri.to_string() == file_uri {
-                    Some(location)
-                } else {
-                    let uri_string = location.uri.to_string();
-                    // Skip set_start_position for builtin sources as they are already correctly positioned
-                    if uri_string.contains("lspintar_builtin_sources") {
-                        Some(location)
-                    } else {
-                        self.set_start_position(source, usage_node, &uri_string)
+            .or_else(|| {
+                self.find_external(source, file_uri, usage_node, dependency_cache.clone())
+            })
+    }
+
+    fn find_field_declaration_type(&self, field_name: &str, tree: &Tree, source: &str) -> Option<String> {
+        self.extract_kotlin_variable_type(field_name, tree, source, &tree.root_node())
+    }
+    
+    fn find_variable_declaration_type(&self, variable_name: &str, tree: &Tree, source: &str, usage_node: &Node) -> Option<String> {
+        self.extract_kotlin_variable_type(variable_name, tree, source, usage_node)
+    }
+    
+    fn find_parameter_type(&self, param_name: &str, tree: &Tree, source: &str, _usage_node: &Node) -> Option<String> {
+        // TODO: Implement Kotlin parameter type extraction
+        None
+    }
+
+    fn find_instance_method_definition(
+        &self,
+        tree: &Tree,
+        source: &str,
+        file_uri: &str,
+        usage_node: &Node,
+        variable_name: &str,
+        method_name: &str,
+        dependency_cache: Arc<DependencyCache>,
+    ) -> Option<Location> {
+        
+        // Step 1: Extract the variable type using Kotlin-specific logic
+        let variable_type = self.extract_kotlin_variable_type(variable_name, tree, source, usage_node)?;
+        
+        // Step 2: Find the class/interface definition for this type
+        if let Some(class_location) = self.find_kotlin_class_definition(&variable_type, tree, source, file_uri, dependency_cache.clone()) {
+            // Step 3: Search for the specific method within the class/interface file
+            use crate::languages::common::method_resolution::search_method_in_class_file_cross_language;
+            if let Some(method_location) = search_method_in_class_file_cross_language(&class_location, method_name) {
+                return Some(method_location);
+            }
+            
+            return Some(class_location);
+        }
+        None
+    }
+}
+
+impl KotlinSupport {
+    /// Extract variable type using Kotlin-specific AST patterns
+    fn extract_kotlin_variable_type(&self, variable_name: &str, tree: &Tree, source: &str, _usage_node: &Node) -> Option<String> {
+        
+        let query_text = r#"
+            (class_parameter
+              (simple_identifier) @param_name
+              (user_type (type_identifier) @param_type))
+        "#;
+        
+        if let Ok(query) = Query::new(&tree_sitter_kotlin::language(), query_text) {
+            let mut cursor = QueryCursor::new();
+            let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
+            
+            while let Some(query_match) = matches.next() {
+                let mut found_name = None;
+                let mut found_type = None;
+                
+                for capture in query_match.captures {
+                    let capture_text = capture.node.utf8_text(source.as_bytes()).unwrap_or("");
+                    let capture_name = query.capture_names()[capture.index as usize];
+                    
+                    if capture_name == "param_name" && capture_text == variable_name {
+                        found_name = Some(capture_text);
+                    } else if capture_name == "param_type" {
+                        found_type = Some(capture_text.to_string());
                     }
                 }
-            })
-            .ok_or_else(|| anyhow!("Definition not found"))
+                
+                if found_name.is_some() && found_type.is_some() {
+                    let var_type = found_type.unwrap();
+                    return Some(var_type);
+                }
+            }
+        }
+        None
+    }
+    
+    /// Find class/interface definition for a given type name
+    fn find_kotlin_class_definition(&self, type_name: &str, tree: &Tree, source: &str, file_uri: &str, dependency_cache: Arc<DependencyCache>) -> Option<Location> {
+        
+        // First try to find it locally in the current file
+        if let Some(local_location) = self.find_local_class_definition(type_name, tree, source, file_uri) {
+            return Some(local_location);
+        }
+        
+        // Then search in project/workspace/external dependencies
+        // Create a dummy usage node to search for the type name
+        if let Some(type_node) = self.find_type_identifier_in_tree(type_name, tree, source) {
+            return self.find_in_project(source, file_uri, &type_node, dependency_cache.clone())
+                .or_else(|| self.find_in_workspace(source, file_uri, &type_node, dependency_cache.clone()))
+                .or_else(|| self.find_external(source, file_uri, &type_node, dependency_cache.clone()));
+        }
+        
+        None
+    }
+    
+    /// Find a class/interface definition locally in the current file
+    fn find_local_class_definition(&self, type_name: &str, tree: &Tree, source: &str, file_uri: &str) -> Option<Location> {
+        let query_text = r#"
+            (class_declaration (type_identifier) @class_name)
+            (interface_declaration (type_identifier) @interface_name)
+        "#;
+        
+        if let Ok(query) = Query::new(&tree_sitter_kotlin::language(), query_text) {
+            let mut cursor = QueryCursor::new();
+            let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
+            
+            while let Some(query_match) = matches.next() {
+                for capture in query_match.captures {
+                    let capture_text = capture.node.utf8_text(source.as_bytes()).unwrap_or("");
+                    if capture_text == type_name {
+                        let range = capture.node.range();
+                        return Some(Location {
+                            uri: tower_lsp::lsp_types::Url::from_file_path(file_uri).ok()?,
+                            range: tower_lsp::lsp_types::Range {
+                                start: Position {
+                                    line: range.start_point.row as u32,
+                                    character: range.start_point.column as u32,
+                                },
+                                end: Position {
+                                    line: range.end_point.row as u32,
+                                    character: range.end_point.column as u32,
+                                },
+                            },
+                        });
+                    }
+                }
+            }
+        }
+        
+        None
+    }
+    
+    /// Find a type identifier node in the tree for searching
+    fn find_type_identifier_in_tree<'a>(&self, type_name: &str, tree: &'a Tree, source: &str) -> Option<Node<'a>> {
+        let query_text = r#"(type_identifier) @type"#;
+        
+        if let Ok(query) = Query::new(&tree_sitter_kotlin::language(), query_text) {
+            let mut cursor = QueryCursor::new();
+            let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
+            
+            while let Some(query_match) = matches.next() {
+                for capture in query_match.captures {
+                    let capture_text = capture.node.utf8_text(source.as_bytes()).unwrap_or("");
+                    if capture_text == type_name {
+                        return Some(capture.node);
+                    }
+                }
+            }
+        }
+        
+        None
     }
 }
 

@@ -1,10 +1,15 @@
 # TODO
 src/core/build_tools.rs:874: Could also check file size here if we want to be more sophisticated
 src/languages/java/definition/local.rs:190: Implement proper scope distance calculation
-src/languages/java/definition/utils.rs:508: Could verify this FQN exists in cache/database, but for now assume it's correct
+src/languages/java/definition/utils.rs:545: Could verify this FQN exists in cache/database, but for now assume it's correct
 src/languages/java/implementation.rs:122: Implement method call implementation finding
 src/languages/java/implementation.rs:134: Implement method implementation finding
+src/languages/kotlin/support.rs:539: Implement Kotlin parameter type extraction
+src/languages/common/method_resolution.rs:456: Implement workspace-level class resolution
+src/languages/common/method_resolution.rs:469: Implement external dependency class resolution
 src/languages/groovy/support.rs:146: replace this with more sophisticated handling
+src/languages/groovy/support.rs:678: Now search for the method within the class file
+src/languages/groovy/support.rs:719: Determine the type of the variable and then search for the method
 src/languages/groovy/definition/local.rs:564: Could enhance with variable type lookup
 src/languages/groovy/definition/utils.rs:1063: Could verify this FQN exists in cache/database, but for now assume it's correct
 src/languages/groovy/implementation.rs:46: currently only handle interfaces.

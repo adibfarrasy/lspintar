@@ -3,6 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use tower_lsp::lsp_types::{Diagnostic, Hover, Location, Position};
 use tree_sitter::{Node, Parser, Tree};
+use tracing::debug;
 
 use crate::core::{dependency_cache::DependencyCache, queries::QueryProvider, symbols::SymbolType};
 
@@ -82,12 +83,85 @@ pub trait LanguageSupport: Send + Sync + QueryProvider {
         dependency_cache: Arc<DependencyCache>,
     ) -> Option<Location>;
 
+    /// Find a method with signature matching for overload resolution
+    fn find_method_with_signature<'a>(
+        &self,
+        tree: &'a Tree,
+        source: &str,
+        method_name: &str,
+        call_signature: &crate::languages::common::method_resolution::CallSignature,
+    ) -> Option<tree_sitter::Node<'a>>;
+
+    /// Find field/property declaration and return its type
+    /// Each language implements this according to its AST structure
+    fn find_field_declaration_type(&self, field_name: &str, tree: &Tree, source: &str) -> Option<String>;
+    
+    /// Find variable declaration and return its type  
+    /// Each language implements this according to its AST structure
+    fn find_variable_declaration_type(&self, variable_name: &str, tree: &Tree, source: &str, usage_node: &Node) -> Option<String>;
+    
+    /// Find parameter declaration and return its type
+    /// Each language implements this according to its AST structure  
+    fn find_parameter_type(&self, param_name: &str, tree: &Tree, source: &str, usage_node: &Node) -> Option<String>;
+
     fn set_start_position(
         &self,
         source: &str,
         usage_node: &Node,
         file_uri: &str,
     ) -> Option<Location>;
+
+    /// Extract static method context (ClassName.methodName) from usage node
+    /// Returns (class_name, method_name) if this is a static method call
+    fn extract_static_method_context(
+        &self,
+        usage_node: &Node,
+        source: &str,
+    ) -> Option<(String, String)> {
+        // Default implementation using common JVM patterns
+        crate::languages::common::method_resolution::extract_static_method_context(usage_node, source)
+    }
+
+    /// Extract instance method context (variable.methodName) from usage node  
+    /// Returns (variable_name, method_name) if this is an instance method call
+    fn extract_instance_method_context(
+        &self,
+        usage_node: &Node,
+        source: &str,
+    ) -> Option<(String, String)> {
+        // Default implementation using common JVM patterns
+        crate::languages::common::method_resolution::extract_instance_method_context(usage_node, source)
+    }
+
+    /// Resolve static method definition by finding class and then method within it
+    fn find_static_method_definition(
+        &self,
+        tree: &Tree,
+        source: &str,
+        file_uri: &str,
+        usage_node: &Node,
+        class_name: &str,
+        method_name: &str,
+        dependency_cache: Arc<DependencyCache>,
+    ) -> Option<Location> {
+        // Default implementation - languages can override for specific behavior
+        None
+    }
+
+    /// Resolve instance method definition by finding variable type and then method within it
+    fn find_instance_method_definition(
+        &self,
+        tree: &Tree,
+        source: &str,
+        file_uri: &str,
+        usage_node: &Node,
+        variable_name: &str,
+        method_name: &str,
+        dependency_cache: Arc<DependencyCache>,
+    ) -> Option<Location> {
+        // Default implementation - languages can override for specific behavior
+        None
+    }
 }
 
 #[cfg(test)]
@@ -238,6 +312,28 @@ mod tests {
             _source: &str,
         ) -> Result<SymbolType> {
             Ok(self.symbol_type.clone())
+        }
+
+        fn find_method_with_signature<'a>(
+            &self,
+            _tree: &'a Tree,
+            _source: &str,
+            _method_name: &str,
+            _call_signature: &crate::languages::common::method_resolution::CallSignature,
+        ) -> Option<tree_sitter::Node<'a>> {
+            None
+        }
+
+        fn find_field_declaration_type(&self, _field_name: &str, _tree: &Tree, _source: &str) -> Option<String> {
+            None
+        }
+
+        fn find_variable_declaration_type(&self, _variable_name: &str, _tree: &Tree, _source: &str, _usage_node: &Node) -> Option<String> {
+            None
+        }
+
+        fn find_parameter_type(&self, _param_name: &str, _tree: &Tree, _source: &str, _usage_node: &Node) -> Option<String> {
+            None
         }
 
         fn find_definition_chain(

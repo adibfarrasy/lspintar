@@ -412,6 +412,203 @@ impl LanguageSupport for JavaSupport {
         set_start_position_for_language(source, usage_node, file_uri, "java")
     }
 
+    fn find_method_with_signature<'a>(
+        &self,
+        tree: &'a Tree,
+        source: &str,
+        method_name: &str,
+        call_signature: &crate::languages::common::method_resolution::CallSignature,
+    ) -> Option<tree_sitter::Node<'a>> {
+        // Convert the common CallSignature to Java's CallSignature
+        let java_call_sig = crate::languages::java::definition::method_resolution::CallSignature {
+            arg_count: call_signature.arg_count,
+            arg_types: call_signature.arg_types.clone(),
+        };
+        
+        crate::languages::java::definition::method_resolution::find_method_with_signature(
+            tree, source, method_name, &java_call_sig
+        )
+    }
+
+    fn find_field_declaration_type(&self, field_name: &str, tree: &Tree, source: &str) -> Option<String> {
+        use tracing::debug;
+        debug!("JAVA: find_field_declaration_type: looking for field '{}' in source", field_name);
+        
+        let query_text = r#"
+            ; Field declaration with modifiers
+            (field_declaration 
+              (modifiers)
+              type: (type_identifier) @field_type
+              declarator: (variable_declarator 
+                name: (identifier) @field_name))
+                
+            ; Field declaration without modifiers
+            (field_declaration 
+              type: (type_identifier) @field_type
+              declarator: (variable_declarator 
+                name: (identifier) @field_name))
+                
+            ; Generic field declaration with modifiers
+            (field_declaration 
+              (modifiers)
+              type: (generic_type 
+                (type_identifier) @generic_field_type)
+              declarator: (variable_declarator 
+                name: (identifier) @generic_field_name))
+                
+            ; Generic field declaration without modifiers
+            (field_declaration 
+              type: (generic_type 
+                (type_identifier) @generic_field_type)
+              declarator: (variable_declarator 
+                name: (identifier) @generic_field_name))
+        "#;
+        
+        let language: tree_sitter::Language = tree_sitter_java::LANGUAGE.into();
+        let query = match tree_sitter::Query::new(&language, query_text) {
+            Ok(q) => q,
+            Err(e) => {
+                debug!("JAVA: find_field_declaration_type: failed to create query: {:?}", e);
+                return None;
+            }
+        };
+        
+        let mut cursor = tree_sitter::QueryCursor::new();
+        let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
+        
+        debug!("JAVA: find_field_declaration_type: executing tree-sitter query for field declarations");
+        let mut match_count = 0;
+        
+        while let Some(query_match) = matches.next() {
+            match_count += 1;
+            debug!("JAVA: find_field_declaration_type: processing match #{}", match_count);
+            
+            let mut found_field_name = false;
+            let mut field_type = None;
+            
+            for capture in query_match.captures {
+                let capture_name = query.capture_names()[capture.index as usize];
+                if let Ok(node_text) = capture.node.utf8_text(source.as_bytes()) {
+                    debug!("JAVA: find_field_declaration_type: found capture '{}' = '{}'", capture_name, node_text);
+                    
+                    match capture_name {
+                        "field_name" | "generic_field_name" => {
+                            if node_text == field_name {
+                                debug!("JAVA: find_field_declaration_type: found matching field name '{}'", field_name);
+                                found_field_name = true;
+                            }
+                        }
+                        "field_type" | "generic_field_type" => {
+                            field_type = Some(node_text.to_string());
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            
+            if found_field_name && field_type.is_some() {
+                debug!("JAVA: find_field_declaration_type: successfully found field '{}' with type '{:?}'", field_name, field_type);
+                return field_type;
+            }
+        }
+        
+        debug!("JAVA: find_field_declaration_type: no field declaration found for '{}' (processed {} matches)", field_name, match_count);
+        None
+    }
+    
+    fn find_variable_declaration_type(&self, variable_name: &str, tree: &Tree, source: &str, _usage_node: &Node) -> Option<String> {
+        use tracing::debug;
+        debug!("JAVA: find_variable_declaration_type: looking for variable '{}' in source", variable_name);
+        
+        let query_text = r#"
+            (local_variable_declaration 
+              type: (type_identifier) @var_type
+              declarator: (variable_declarator 
+                name: (identifier) @var_name))
+        "#;
+        
+        let language: tree_sitter::Language = tree_sitter_java::LANGUAGE.into();
+        let query = tree_sitter::Query::new(&language, query_text).ok()?;
+        let mut cursor = tree_sitter::QueryCursor::new();
+        let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
+        
+        while let Some(query_match) = matches.next() {
+            let mut found_var_name = false;
+            let mut var_type = None;
+            
+            for capture in query_match.captures {
+                let capture_name = query.capture_names()[capture.index as usize];
+                if let Ok(node_text) = capture.node.utf8_text(source.as_bytes()) {
+                    match capture_name {
+                        "var_name" => {
+                            if node_text == variable_name {
+                                found_var_name = true;
+                            }
+                        }
+                        "var_type" => {
+                            var_type = Some(node_text.to_string());
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            
+            if found_var_name && var_type.is_some() {
+                debug!("JAVA: find_variable_declaration_type: found variable '{}' with type '{:?}'", variable_name, var_type);
+                return var_type;
+            }
+        }
+        
+        debug!("JAVA: find_variable_declaration_type: no variable declaration found for '{}'", variable_name);
+        None
+    }
+    
+    fn find_parameter_type(&self, param_name: &str, tree: &Tree, source: &str, _usage_node: &Node) -> Option<String> {
+        use tracing::debug;
+        debug!("JAVA: find_parameter_type: looking for parameter '{}' in source", param_name);
+        
+        let query_text = r#"
+            (formal_parameter
+              type: (type_identifier) @param_type
+              name: (identifier) @param_name)
+        "#;
+        
+        let language: tree_sitter::Language = tree_sitter_java::LANGUAGE.into();
+        let query = tree_sitter::Query::new(&language, query_text).ok()?;
+        let mut cursor = tree_sitter::QueryCursor::new();
+        let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
+        
+        while let Some(query_match) = matches.next() {
+            let mut found_param_name = false;
+            let mut param_type = None;
+            
+            for capture in query_match.captures {
+                let capture_name = query.capture_names()[capture.index as usize];
+                if let Ok(node_text) = capture.node.utf8_text(source.as_bytes()) {
+                    match capture_name {
+                        "param_name" => {
+                            if node_text == param_name {
+                                found_param_name = true;
+                            }
+                        }
+                        "param_type" => {
+                            param_type = Some(node_text.to_string());
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            
+            if found_param_name && param_type.is_some() {
+                debug!("JAVA: find_parameter_type: found parameter '{}' with type '{:?}'", param_name, param_type);
+                return param_type;
+            }
+        }
+        
+        debug!("JAVA: find_parameter_type: no parameter declaration found for '{}'", param_name);
+        None
+    }
+
     fn find_definition_chain(
         &self,
         tree: &Tree,
@@ -420,31 +617,10 @@ impl LanguageSupport for JavaSupport {
         file_uri: &str,
         usage_node: &Node,
     ) -> Result<Location> {
-        // Use the standard definition resolution chain
-        self.find_local(tree, source, file_uri, usage_node)
-            .or_else(|| {
-                self.find_in_project(source, file_uri, usage_node, dependency_cache.clone())
-            })
-            .or_else(|| {
-                self.find_in_workspace(source, file_uri, usage_node, dependency_cache.clone())
-            })
-            .or_else(|| self.find_external(source, file_uri, usage_node, dependency_cache.clone()))
-            .and_then(|location| {
-                // If the definition is in the same file, don't call set_start_position
-                // as it may find the wrong identifier with the same name
-                if location.uri.to_string() == file_uri {
-                    Some(location)
-                } else {
-                    let uri_string = location.uri.to_string();
-                    // Skip set_start_position for builtin sources as they are already correctly positioned
-                    if uri_string.contains("lspintar_builtin_sources") {
-                        Some(location)
-                    } else {
-                        self.set_start_position(source, usage_node, &uri_string)
-                    }
-                }
-            })
-            .ok_or_else(|| anyhow!("Definition not found"))
+        // Use the common method resolution logic that handles static/instance method calls with cross-language support
+        crate::languages::common::method_resolution::find_definition_chain_with_method_resolution(
+            self, tree, source, dependency_cache, file_uri, usage_node
+        )
     }
 }
 

@@ -1,4 +1,5 @@
 use tree_sitter::{Node, Query, QueryCursor, StreamingIterator, Tree};
+use tracing::debug;
 
 #[derive(Debug, Clone)]
 pub struct CallSignature {
@@ -20,13 +21,21 @@ pub fn find_method_with_signature<'a>(
     method_name: &str,
     call_signature: &CallSignature,
 ) -> Option<Node<'a>> {
+    debug!("SIG: groovy impl called for '{}'", method_name);
+    
     let query_text = r#"(method_declaration name: (identifier) @name)"#;
-    let query = Query::new(&tree.language(), query_text).ok()?;
+    
+    let query = Query::new(&tree.language(), query_text);
+    if query.is_err() {
+        return None;
+    }
+    let query = query.unwrap();
     let mut cursor = QueryCursor::new();
 
     let mut best_match = None;
     let mut best_score = 0;
     let mut fallback_match = None; // For name-only matching when signature fails
+    let mut candidate_count = 0;
 
     cursor
         .matches(&query, tree.root_node(), source.as_bytes())
@@ -36,19 +45,25 @@ pub fn find_method_with_signature<'a>(
                 let name_text = name_node.utf8_text(source.as_bytes()).unwrap_or("");
 
                 if name_text == method_name {
+                    candidate_count += 1;
+                    
                     // Always keep the first name match as fallback
                     if fallback_match.is_none() {
                         fallback_match = Some(name_node);
                     }
                     
-                    if let Some(method_decl) = name_node.parent() {
+                    // Walk up the tree to find the method declaration
+                    if let Some(method_decl) = find_method_declaration_ancestor(&name_node) {
                         if let Some(method_sig) = extract_method_signature(&method_decl, source) {
                             let score = calculate_signature_match_score(call_signature, &method_sig);
+                            
                             if score > best_score {
                                 best_score = score;
                                 best_match = Some(name_node);
                             }
+                        } else {
                         }
+                    } else {
                     }
                 }
             }
@@ -64,17 +79,28 @@ pub fn find_method_with_signature<'a>(
 
 /// Extract call signature from method invocation context
 pub fn extract_call_signature_from_context(usage_node: &Node, source: &str) -> Option<CallSignature> {
+    
     let method_invocation = find_parent_method_invocation(usage_node)?;
-    extract_call_signature_from_invocation(&method_invocation, source)
+    
+    let result = extract_call_signature_from_invocation(&method_invocation, source);
+    result
 }
 
 fn extract_call_signature_from_invocation(method_invocation: &Node, source: &str) -> Option<CallSignature> {
-    let arguments = method_invocation.child_by_field_name("arguments")?;
+    
+    let arguments = method_invocation.child_by_field_name("arguments");
+    if arguments.is_none() {
+        return None;
+    }
+    let arguments = arguments.unwrap();
 
     let mut arg_types = Vec::new();
     let mut cursor = arguments.walk();
+    let mut arg_count = 0;
 
     for child in arguments.named_children(&mut cursor) {
+        arg_count += 1;
+        
         let arg_type = infer_argument_type(&child, source);
         arg_types.push(arg_type);
     }
@@ -138,6 +164,7 @@ fn extract_method_signature(method_node: &Node, source: &str) -> Option<MethodSi
 }
 
 fn calculate_signature_match_score(call_sig: &CallSignature, method_sig: &MethodSignature) -> u32 {
+    
     // If parameter counts don't match and method doesn't have varargs, no match
     if call_sig.arg_count != method_sig.param_count && method_sig.param_count < usize::MAX {
         return 0;
@@ -150,7 +177,8 @@ fn calculate_signature_match_score(call_sig: &CallSignature, method_sig: &Method
         if let Some(method_param_type) = method_sig.param_types.get(i) {
             if let Some(call_type) = call_arg_type {
                 if types_compatible(call_type, method_param_type) {
-                    score += if call_type == method_param_type { 10 } else { 5 }; // Exact match scores higher
+                    let type_score = if call_type == method_param_type { 10 } else { 5 };
+                    score += type_score;
                 } else {
                     return 0; // Incompatible types
                 }
@@ -170,6 +198,18 @@ fn find_parent_method_invocation<'a>(node: &Node<'a>) -> Option<Node<'a>> {
             return Some(parent);
         }
         current = parent.parent();
+    }
+    None
+}
+
+/// Find the method declaration ancestor by walking up the tree
+fn find_method_declaration_ancestor<'a>(node: &Node<'a>) -> Option<Node<'a>> {
+    let mut current = Some(*node);
+    while let Some(curr_node) = current {
+        if curr_node.kind() == "method_declaration" {
+            return Some(curr_node);
+        }
+        current = curr_node.parent();
     }
     None
 }

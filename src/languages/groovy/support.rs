@@ -14,7 +14,7 @@ use crate::core::{
     utils::{uri_to_path, find_project_root, path_to_file_uri},
 };
 use crate::languages::groovy::definition::method_resolution::extract_call_signature_from_context;
-use crate::languages::groovy::definition::utils::{extract_instance_method_context, extract_static_method_context, get_wildcard_imports_from_source, prepare_symbol_lookup_key_with_wildcard_support, resolve_variable_type, search_definition_in_project, search_static_method_definition_in_project};
+use crate::languages::groovy::definition::utils::{get_wildcard_imports_from_source, prepare_symbol_lookup_key_with_wildcard_support, resolve_variable_type, search_definition_in_project, search_static_method_definition_in_project};
 use crate::languages::traits::LanguageSupport;
 
 use super::definition::external::find_external;
@@ -423,69 +423,311 @@ impl LanguageSupport for GroovySupport {
         file_uri: &str,
         usage_node: &Node,
     ) -> Result<Location> {
-        if let Some((class_name, method_name)) = extract_static_method_context(usage_node, source) {
-            if let Some(location) = self.find_static_method_definition(tree, source, file_uri, usage_node, &class_name, &method_name, dependency_cache.clone()) {
-                return Ok(location);
-            }
-        }
+        // Use the common method resolution logic that handles static/instance method calls
+        crate::languages::common::method_resolution::find_definition_chain_with_method_resolution(
+            self, tree, source, dependency_cache, file_uri, usage_node
+        )
+    }
 
-        let instance_context = extract_instance_method_context(usage_node, source);
-        if let Some((variable_name, method_name)) = instance_context {
-            if let Some(location) = self.find_instance_method_definition(tree, source, file_uri, usage_node, &variable_name, &method_name, dependency_cache.clone()) {
-                return Ok(location);
-            }
-        }
+    fn find_static_method_definition(
+        &self,
+        tree: &Tree,
+        source: &str,
+        file_uri: &str,
+        usage_node: &Node,
+        class_name: &str,
+        method_name: &str,
+        dependency_cache: Arc<DependencyCache>,
+    ) -> Option<Location> {
+        // Use Groovy-specific logic (reusing existing implementation)
+        self.find_static_method_definition_impl(tree, source, file_uri, usage_node, class_name, method_name, dependency_cache)
+    }
+
+    fn find_instance_method_definition(
+        &self,
+        tree: &Tree,
+        source: &str,
+        file_uri: &str,
+        usage_node: &Node,
+        variable_name: &str,
+        method_name: &str,
+        dependency_cache: Arc<DependencyCache>,
+    ) -> Option<Location> {
+        // Use Groovy-specific logic (reusing existing implementation)
+        self.find_instance_method_definition_impl(tree, source, file_uri, usage_node, variable_name, method_name, dependency_cache)
+    }
+
+    fn find_method_with_signature<'a>(
+        &self,
+        tree: &'a Tree,
+        source: &str,
+        method_name: &str,
+        call_signature: &crate::languages::common::method_resolution::CallSignature,
+    ) -> Option<tree_sitter::Node<'a>> {
+        debug!("SIG: groovy trait method called for '{}'", method_name);
+        let result = crate::languages::groovy::definition::method_resolution::find_method_with_signature(
+            tree, source, method_name, call_signature
+        );
+        debug!("SIG: groovy trait returning: {}", result.is_some());
+        result
+    }
+
+    fn find_field_declaration_type(&self, field_name: &str, tree: &Tree, source: &str) -> Option<String> {
         
-        let symbol_type = self.determine_symbol_type_from_context(tree, usage_node, source).ok();
-        
-        if let Some(SymbolType::MethodCall) = symbol_type {
-        } else if let Some(symbol_type) = symbol_type {
-            if matches!(symbol_type, 
-                SymbolType::VariableUsage | 
-                SymbolType::ParameterDeclaration |
-                SymbolType::FieldUsage
-            ) {
-                if let Some(local_location) = self.find_local(tree, source, file_uri, usage_node) {
-                    return Ok(local_location);
-                }
+        let query_text = r#"
+            ; Field declaration with modifiers
+            (field_declaration 
+              (modifiers)
+              type: (type_identifier) @field_type
+              declarator: (variable_declarator 
+                name: (identifier) @field_name))
                 
-                // For local method calls that aren't found locally, 
-                // they're likely in the same project - skip expensive workspace/external search
-                if symbol_type == SymbolType::MethodCall {
-                    if let Some(project_location) = self.find_in_project(source, file_uri, usage_node, dependency_cache.clone()) {
-                        // If the definition is in the same file, don't call set_start_position 
-                        // as it may find the wrong identifier with the same name
-                        if project_location.uri.to_string() == file_uri {
-                            return Ok(project_location);
-                        } else {
-                            let uri_string = project_location.uri.to_string();
-                            // Skip set_start_position for builtin sources as they are already correctly positioned
-                            if uri_string.contains("lspintar_builtin_sources") {
-                                return Ok(project_location);
-                            } else {
-                                if let Some(final_location) = self.set_start_position(source, usage_node, &uri_string) {
-                                    return Ok(final_location);
-                                }
+            ; Field declaration without modifiers
+            (field_declaration 
+              type: (type_identifier) @field_type
+              declarator: (variable_declarator 
+                name: (identifier) @field_name))
+                
+            ; Generic field declaration with modifiers
+            (field_declaration 
+              (modifiers)
+              type: (generic_type 
+                (type_identifier) @generic_field_type)
+              declarator: (variable_declarator 
+                name: (identifier) @generic_field_name))
+                
+            ; Generic field declaration without modifiers
+            (field_declaration 
+              type: (generic_type 
+                (type_identifier) @generic_field_type)
+              declarator: (variable_declarator 
+                name: (identifier) @generic_field_name))
+        "#;
+        
+        let language = tree_sitter_groovy::language();
+        let query = match tree_sitter::Query::new(&language, query_text) {
+            Ok(q) => q,
+            Err(e) => {
+                return None;
+            }
+        };
+        
+        let mut cursor = tree_sitter::QueryCursor::new();
+        let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
+        
+        let mut match_count = 0;
+        
+        while let Some(query_match) = matches.next() {
+            match_count += 1;
+            
+            let mut found_field_name = false;
+            let mut field_type = None;
+            
+            for capture in query_match.captures {
+                let capture_name = query.capture_names()[capture.index as usize];
+                if let Ok(node_text) = capture.node.utf8_text(source.as_bytes()) {
+                    
+                    match capture_name {
+                        "field_name" | "generic_field_name" => {
+                            if node_text == field_name {
+                                found_field_name = true;
                             }
                         }
+                        "field_type" | "generic_field_type" => {
+                            field_type = Some(node_text.to_string());
+                        }
+                        _ => {}
                     }
                 }
             }
-        }
-
-
-        if let Some(local_location) = self.find_local(tree, source, file_uri, usage_node) {
-            return Ok(local_location);
+            
+            if found_field_name && field_type.is_some() {
+                return field_type;
+            }
         }
         
-        self.find_cross_file_sequential(source, file_uri, usage_node, dependency_cache)
-            .ok_or_else(|| anyhow::anyhow!("Definition not found"))
+        None
     }
-
-
+    
+    fn find_variable_declaration_type(&self, variable_name: &str, tree: &Tree, source: &str, _usage_node: &Node) -> Option<String> {
+        
+        let query_text = r#"
+            (local_variable_declaration 
+              type: (type_identifier) @var_type
+              declarator: (variable_declarator 
+                name: (identifier) @var_name))
+        "#;
+        
+        let language = tree_sitter_groovy::language();
+        let query = tree_sitter::Query::new(&language, query_text).ok()?;
+        let mut cursor = tree_sitter::QueryCursor::new();
+        let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
+        
+        while let Some(query_match) = matches.next() {
+            let mut found_var_name = false;
+            let mut var_type = None;
+            
+            for capture in query_match.captures {
+                let capture_name = query.capture_names()[capture.index as usize];
+                if let Ok(node_text) = capture.node.utf8_text(source.as_bytes()) {
+                    match capture_name {
+                        "var_name" => {
+                            if node_text == variable_name {
+                                found_var_name = true;
+                            }
+                        }
+                        "var_type" => {
+                            var_type = Some(node_text.to_string());
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            
+            if found_var_name && var_type.is_some() {
+                return var_type;
+            }
+        }
+        
+        None
+    }
+    
+    fn find_parameter_type(&self, param_name: &str, tree: &Tree, source: &str, _usage_node: &Node) -> Option<String> {
+        
+        let query_text = r#"
+            (formal_parameter
+              type: (type_identifier) @param_type
+              name: (identifier) @param_name)
+        "#;
+        
+        let language = tree_sitter_groovy::language();
+        let query = tree_sitter::Query::new(&language, query_text).ok()?;
+        let mut cursor = tree_sitter::QueryCursor::new();
+        let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
+        
+        while let Some(query_match) = matches.next() {
+            let mut found_param_name = false;
+            let mut param_type = None;
+            
+            for capture in query_match.captures {
+                let capture_name = query.capture_names()[capture.index as usize];
+                if let Ok(node_text) = capture.node.utf8_text(source.as_bytes()) {
+                    match capture_name {
+                        "param_name" => {
+                            if node_text == param_name {
+                                found_param_name = true;
+                            }
+                        }
+                        "param_type" => {
+                            param_type = Some(node_text.to_string());
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            
+            if found_param_name && param_type.is_some() {
+                return param_type;
+            }
+        }
+        
+        None
+    }
 }
 
 impl GroovySupport {
+    /// Implementation of static method resolution (renamed from original method)
+    fn find_static_method_definition_impl(
+        &self,
+        tree: &Tree,
+        source: &str,
+        file_uri: &str,
+        usage_node: &Node,
+        class_name: &str,
+        method_name: &str,
+        dependency_cache: Arc<DependencyCache>,
+    ) -> Option<Location> {
+        debug!(
+            "find_static_method_definition_impl: looking for {}.{}",
+            class_name, method_name
+        );
+
+        // First, try to find the class definition using existing resolution chain
+        // We create a fake node with the class name for the search
+        // let class_usage_text = class_name.as_bytes();
+
+        // Find the class first using the standard resolution chain
+        let class_location = self
+            .find_local(tree, source, file_uri, usage_node)
+            .or_else(|| {
+                self.find_in_project(source, file_uri, usage_node, dependency_cache.clone())
+            })
+            .or_else(|| {
+                self.find_in_workspace(source, file_uri, usage_node, dependency_cache.clone())
+            })
+            .or_else(|| {
+                self.find_external(source, file_uri, usage_node, dependency_cache.clone())
+            });
+
+        if let Some(location) = class_location {
+            debug!(
+                "find_static_method_definition_impl: found class {} at {:?}",
+                class_name, location.uri
+            );
+            
+            // TODO: Now search for the method within the class file
+            // For now, return the class location as a placeholder
+            return Some(location);
+        }
+
+        debug!(
+            "find_static_method_definition_impl: could not find class {}",
+            class_name
+        );
+        None
+    }
+
+    /// Implementation of instance method resolution (renamed from original method)
+    fn find_instance_method_definition_impl(
+        &self,
+        tree: &Tree,
+        source: &str,
+        file_uri: &str,
+        usage_node: &Node,
+        variable_name: &str,
+        method_name: &str,
+        dependency_cache: Arc<DependencyCache>,
+    ) -> Option<Location> {
+        debug!(
+            "find_instance_method_definition_impl: looking for {}.{}",
+            variable_name, method_name
+        );
+
+        // First, find the variable declaration to determine its type
+        let variable_location = self
+            .find_local(tree, source, file_uri, usage_node)
+            .or_else(|| {
+                self.find_in_project(source, file_uri, usage_node, dependency_cache.clone())
+            });
+
+        if let Some(location) = variable_location {
+            debug!(
+                "find_instance_method_definition_impl: found variable {} at {:?}",
+                variable_name, location.uri
+            );
+            
+            // TODO: Determine the type of the variable and then search for the method
+            // For now, return the variable location as a placeholder
+            return Some(location);
+        }
+
+        debug!(
+            "find_instance_method_definition_impl: could not find variable {}",
+            variable_name
+        );
+        None
+    }
+
     /// Check if an identifier is an imported class name
     fn is_imported_class(&self, class_name: &str, source: &str) -> bool {
         if self.has_specific_import(class_name, source) {
@@ -915,6 +1157,7 @@ impl GroovySupport {
         
         None
     }
+
 }
 
 impl Default for GroovySupport {
