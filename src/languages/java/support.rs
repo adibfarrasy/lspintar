@@ -592,6 +592,49 @@ impl LanguageSupport for JavaSupport {
         None
     }
 
+    fn find_static_method_definition(
+        &self,
+        tree: &Tree,
+        source: &str,
+        file_uri: &str,
+        usage_node: &Node,
+        class_name: &str,
+        method_name: &str,
+        dependency_cache: Arc<DependencyCache>,
+    ) -> Option<Location> {
+        // Use the common method resolution to find the static method in the class
+        crate::languages::common::method_resolution::find_static_method_definition(
+            self, tree, source, file_uri, usage_node, class_name, method_name, dependency_cache
+        )
+    }
+
+    fn find_instance_method_definition(
+        &self,
+        tree: &Tree,
+        source: &str,
+        file_uri: &str,
+        usage_node: &Node,
+        variable_name: &str,
+        method_name: &str,
+        dependency_cache: Arc<DependencyCache>,
+    ) -> Option<Location> {
+        // Try to resolve the variable type using Java's type resolution methods
+        let variable_type = self.find_field_declaration_type(variable_name, tree, source)
+            .or_else(|| self.find_variable_declaration_type(variable_name, tree, source, usage_node))
+            .or_else(|| self.find_parameter_type(variable_name, tree, source, usage_node));
+
+        if let Some(_var_type) = variable_type {
+            // Use the common method resolution to find the method in the type's class
+            if let Some(location) = crate::languages::common::method_resolution::find_instance_method_definition(
+                self, tree, source, file_uri, usage_node, variable_name, method_name, dependency_cache
+            ) {
+                return Some(location);
+            }
+        }
+
+        None
+    }
+
     fn find_definition_chain(
         &self,
         tree: &Tree,

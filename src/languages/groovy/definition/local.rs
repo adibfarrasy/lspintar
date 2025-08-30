@@ -130,7 +130,6 @@ fn find_variable_declarations_in_scope<'a>(
             // Try multiple query patterns for different declaration types
             let queries = vec![
                 r#"(variable_declaration) @decl"#, // Standard variable declarations with type
-                r#"(local_variable_declaration) @local_decl"#, // Local variable declarations
                 r#"(expression_statement (identifier) @bare_id)"#,
             ];
 

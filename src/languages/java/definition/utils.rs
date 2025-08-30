@@ -241,39 +241,24 @@ pub fn prepare_symbol_lookup_key_with_wildcard_support(
                         .await
                 })
             }) {
-                debug!("Java utils: Found explicit import match in external dependencies of current project!");
                 return Some(explicit_key);
             }
 
             // Then try dependency projects
             if let Some(project_metadata) = dependency_cache.project_metadata.get(&project_root) {
-                debug!(
-                    "Java utils: checking {} dependency projects for import",
-                    project_metadata.inter_project_deps.len()
-                );
                 for dependent_project_ref in project_metadata.inter_project_deps.iter() {
                     let dependent_project = dependent_project_ref.clone();
                     let dep_key = (dependent_project.clone(), import.clone());
-                    debug!(
-                        "Java utils: checking dependency project {:?} for import '{}'",
-                        dependent_project, import
-                    );
 
                     if dependency_cache
                         .find_symbol_sync(&dep_key.0, &dep_key.1)
                         .is_some()
                         || dependency_cache.find_builtin_info(import).is_some()
                     {
-                        debug!(
-                            "Java utils: Found explicit import match in dependency project {:?}!",
-                            dependent_project
-                        );
-                        debug!("Java utils: prepare_symbol_lookup_key_with_wildcard_support returning (explicit): {:?}", dep_key);
                         return Some(dep_key);
                     }
 
                     // Also check external dependencies of this dependency project
-                    debug!("Java utils: checking external dependencies of project {:?} for import '{}'", dependent_project, import);
                     if let Some(_) = tokio::task::block_in_place(|| {
                         tokio::runtime::Handle::current().block_on(async {
                             dependency_cache
@@ -281,8 +266,6 @@ pub fn prepare_symbol_lookup_key_with_wildcard_support(
                                 .await
                         })
                     }) {
-                        debug!("Java utils: Found explicit import match in external dependencies of project {:?}!", dependent_project);
-                        debug!("Java utils: prepare_symbol_lookup_key_with_wildcard_support returning (explicit): {:?}", dep_key);
                         return Some(dep_key);
                     }
                 }
@@ -302,17 +285,8 @@ pub fn prepare_symbol_lookup_key_with_wildcard_support(
 
     // Try wildcard imports
     let wildcard_imports = get_wildcard_imports_from_source(source);
-    debug!(
-        "Java utils: Found {} wildcard imports: {:?}",
-        wildcard_imports.len(),
-        wildcard_imports
-    );
     for package in wildcard_imports {
         let wildcard_key = (project_root.clone(), format!("{}.{}", package, symbol_name));
-        debug!(
-            "Java utils: Trying wildcard key: ({:?}, '{}')",
-            project_root, wildcard_key.1
-        );
         // Check using read-through cache pattern
         if dependency_cache
             .find_symbol_sync(&wildcard_key.0, &wildcard_key.1)
@@ -321,7 +295,6 @@ pub fn prepare_symbol_lookup_key_with_wildcard_support(
                 .find_builtin_info(&wildcard_key.1)
                 .is_some()
         {
-            debug!("Java utils: Found wildcard match!");
             return Some(wildcard_key);
         }
     }
@@ -332,10 +305,6 @@ pub fn prepare_symbol_lookup_key_with_wildcard_support(
             project_root.clone(),
             format!("{}.{}", current_package, symbol_name),
         );
-        debug!(
-            "Java utils: Trying same package key: ({:?}, '{}')",
-            project_root, same_package_key.1
-        );
         // Check using read-through cache pattern
         if dependency_cache
             .find_symbol_sync(&same_package_key.0, &same_package_key.1)
@@ -344,7 +313,6 @@ pub fn prepare_symbol_lookup_key_with_wildcard_support(
                 .find_builtin_info(&same_package_key.1)
                 .is_some()
         {
-            debug!("Java utils: Found same package match!");
             return Some(same_package_key);
         }
     }
@@ -356,17 +324,12 @@ pub fn prepare_symbol_lookup_key_with_wildcard_support(
 
     for package in &packages {
         let java_key = (project_root.clone(), format!("{}.{}", package, symbol_name));
-        debug!(
-            "Java utils: Trying indexed package {} key: ({:?}, '{}')",
-            package, project_root, java_key.1
-        );
         // Check using read-through cache pattern
         if dependency_cache
             .find_symbol_sync(&java_key.0, &java_key.1)
             .is_some()
             || dependency_cache.find_builtin_info(&java_key.1).is_some()
         {
-            debug!("Java utils: Found indexed {} match!", package);
             return Some(java_key);
         }
     }
@@ -374,10 +337,6 @@ pub fn prepare_symbol_lookup_key_with_wildcard_support(
     // Last resort: original symbol name
     debug!("Java utils: No matches found, returning original symbol name");
     let result = Some((project_root.clone(), symbol_name.clone()));
-    debug!(
-        "Java utils: prepare_symbol_lookup_key_with_wildcard_support returning: {:?}",
-        result
-    );
     result
 }
 
