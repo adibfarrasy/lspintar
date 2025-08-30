@@ -993,3 +993,121 @@ fn resolve_same_package(
 
     result
 }
+
+/// Resolve symbol name with import context
+#[tracing::instrument(skip_all)]
+pub fn resolve_symbol_with_imports(
+    symbol_name: &str,
+    source: &str,
+    dependency_cache: &DependencyCache,
+) -> Option<String> {
+    use tracing::debug;
+    
+    // Extract imports from source
+    let imports = extract_imports_from_source(source);
+    
+    // First, check for exact matches and specific imports
+    let mut star_imports = Vec::new();
+    for import in &imports {
+        let expected_suffix = format!(".{}", symbol_name);
+        let matches_suffix = import.ends_with(&expected_suffix);
+        let exact_match = import == symbol_name;
+        
+        if matches_suffix || exact_match {
+            debug!("Groovy resolve_symbol_with_imports: found exact match import {}", import);
+            return Some(import.clone());
+        }
+        
+        // Collect star imports for later use
+        if import.ends_with(".*") {
+            let package = import.strip_suffix(".*").unwrap_or("");
+            star_imports.push(package);
+        }
+    }
+    
+    // For common Groovy/Java types, try java.lang and groovy.lang first
+    let common_groovy_types = [
+        // Java.lang types (implicitly imported in Groovy)
+        "String", "Integer", "Long", "Double", "Float", "Boolean", "Character",
+        "Byte", "Short", "Object", "Class", "System", "Math", "Thread",
+        "Runnable", "Exception", "RuntimeException", "Error", "Throwable",
+        "Number", "Comparable", "Cloneable", "Serializable", "Iterable",
+        "Collection", "List", "Set", "Map", "ArrayList", "HashMap", "HashSet",
+        "LinkedList", "TreeMap", "TreeSet", "Queue", "Deque", "Stack", "Vector",
+        // Groovy-specific types
+        "Closure", "GString", "GroovyObject", "MetaClass", "Expando", "ConfigSlurper",
+    ];
+    
+    if common_groovy_types.contains(&symbol_name.as_ref()) {
+        // Try java.lang first for common Java types
+        if ["String", "Integer", "Long", "Double", "Float", "Boolean", "Character",
+            "Byte", "Short", "Object", "Class", "System", "Math", "Thread",
+            "Runnable", "Exception", "RuntimeException", "Error", "Throwable",
+            "Number", "Comparable", "Cloneable", "Serializable", "Iterable",
+            "Collection", "List", "Set", "Map", "ArrayList", "HashMap", "HashSet",
+            "LinkedList", "TreeMap", "TreeSet", "Queue", "Deque", "Stack", "Vector"].contains(&symbol_name.as_ref()) {
+            let java_lang_fqn = format!("java.lang.{}", symbol_name);
+            debug!("Groovy resolve_symbol_with_imports: using java.lang for common type: {}", java_lang_fqn);
+            return Some(java_lang_fqn);
+        } else {
+            // Try groovy.lang for Groovy-specific types
+            let groovy_lang_fqn = format!("groovy.lang.{}", symbol_name);
+            debug!("Groovy resolve_symbol_with_imports: using groovy.lang for Groovy type: {}", groovy_lang_fqn);
+            return Some(groovy_lang_fqn);
+        }
+    }
+    
+    // Try star imports
+    for package in star_imports {
+        let candidate_fqn = format!("{}.{}", package, symbol_name);
+        // TODO: Could verify this FQN exists in cache/database, but for now assume it's correct
+        debug!("Groovy resolve_symbol_with_imports: trying star import: {}", candidate_fqn);
+        return Some(candidate_fqn);
+    }
+    
+    debug!("Groovy resolve_symbol_with_imports: no resolution found for {}", symbol_name);
+    None
+}
+
+/// Extract imports from Groovy source code
+fn extract_imports_from_source(source: &str) -> Vec<String> {
+    let mut imports = Vec::new();
+    
+    let query_text = r#"(import_declaration) @import_decl"#;
+    
+    let language = tree_sitter_groovy::language();
+    if let Ok(query) = Query::new(&language, query_text) {
+        let mut parser = Parser::new();
+        if parser.set_language(&language).is_ok() {
+            if let Some(tree) = parser.parse(source, None) {
+                let mut cursor = QueryCursor::new();
+                
+                cursor
+                    .matches(&query, tree.root_node(), source.as_bytes())
+                    .for_each(|query_match| {
+                        for capture in query_match.captures {
+                            if let Ok(full_import_text) = capture.node.utf8_text(source.as_bytes()) {
+                                // Extract just the import path from "import com.example.Class"
+                                let import_text = full_import_text
+                                    .trim_start_matches("import")
+                                    .trim()
+                                    .trim_end_matches(';')
+                                    .trim();
+                                    
+                                // Remove "static" keyword if present
+                                let clean_import = if import_text.starts_with("static ") {
+                                    &import_text[7..]
+                                } else {
+                                    import_text
+                                };
+                                
+                                imports.push(clean_import.to_string());
+                            }
+                        }
+                    });
+            }
+        }
+    }
+    
+    imports
+}

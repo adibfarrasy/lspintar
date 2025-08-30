@@ -36,8 +36,10 @@ pub async fn find_in_project(
             .and_then(|path| crate::core::utils::find_project_root(&path))?;
 
 
-        // Try to construct FQN using the current package
-        let fqn = if let Some(package) = super::utils::extract_package_from_source(source) {
+        // Try to resolve FQN using imports first, then fallback to current package
+        let fqn = if let Some(resolved_fqn) = super::utils::resolve_symbol_with_imports(&symbol_name, source, &dependency_cache) {
+            resolved_fqn
+        } else if let Some(package) = super::utils::extract_package_from_source(source) {
             if !package.is_empty() {
                 format!("{}.{}", package, symbol_name)
             } else {

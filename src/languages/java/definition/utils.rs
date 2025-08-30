@@ -186,7 +186,6 @@ pub fn prepare_symbol_lookup_key_with_wildcard_support(
         }
     };
 
-
     // First try direct symbol lookup
     let direct_key = (project_root.clone(), symbol_name.clone());
     // Check using read-through cache pattern
@@ -453,5 +452,107 @@ pub fn extract_package_from_source(source: &str) -> Option<String> {
         }
     }
 
+    None
+}
+
+/// Resolve symbol name with import context
+#[tracing::instrument(skip_all)]
+pub fn resolve_symbol_with_imports(
+    symbol_name: &str,
+    source: &str,
+    dependency_cache: &Arc<DependencyCache>,
+) -> Option<String> {
+    use tracing::debug;
+
+    let imports = extract_imports_from_source(source);
+
+    // First, check for exact matches and specific imports
+    let mut star_imports = Vec::new();
+    for import in &imports {
+        let expected_suffix = format!(".{}", symbol_name);
+        let matches_suffix = import.ends_with(&expected_suffix);
+        let exact_match = import == symbol_name;
+
+        if matches_suffix || exact_match {
+            debug!(
+                "Java resolve_symbol_with_imports: found exact match import {}",
+                import
+            );
+            return Some(import.clone());
+        }
+
+        // Collect star imports for later use
+        if import.ends_with(".*") {
+            let package = import.strip_suffix(".*").unwrap_or("");
+            star_imports.push(package);
+        }
+    }
+
+    // For common Java types, try java.lang first (always implicitly imported)
+    let common_java_types = [
+        "String",
+        "Integer",
+        "Long",
+        "Double",
+        "Float",
+        "Boolean",
+        "Character",
+        "Byte",
+        "Short",
+        "Object",
+        "Class",
+        "System",
+        "Math",
+        "Thread",
+        "Runnable",
+        "Exception",
+        "RuntimeException",
+        "Error",
+        "Throwable",
+        "Number",
+        "Comparable",
+        "Cloneable",
+        "Serializable",
+        "Iterable",
+        "Collection",
+        "List",
+        "Set",
+        "Map",
+        "ArrayList",
+        "HashMap",
+        "HashSet",
+        "LinkedList",
+        "TreeMap",
+        "TreeSet",
+        "Queue",
+        "Deque",
+        "Stack",
+        "Vector",
+    ];
+
+    if common_java_types.contains(&symbol_name.as_ref()) {
+        let java_lang_fqn = format!("java.lang.{}", symbol_name);
+        debug!(
+            "Java resolve_symbol_with_imports: using java.lang for common type: {}",
+            java_lang_fqn
+        );
+        return Some(java_lang_fqn);
+    }
+
+    // Try star imports
+    for package in star_imports {
+        let candidate_fqn = format!("{}.{}", package, symbol_name);
+        // TODO: Could verify this FQN exists in cache/database, but for now assume it's correct
+        debug!(
+            "Java resolve_symbol_with_imports: trying star import: {}",
+            candidate_fqn
+        );
+        return Some(candidate_fqn);
+    }
+
+    debug!(
+        "Java resolve_symbol_with_imports: no resolution found for {}",
+        symbol_name
+    );
     None
 }
