@@ -6,7 +6,7 @@ use std::{
 };
 use tokio::{fs, task};
 use tower_lsp::lsp_types::{Location, Position, Range, Url};
-use tree_sitter::{Query, StreamingIterator, Tree};
+use tree_sitter::{Query, QueryCursor, StreamingIterator, Tree};
 
 use crate::{
     core::{
@@ -21,8 +21,6 @@ use super::utils::find_identifier_at_position;
 
 static IMPLEMENTATION_WITH_METHOD_QUERY: OnceLock<Option<Query>> = OnceLock::new();
 
-static INTERFACE_DECLARATION_QUERY: OnceLock<Option<Query>> = OnceLock::new();
-static ABSTRACT_CLASS_DECLARATION_QUERY: OnceLock<Option<Query>> = OnceLock::new();
 
 pub fn handle(
     tree: &Tree,
@@ -123,83 +121,60 @@ async fn find_implementations(
 
 #[tracing::instrument(skip_all)]
 fn get_parent_name(tree: &Tree, source: &str, symbol_name: &str) -> Option<String> {
-    let mut cursor = tree_sitter::QueryCursor::new();
-
-    // Try interfaces first
-    let query = get_interface_declaration_query()
-        .as_ref()
-        .context("Failed to get query")
-        .ok()?;
-
-    let mut parent_name = None;
-    let mut found = false;
-
-    cursor
-        .matches(&query, tree.root_node(), source.as_bytes())
-        .for_each(|query_match| {
-            if found {
-                return;
-            }
-
-            for capture in query_match.captures {
-                match capture.index {
-                    0 => {
-                        if let Ok(name) = capture.node.utf8_text(source.as_bytes()) {
-                            parent_name = Some(name.to_string());
-                        }
-                    }
-                    1 => {
-                        if let Ok(method_name) = capture.node.utf8_text(source.as_bytes()) {
-                            if method_name == symbol_name {
-                                found = true;
-                            }
-                        }
-                    }
-                    _ => {}
+    let query_text = r#"
+        ; Interface method
+        (interface_declaration
+          name: (identifier) @interface_name
+          body: (interface_body
+            (method_declaration
+              name: (identifier) @method_name)))
+              
+        ; Class method  
+        (class_declaration
+          name: (identifier) @class_name
+          body: (class_body
+            (method_declaration
+              name: (identifier) @method_name)))
+    "#;
+    
+    let language = tree_sitter_groovy::language();
+    let query = Query::new(&language, query_text).ok()?;
+    let mut cursor = QueryCursor::new();
+    
+    let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
+    while let Some(query_match) = matches.next() {
+        let mut parent_name = None;
+        let mut found_method = false;
+        
+        for capture in query_match.captures {
+            let capture_name = query.capture_names()[capture.index as usize];
+            let capture_text = capture.node.utf8_text(source.as_bytes()).ok()?;
+            
+            match capture_name {
+                "interface_name" | "class_name" => {
+                    parent_name = Some(capture_text.to_string());
                 }
+                "method_name" if capture_text == symbol_name => {
+                    found_method = true;
+                }
+                _ => {}
             }
-        });
-
-    // If not found in interfaces, try abstract classes
-    if !found {
-        if let Some(abstract_query) = get_abstract_class_declaration_query().as_ref() {
-            cursor
-                .matches(abstract_query, tree.root_node(), source.as_bytes())
-                .for_each(|query_match| {
-                    if found {
-                        return;
-                    }
-
-                    for capture in query_match.captures {
-                        match capture.index {
-                            0 => {
-                                if let Ok(name) = capture.node.utf8_text(source.as_bytes()) {
-                                    parent_name = Some(name.to_string());
-                                }
-                            }
-                            1 => {
-                                if let Ok(method_name) = capture.node.utf8_text(source.as_bytes()) {
-                                    if method_name == symbol_name {
-                                        found = true;
-                                    }
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                });
+        }
+        
+        if found_method && parent_name.is_some() {
+            return parent_name;
         }
     }
-
-    parent_name
+    
+    None
 }
+
 
 #[tracing::instrument(skip_all)]
 async fn find_method_implementations(
     symbol_name: &str,
     locations: Vec<Location>,
 ) -> Result<Vec<Location>> {
-    // Enhanced implementation with method signature matching
 
     let mut results = Vec::new();
     let mut parser = tree_sitter::Parser::new();
@@ -231,8 +206,7 @@ async fn find_method_implementations(
                 
                 if let (Some(name), Some(node)) = (method_name, method_node) {
                     if name == symbol_name {
-                        // For now, match all methods with the same name
-                        // TODO: Could enhance further by comparing parameter types/count
+                        // Basic name matching - consistent with Java/Kotlin approach
                         if let Some(loc) = node_to_lsp_location(&node, &location.uri.to_string()) {
                             results.push(loc);
                         }
@@ -260,37 +234,6 @@ fn get_implementation_with_method_query() -> &'static Option<Query> {
     })
 }
 
-#[tracing::instrument(skip_all)]
-fn get_interface_declaration_query() -> &'static Option<Query> {
-    INTERFACE_DECLARATION_QUERY.get_or_init(|| {
-        let language = tree_sitter_groovy::language();
-        let text = r#"
-        (interface_declaration 
-            name: (identifier) @interface_name
-            body: (interface_body 
-                (method_declaration name: (identifier) @method_name)))
-        "#;
-
-        Query::new(&language, text)
-            .ok()
-    })
-}
-
-fn get_abstract_class_declaration_query() -> &'static Option<Query> {
-    ABSTRACT_CLASS_DECLARATION_QUERY.get_or_init(|| {
-        let language = tree_sitter_groovy::language();
-        let text = r#"
-        (class_declaration 
-            (modifiers (modifier) @abstract (#eq? @abstract "abstract"))
-            name: (identifier) @class_name
-            body: (class_body 
-                (method_declaration name: (identifier) @method_name)))
-        "#;
-
-        Query::new(&language, text)
-            .ok()
-    })
-}
 
 /// Handle go-to-implementation for method calls like someService.method()
 fn handle_method_call_implementation(
@@ -344,6 +287,95 @@ async fn find_interface_method_implementations(
     }
     
     Ok(method_implementations)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tree_sitter::Parser;
+
+    fn create_groovy_parser() -> Option<Parser> {
+        let mut parser = Parser::new();
+        let language = tree_sitter_groovy::language();
+        parser.set_language(&language).ok()?;
+        Some(parser)
+    }
+
+    #[test]
+    fn test_get_parent_name_interface_method() {
+        let mut parser = create_groovy_parser().unwrap();
+        let source = r#"
+interface TestInterface {
+    def testMethod()
+    String anotherMethod()
+}
+        "#;
+
+        let tree = parser.parse(source, None).unwrap();
+        let result = get_parent_name(&tree, source, "testMethod");
+        assert_eq!(result, Some("TestInterface".to_string()));
+    }
+
+    #[test]
+    fn test_get_parent_name_class_method() {
+        let mut parser = create_groovy_parser().unwrap();
+        let source = r#"
+class TestClass {
+    def testMethod() {
+        // implementation
+    }
+    
+    private String helper() {
+        return "test"
+    }
+}
+        "#;
+
+        let tree = parser.parse(source, None).unwrap();
+        let result = get_parent_name(&tree, source, "testMethod");
+        assert_eq!(result, Some("TestClass".to_string()));
+    }
+
+    #[test]
+    fn test_get_parent_name_abstract_class_method() {
+        let mut parser = create_groovy_parser().unwrap();
+        let source = r#"
+abstract class AbstractTestClass {
+    abstract def testMethod()
+    
+    def concreteMethod() {
+        return "concrete"
+    }
+}
+        "#;
+
+        let tree = parser.parse(source, None).unwrap();
+        let result = get_parent_name(&tree, source, "testMethod");
+        assert_eq!(result, Some("AbstractTestClass".to_string()));
+    }
+
+    #[test]
+    fn test_get_parent_name_method_not_found() {
+        let mut parser = create_groovy_parser().unwrap();
+        let source = r#"
+class TestClass {
+    def otherMethod() {
+        // implementation
+    }
+}
+        "#;
+
+        let tree = parser.parse(source, None).unwrap();
+        let result = get_parent_name(&tree, source, "nonExistentMethod");
+        assert_eq!(result, None);
+    }
+
+
+    #[test]
+    fn test_get_implementation_with_method_query() {
+        let query = get_implementation_with_method_query();
+        assert!(query.is_some(), "Implementation with method query should be available");
+    }
 }
 
 /// Find a specific method in a class file

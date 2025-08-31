@@ -1238,12 +1238,9 @@ mod tests {
         };
         
         // Test that the improved method search finds the correct overloaded method
-        // All three should find method declarations, not the method calls inside someMethod()
         let result_0_param = search_method_in_class_file_cross_language(&class_location, "process");
-        let result_1_param = search_method_in_class_file_cross_language(&class_location, "process"); 
-        let result_2_param = search_method_in_class_file_cross_language(&class_location, "process");
         
-        // All should find method declarations (not calls)
+        // Should find method declaration (not calls)
         // The exact line will depend on which overload it finds first, but it should be one of the declarations
         if let Some(result) = result_0_param {
             println!("Found process method at line {}", result.range.start.line);
