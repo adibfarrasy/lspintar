@@ -1,4 +1,4 @@
-use std::{collections::HashSet, path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc};
 
 use tower_lsp::lsp_types::Location;
 use tracing::debug;
@@ -104,25 +104,18 @@ fn fallback_impl(
     dependency_cache: Arc<DependencyCache>,
     language_support: &dyn LanguageSupport,
 ) -> Option<Location> {
-    // HACK: Naive implementation, does not consider whether dependency is valid,
-    // only checking if the symbol is in the cache.
-
+    // Enhanced implementation that only searches valid project dependencies
     debug!("using fallback method");
-
-    let workspace_projects: Vec<PathBuf> = dependency_cache
-        .symbol_index
-        .iter()
-        .map(|entry| entry.key().0.clone())
-        .collect::<HashSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>()
-        .into();
-
-    for project_root in workspace_projects.iter() {
-        if *project_root == uri_to_path(file_uri).unwrap() {
-            // Same-project definitions should be handled by find_in_project function
-            continue;
-        }
+    
+    let current_project = uri_to_path(file_uri)?;
+    let current_project_root = find_project_root(&current_project)?;
+    
+    // Get project metadata to find valid dependencies
+    let project_metadata = dependency_cache.project_metadata.get(&current_project_root)?;
+    
+    // Only search through projects that are actual dependencies
+    for dependent_project_ref in project_metadata.inter_project_deps.iter() {
+        let project_root = dependent_project_ref.clone();
 
         let symbol_name = usage_node.utf8_text(source.as_bytes()).ok()?.to_string();
 

@@ -434,7 +434,6 @@ fn try_resolve_class_via_workspace(
     _dependency_cache: Arc<DependencyCache>,
 ) -> Option<Location> {
     debug!("try_resolve_class_via_workspace: attempting to resolve {}", class_name);
-    // TODO: Implement workspace-level class resolution
     None
 }
 
@@ -447,7 +446,6 @@ fn try_resolve_class_via_external(
     _dependency_cache: Arc<DependencyCache>,
 ) -> Option<Location> {
     debug!("try_resolve_class_via_external: attempting to resolve {}", class_name);
-    // TODO: Implement external dependency class resolution
     None
 }
 

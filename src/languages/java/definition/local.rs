@@ -179,16 +179,58 @@ fn find_local_variables_in_block<'a>(
 
 /// Find the closest declaration based on scope distance
 fn find_closest_declaration<'a>(
-    _usage_node: &Node<'a>,
+    usage_node: &Node<'a>,
     candidates: &[Node<'a>],
 ) -> Option<Node<'a>> {
     if candidates.is_empty() {
         return None;
     }
 
-    // For now, return the last declaration (closest in scope)
-    // TODO: Implement proper scope distance calculation
-    candidates.last().copied()
+    // Calculate scope distance for each candidate and find the closest
+    let mut best_candidate = None;
+    let mut best_distance = usize::MAX;
+
+    for candidate in candidates {
+        let distance = calculate_scope_distance(usage_node, candidate);
+        if distance < best_distance {
+            best_distance = distance;
+            best_candidate = Some(*candidate);
+        }
+    }
+
+    best_candidate
+}
+
+/// Calculate the scope distance between a usage node and a declaration node
+/// Returns the number of scope levels between them (lower is closer)
+fn calculate_scope_distance(usage_node: &Node, declaration_node: &Node) -> usize {
+    // Find common ancestor
+    let mut usage_ancestors = Vec::new();
+    let mut current = usage_node.parent();
+    while let Some(parent) = current {
+        usage_ancestors.push(parent);
+        current = parent.parent();
+    }
+
+    let mut declaration_ancestors = Vec::new();
+    current = declaration_node.parent();
+    while let Some(parent) = current {
+        declaration_ancestors.push(parent);
+        current = parent.parent();
+    }
+
+    // Find the depth to common ancestor
+    let mut common_ancestor_depth = 0;
+    for (i, usage_ancestor) in usage_ancestors.iter().enumerate() {
+        if declaration_ancestors.iter().any(|da| da.id() == usage_ancestor.id()) {
+            common_ancestor_depth = i;
+            break;
+        }
+    }
+
+    // The scope distance is the depth from usage to common ancestor
+    // Closer declarations (same block) have distance 0, outer scopes have higher distance
+    common_ancestor_depth
 }
 
 /// Try to find symbol as a field declaration

@@ -1,46 +1,57 @@
 use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range};
-use tree_sitter::{Query, QueryCursor, StreamingIterator, Tree};
-
-fn byte_to_position(source: &str, byte_offset: usize) -> Position {
-    let mut line = 0;
-    let mut character = 0;
-
-    for (i, ch) in source.char_indices() {
-        if i >= byte_offset {
-            break;
-        }
-        if ch == '\n' {
-            line += 1;
-            character = 0;
-        } else {
-            character += ch.len_utf16() as u32;
-        }
-    }
-
-    Position { line, character }
-}
+use tree_sitter::Tree;
 
 pub fn collect_syntax_errors(tree: &Tree, source: &str, lsp_source: &str) -> Vec<Diagnostic> {
-    let query_text = r#"(ERROR) @error"#;
-    let query = Query::new(&tree_sitter_groovy::language(), query_text).unwrap();
-    let mut cursor = QueryCursor::new();
-    let matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
-
     let mut diagnostics = Vec::new();
-    matches.for_each(|match_| {
-        match_.captures.into_iter().for_each(|capture| {
-            let node = capture.node;
-            diagnostics.push(Diagnostic {
-                range: Range {
-                    start: byte_to_position(source, node.start_byte()),
-                    end: byte_to_position(source, node.end_byte()),
-                },
-                severity: Some(DiagnosticSeverity::ERROR),
-                message: "Syntax error".to_string(),
-                source: Some(lsp_source.to_string()),
-                ..Default::default()
-            });
-        });
-    });
+    collect_syntax_errors_recursive(tree.root_node(), source, &mut diagnostics, lsp_source);
     diagnostics
+}
+
+fn collect_syntax_errors_recursive(
+    node: tree_sitter::Node,
+    source: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+    lsp_name: &str,
+) {
+    if node.has_error() {
+        if node.is_error() || node.is_missing() {
+            let start_position = Position {
+                line: node.start_position().row as u32,
+                character: node.start_position().column as u32,
+            };
+            let end_position = Position {
+                line: node.end_position().row as u32,
+                character: node.end_position().column as u32,
+            };
+
+            let range = Range {
+                start: start_position,
+                end: end_position,
+            };
+
+            let message = if node.is_missing() {
+                format!("Missing {}", node.kind())
+            } else {
+                let node_text = node.utf8_text(source.as_bytes()).unwrap_or("<unknown>");
+                format!("Syntax error: unexpected '{}'", node_text)
+            };
+
+            diagnostics.push(Diagnostic {
+                range,
+                severity: Some(DiagnosticSeverity::ERROR),
+                code: None,
+                code_description: None,
+                source: Some(lsp_name.to_string()),
+                message,
+                related_information: None,
+                tags: None,
+                data: None,
+            });
+        }
+
+        // Continue checking children for more errors
+        for child in node.children(&mut node.walk()) {
+            collect_syntax_errors_recursive(child, source, diagnostics, lsp_name);
+        }
+    }
 }

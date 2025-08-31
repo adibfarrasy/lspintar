@@ -10,9 +10,7 @@ use crate::core::{
 
 static EXTRACT_SYMBOL_QUERIES: OnceLock<Vec<(Query, SymbolType)>> = OnceLock::new();
 
-// TODO: currently only handles non-nested declarations
-// enhance with recursion to create proper fully-qualified names for inner classes, methods, and
-// properties.
+// Enhanced to handle nested declarations with proper fully-qualified names
 fn get_extract_symbol_queries() -> &'static [(Query, SymbolType)] {
     EXTRACT_SYMBOL_QUERIES.get_or_init(|| {
         let language = tree_sitter_groovy::language();
@@ -42,6 +40,37 @@ fn get_extract_symbol_queries() -> &'static [(Query, SymbolType)] {
             (
                 r#"(annotation_type_declaration name: (identifier) @name)"#,
                 SymbolType::AnnotationDeclaration,
+            ),
+            // Nested class declarations
+            (
+                r#"(class_declaration 
+                    body: (class_body 
+                        (class_declaration 
+                            name: (identifier) @name
+                            superclass: (superclass (type_identifier) @extends)?
+                            interfaces: (super_interfaces (type_list (type_identifier) @implements)*)?))
+                )"#,
+                SymbolType::ClassDeclaration,
+            ),
+            // Nested interface declarations
+            (
+                r#"(class_declaration 
+                    body: (class_body 
+                        (interface_declaration 
+                            name: (identifier) @name
+                            interfaces: (extends_interfaces (type_list (type_identifier) @extends)*)?))
+                )"#,
+                SymbolType::InterfaceDeclaration,
+            ),
+            // Nested enum declarations
+            (
+                r#"(class_declaration 
+                    body: (class_body 
+                        (enum_declaration 
+                            name: (identifier) @name
+                            interfaces: (super_interfaces (type_list (type_identifier) @implements)*)?))
+                )"#,
+                SymbolType::EnumDeclaration,
             ),
         ]
         .iter()
@@ -73,13 +102,17 @@ pub fn extract_groovy_symbols(parsed_file: &ParsedSourceFile) -> Result<Vec<Symb
             let mut symbol_name = None;
             let mut extends = None;
             let mut implements = Vec::new();
+            let mut name_node = None;
 
             for capture in query_match.captures {
                 let capture_name = query.capture_names()[capture.index as usize];
 
                 if let Ok(text) = capture.node.utf8_text(parsed_file.content.as_bytes()) {
                     match capture_name {
-                        "name" => symbol_name = Some(text.to_string()),
+                        "name" => {
+                            symbol_name = Some(text.to_string());
+                            name_node = Some(capture.node);
+                        },
                         "extends" => extends = Some(text.to_string()),
                         "implements" => implements.push(text.to_string()),
                         _ => {}
@@ -87,12 +120,12 @@ pub fn extract_groovy_symbols(parsed_file: &ParsedSourceFile) -> Result<Vec<Symb
                 }
             }
 
-            if let Some(name) = symbol_name {
-                let name_node = query_match.captures[0].node;
-
-                if is_groovy_symbol_accessible(&name_node, &parsed_file.content) {
+            if let (Some(name), Some(node)) = (symbol_name, name_node) {
+                if is_groovy_symbol_accessible(&node, &parsed_file.content) {
+                    // Build proper FQN considering nesting
                     let fully_qualified_name = if let Some(ref pkg) = package {
-                        format!("{}.{}", pkg, name)
+                        let nested_name = build_nested_class_name(&node, &parsed_file.content, &name);
+                        format!("{}.{}", pkg, nested_name)
                     } else {
                         return;
                     };
@@ -100,8 +133,8 @@ pub fn extract_groovy_symbols(parsed_file: &ParsedSourceFile) -> Result<Vec<Symb
                     symbols.push(SymbolDefinition {
                         fully_qualified_name,
                         source_file: parsed_file.file_path.clone(),
-                        line: name_node.start_position().row,
-                        column: name_node.start_position().column,
+                        line: node.start_position().row,
+                        column: node.start_position().column,
                         extends,
                         implements,
                     });
@@ -179,4 +212,32 @@ fn is_groovy_symbol_accessible(node: &Node, content: &str) -> bool {
         "property_declaration" => true,
         _ => false,
     }
+}
+
+/// Build proper nested class name (e.g., OuterClass$InnerClass)
+fn build_nested_class_name(node: &Node, content: &str, class_name: &str) -> String {
+    let mut class_names = vec![class_name.to_string()];
+    let mut current_node = node.parent();
+
+    // Walk up the tree to find parent class declarations
+    while let Some(parent) = current_node {
+        if parent.kind() == "class_declaration" || 
+           parent.kind() == "interface_declaration" || 
+           parent.kind() == "enum_declaration" {
+            // Find the name of this parent class
+            for child in parent.children(&mut parent.walk()) {
+                if child.kind() == "identifier" {
+                    if let Ok(parent_name) = child.utf8_text(content.as_bytes()) {
+                        class_names.push(parent_name.to_string());
+                        break;
+                    }
+                }
+            }
+        }
+        current_node = parent.parent();
+    }
+
+    // Reverse to get outer-to-inner order and join with $
+    class_names.reverse();
+    class_names.join("$")
 }

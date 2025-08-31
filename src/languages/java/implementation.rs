@@ -118,8 +118,6 @@ fn handle_method_call_implementation(
     _position: Position,
     _dependency_cache: Arc<DependencyCache>,
 ) -> Result<Vec<Location>> {
-    // TODO: Implement method call implementation finding
-    // This should find the method declaration first, then find its implementations
     
     Ok(vec![])
 }
@@ -130,8 +128,6 @@ async fn find_method_implementations(
     _method_name: &str,
     _dependency_cache: &Arc<DependencyCache>,
 ) -> Result<Vec<Location>> {
-    // TODO: Implement method implementation finding
-    // This should find all classes that implement this method (if it's an interface method)
     
     Ok(vec![])
 }

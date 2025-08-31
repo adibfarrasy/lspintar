@@ -107,7 +107,6 @@ impl LanguageSupport for GroovySupport {
 
     #[tracing::instrument(skip_all)]
     fn collect_diagnostics(&self, tree: &Tree, source: &str) -> Vec<Diagnostic> {
-        // TODO: replace this with more sophisticated handling
         collect_syntax_errors(tree, source, LSP_NAME)
     }
 

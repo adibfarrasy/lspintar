@@ -130,7 +130,6 @@ impl LanguageServer for LspServer {
             })?;
         }
 
-        
         let client_root = params
             .root_uri
             .and_then(|uri| uri.to_file_path().ok())
@@ -336,7 +335,9 @@ impl LanguageServer for LspServer {
             Ok(locations) if !locations.is_empty() => {
                 Ok(Some(GotoImplementationResponse::Array(locations)))
             }
-            Ok(_) => Ok(None),
+            Ok(_) => Err(tower_lsp::jsonrpc::Error::invalid_params(
+                "Implementation not found.".to_string(),
+            )),
             Err(error) => Err(tower_lsp::jsonrpc::Error::invalid_params(error.to_string())),
         }
     }
@@ -570,7 +571,6 @@ impl LspServer {
             .retain(|cache_key, _| cache_key.uri != uri);
     }
 
-
     async fn get_content_and_tree(&self, uri: &str) -> Result<(String, Tree)> {
         {
             let document_manager = self.documents.read().await;
@@ -669,7 +669,6 @@ impl LspServer {
     }
 
     async fn find_true_workspace_root(&self, suggested_root: &PathBuf) -> PathBuf {
-        
         if is_path_in_external_dependency(suggested_root) {
             if let Some(dep_root) = find_external_dependency_root(suggested_root) {
                 return dep_root;
@@ -696,18 +695,25 @@ impl LspServer {
 
     fn search_for_project_in_subdirectories(&self, dir: &PathBuf) -> Option<PathBuf> {
         use std::fs;
-        
+
         // Search up to 3 levels deep to avoid infinite recursion and performance issues
-        fn search_recursive(current_dir: &PathBuf, depth: usize, max_depth: usize) -> Option<PathBuf> {
+        fn search_recursive(
+            current_dir: &PathBuf,
+            depth: usize,
+            max_depth: usize,
+        ) -> Option<PathBuf> {
             if depth > max_depth {
                 return None;
             }
-            
+
             // Check if current directory is a project root
-            if PROJECT_ROOT_MARKER.iter().any(|marker| current_dir.join(marker).exists()) {
+            if PROJECT_ROOT_MARKER
+                .iter()
+                .any(|marker| current_dir.join(marker).exists())
+            {
                 return Some(current_dir.clone());
             }
-            
+
             // Search subdirectories if we haven't reached max depth
             if depth < max_depth {
                 if let Ok(entries) = fs::read_dir(current_dir) {
@@ -716,11 +722,15 @@ impl LspServer {
                         if path.is_dir() {
                             // Skip common non-project directories to improve performance
                             if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                                if name.starts_with('.') || name == "node_modules" || name == "target" || name == "build" {
+                                if name.starts_with('.')
+                                    || name == "node_modules"
+                                    || name == "target"
+                                    || name == "build"
+                                {
                                     continue;
                                 }
                             }
-                            
+
                             if let Some(found) = search_recursive(&path, depth + 1, max_depth) {
                                 return Some(found);
                             }
@@ -728,10 +738,10 @@ impl LspServer {
                     }
                 }
             }
-            
+
             None
         }
-        
+
         search_recursive(dir, 0, 3)
     }
 
@@ -801,7 +811,6 @@ mod tests {
     use crate::languages::LanguageRegistry;
     use std::sync::Arc;
     use tower_lsp::lsp_types::{Position, Range, Url};
-
 
     #[test]
     fn test_server_creation_basic() {

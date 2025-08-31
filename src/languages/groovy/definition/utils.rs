@@ -857,7 +857,7 @@ fn resolve_same_package(
 pub fn resolve_symbol_with_imports(
     symbol_name: &str,
     source: &str,
-    _dependency_cache: &DependencyCache,
+    dependency_cache: &DependencyCache,
 ) -> Option<String> {
         
     // Extract imports from source
@@ -914,11 +914,33 @@ pub fn resolve_symbol_with_imports(
     // Try star imports
     for package in star_imports {
         let candidate_fqn = format!("{}.{}", package, symbol_name);
-        // TODO: Could verify this FQN exists in cache/database, but for now assume it's correct
-        return Some(candidate_fqn);
+        // Verify this FQN exists in cache/database
+        if verify_groovy_fqn_exists(&candidate_fqn, dependency_cache) {
+            return Some(candidate_fqn);
+        }
     }
     
     None
+}
+
+/// Verify that a given FQN exists in the dependency cache or workspace
+fn verify_groovy_fqn_exists(fqn: &str, dependency_cache: &DependencyCache) -> bool {
+    // Check builtin classes (like java.lang.* classes)
+    if let Some(class_name) = fqn.split('.').last() {
+        if dependency_cache.builtin_infos.get(class_name).is_some() {
+            return true;
+        }
+    }
+
+    // Check if the FQN exists anywhere in the symbol index
+    for entry in dependency_cache.symbol_index.iter() {
+        let ((_project_root, symbol_name), _file_path) = (entry.key(), entry.value());
+        if symbol_name == fqn {
+            return true;
+        }
+    }
+
+    false
 }
 
 /// Extract imports from Groovy source code

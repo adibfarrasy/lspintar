@@ -871,8 +871,13 @@ fn should_check_for_multiple_symbols(file_path: &str) -> bool {
         }
     }
 
-    // TODO: Could also check file size here if we want to be more sophisticated
-    // Large files are more likely to have multiple symbols
+    // Check file size - larger files are more likely to have multiple symbols
+    if let Ok(metadata) = std::fs::metadata(file_path) {
+        // Files larger than 50KB often contain multiple classes/symbols
+        if metadata.len() > 50_000 {
+            return true;
+        }
+    }
 
     false
 }

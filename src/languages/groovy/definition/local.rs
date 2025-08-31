@@ -548,14 +548,84 @@ fn contains_floating_point_operand(binary_expr: &Node, _source: &str) -> bool {
         match child.kind() {
             "decimal_floating_point_literal" | "hex_floating_point_literal" => return true,
             "identifier" => {
-                // TODO: Could enhance with variable type lookup
-                // For now, conservatively assume it might be floating point
+                // Try to determine if this variable is of floating point type
+                if let Ok(identifier_text) = child.utf8_text(_source.as_bytes()) {
+                    if is_floating_point_variable(identifier_text, binary_expr, _source) {
+                        return true;
+                    }
+                }
                 continue;
             }
             _ => continue,
         }
     }
     false
+}
+
+/// Try to determine if a variable is of floating point type by looking at its declaration
+fn is_floating_point_variable(var_name: &str, current_node: &Node, source: &str) -> bool {
+    // Look for variable declarations in the current scope and parent scopes
+    let mut current = Some(*current_node);
+    
+    while let Some(node) = current {
+        if let Some(var_type) = find_variable_type_in_node(var_name, &node, source) {
+            return is_floating_point_type(&var_type);
+        }
+        current = node.parent();
+    }
+    
+    false
+}
+
+/// Find the type of a variable by looking at its declaration in the given node
+fn find_variable_type_in_node(var_name: &str, node: &Node, source: &str) -> Option<String> {
+    // Look for local variable declarations with explicit types
+    let var_decl_query = r#"
+        (local_variable_declaration
+            type: (_) @type
+            declarator: (variable_declarator
+                name: (identifier) @name))
+    "#;
+    
+    let language = tree_sitter_groovy::language();
+    if let Some(query) = get_or_create_query(var_decl_query, &language) {
+        let mut cursor = QueryCursor::new();
+        let mut matches = cursor.matches(&query, *node, source.as_bytes());
+        while let Some(match_) = matches.next() {
+            let mut name_text = None;
+            let mut type_text = None;
+            
+            for capture in match_.captures {
+                match query.capture_names()[capture.index as usize] {
+                    "name" => {
+                        if let Ok(text) = capture.node.utf8_text(source.as_bytes()) {
+                            name_text = Some(text);
+                        }
+                    }
+                    "type" => {
+                        if let Ok(text) = capture.node.utf8_text(source.as_bytes()) {
+                            type_text = Some(text.to_string());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            
+            if name_text == Some(var_name) {
+                return type_text;
+            }
+        }
+    }
+    
+    None
+}
+
+/// Check if a type name represents a floating point type
+fn is_floating_point_type(type_name: &str) -> bool {
+    matches!(
+        type_name.trim(),
+        "float" | "Float" | "double" | "Double" | "BigDecimal"
+    )
 }
 
 fn types_compatible(call_type: &str, param_type: &str) -> bool {
