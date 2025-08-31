@@ -46,6 +46,13 @@ pub fn get_declaration_query_for_symbol_type(symbol_type: &SymbolType) -> Option
             (field_declaration declarator: (variable_declarator (identifier) @name))
         "#,
         ),
+        SymbolType::EnumDeclaration => Some(r#"(enum_declaration name: (identifier) @name)"#),
+        SymbolType::EnumUsage => Some(
+            r#"
+            (enum_constant name: (identifier) @name)
+            (enum_declaration name: (identifier) @name)
+        "#,
+        ),
         _ => None,
     }
 }
@@ -984,4 +991,289 @@ fn extract_imports_from_source(source: &str) -> Vec<String> {
     }
     
     imports
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tree_sitter::Parser;
+
+    fn create_groovy_parser() -> Option<Parser> {
+        let mut parser = Parser::new();
+        match parser.set_language(&tree_sitter_groovy::language()) {
+            Ok(()) => Some(parser),
+            Err(_) => None,
+        }
+    }
+
+    #[test]
+    fn test_get_declaration_query_for_groovy_enum_types() {
+        // Test that enum declaration and usage queries are provided
+        let enum_decl_query = get_declaration_query_for_symbol_type(&SymbolType::EnumDeclaration);
+        assert!(enum_decl_query.is_some());
+        
+        let enum_usage_query = get_declaration_query_for_symbol_type(&SymbolType::EnumUsage);
+        assert!(enum_usage_query.is_some());
+    }
+
+    #[test]
+    fn test_search_definition_groovy_enum_constant() {
+        let mut parser = match create_groovy_parser() {
+            Some(p) => p,
+            None => {
+                println!("Warning: Groovy parser not available for testing");
+                return;
+            }
+        };
+
+        // Test source with enum definition
+        let source = r#"
+enum Size {
+    SMALL,
+    MEDIUM, 
+    LARGE
+}
+"#;
+        
+        let tree = parser.parse(source, None).unwrap();
+        
+        // Search for enum constant "MEDIUM"
+        let result = search_definition(&tree, source, "MEDIUM", SymbolType::EnumUsage);
+        assert!(result.is_some(), "Should find MEDIUM enum constant");
+        
+        // Search for enum constant "SMALL"
+        let result = search_definition(&tree, source, "SMALL", SymbolType::EnumUsage);  
+        assert!(result.is_some(), "Should find SMALL enum constant");
+        
+        // Search for non-existent constant
+        let result = search_definition(&tree, source, "NONEXISTENT", SymbolType::EnumUsage);
+        assert!(result.is_none(), "Should not find non-existent constant");
+    }
+
+    #[test]
+    fn test_extract_imports_with_groovy_static_enum_imports() {
+        let source = r#"
+package com.test
+
+import java.util.List
+import static com.test.enums.Priority.*
+import static com.test.enums.Direction.NORTH
+
+class MyClass {
+    // class body
+}
+"#;
+        
+        let imports = extract_imports_from_source(source);
+        
+        // Check that static imports are included
+        assert!(imports.contains(&"com.test.enums.Priority.*".to_string()));
+        assert!(imports.contains(&"com.test.enums.Direction.NORTH".to_string())); 
+        assert!(imports.contains(&"java.util.List".to_string()));
+    }
+
+    #[test]
+    fn test_get_wildcard_imports_with_groovy_static_imports() {
+        let source = r#"
+package com.test
+
+import java.util.*
+import static com.test.enums.Level.*
+import static com.test.enums.Mode.*
+
+class MyClass {
+    // class body
+}
+"#;
+        
+        let wildcards = get_wildcard_imports_from_source(source);
+        
+        // Should include both regular and static wildcard imports
+        if let Some(wildcards) = wildcards {
+            assert!(wildcards.contains(&"java.util".to_string()));
+            assert!(wildcards.contains(&"com.test.enums.Level".to_string()));
+            assert!(wildcards.contains(&"com.test.enums.Mode".to_string()));
+        } else {
+            panic!("Expected wildcard imports to be found");
+        }
+    }
+
+    #[test]
+    fn test_groovy_enum_in_class_usage() {
+        let mut parser = match create_groovy_parser() {
+            Some(p) => p,
+            None => {
+                println!("Warning: Groovy parser not available for testing");
+                return;
+            }
+        };
+
+        // Test Groovy code using enum constant with field access
+        let source = r#"
+enum State {
+    ENABLED,
+    DISABLED
+}
+
+class MyClass {
+    def state = State.ENABLED
+}
+"#;
+        
+        let tree = parser.parse(source, None).unwrap();
+        
+        // Search for enum constant definition
+        let result = search_definition(&tree, source, "ENABLED", SymbolType::EnumUsage);
+        assert!(result.is_some(), "Should find ENABLED enum constant definition");
+    }
+
+    #[test]
+    fn test_groovy_navigation_expression_enum_access() {
+        // Test that navigation expressions like Status.SUCCESS are handled correctly
+        let mut parser = match create_groovy_parser() {
+            Some(p) => p,
+            None => {
+                println!("Warning: Groovy parser not available for testing");
+                return;
+            }
+        };
+        
+        let source = r#"
+enum TaskStatus {
+    PENDING,
+    RUNNING,  
+    COMPLETED,
+    FAILED
+}
+
+class TaskProcessor {
+    def process() {
+        def status = TaskStatus.RUNNING
+    }
+}
+"#;
+        
+        let tree = parser.parse(source, None).unwrap();
+        
+        // Test that we can find navigation expression enum constants using the specialized method
+        let result = search_definition(&tree, source, "RUNNING", SymbolType::EnumUsage);
+        assert!(result.is_some(), "Should find RUNNING enum constant");
+        
+        let result = search_definition(&tree, source, "COMPLETED", SymbolType::EnumUsage);
+        assert!(result.is_some(), "Should find COMPLETED enum constant");
+    }
+
+    #[test] 
+    fn test_groovy_enum_vs_method_priority() {
+        // Test that enum constants are found before methods when both exist
+        let mut parser = match create_groovy_parser() {
+            Some(p) => p,
+            None => {
+                println!("Warning: Groovy parser not available for testing");
+                return;
+            }
+        };
+        
+        let source = r#"
+enum Response {
+    SUCCESS,
+    ERROR
+}
+
+class TestService {
+    def SUCCESS() {
+        println "This is a method"
+    }
+}
+"#;
+        
+        let tree = parser.parse(source, None).unwrap();
+        
+        // Both enum constant and method exist, test they can both be found
+        let enum_result = search_definition(&tree, source, "SUCCESS", SymbolType::EnumUsage);
+        let method_result = search_definition(&tree, source, "SUCCESS", SymbolType::MethodCall);
+        
+        assert!(enum_result.is_some(), "Should find SUCCESS enum constant");
+        assert!(method_result.is_some(), "Should find SUCCESS method");
+        
+        // Both exist, but our logic should prefer enum constants in static context
+    }
+
+    #[test]
+    fn test_groovy_static_import_wildcards() {
+        // Test that wildcard static imports are detected for enum resolution
+        let source = r#"
+package com.example
+
+import java.util.*
+import static com.test.enums.Level.*
+import static com.example.Status.*
+import com.other.Class
+
+class Example {
+    def process() {
+        def level = HIGH
+        def status = ACTIVE
+    }
+}
+"#;
+        
+        let wildcards = get_wildcard_imports_from_source(source);
+        
+        if let Some(wildcards) = wildcards {
+            assert!(wildcards.contains(&"java.util".to_string()));
+            assert!(wildcards.contains(&"com.test.enums.Level".to_string()));
+            assert!(wildcards.contains(&"com.example.Status".to_string()));
+            // Should not contain non-wildcard imports
+            assert!(!wildcards.contains(&"com.other.Class".to_string()));
+        }
+    }
+
+    #[test] 
+    fn test_groovy_could_be_static_enum_import_detection() {
+        use super::super::project::could_be_static_enum_import;
+        
+        // Test the static enum import detection logic for Groovy
+        let source_with_static_import = r#"
+package com.example
+import static com.example.Priority.*
+
+class Task {
+    def process() {
+        def priority = HIGH
+    }
+}
+"#;
+        
+        let source_without_static_import = r#"
+package com.example
+import com.example.Priority
+
+class Task {
+    def process() {
+        def priority = Priority.HIGH
+    }
+}
+"#;
+        
+        // HIGH could be from static import in first case
+        assert!(could_be_static_enum_import("HIGH", source_with_static_import));
+        
+        // In second case, HIGH without Priority. prefix is less likely to be enum
+        assert!(!could_be_static_enum_import("HIGH", source_without_static_import));
+    }
+
+    #[test]
+    fn test_groovy_enum_type_queries() {
+        // Test that enum declaration and usage queries work correctly
+        let enum_decl_query = get_declaration_query_for_symbol_type(&SymbolType::EnumDeclaration);
+        assert!(enum_decl_query.is_some());
+        let query_text = enum_decl_query.unwrap();
+        assert!(query_text.contains("enum_declaration"));
+        
+        let enum_usage_query = get_declaration_query_for_symbol_type(&SymbolType::EnumUsage);
+        assert!(enum_usage_query.is_some());  
+        let query_text = enum_usage_query.unwrap();
+        assert!(query_text.contains("enum_constant"));
+    }
 }

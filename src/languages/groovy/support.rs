@@ -12,9 +12,7 @@ use crate::core::{
     dependency_cache::DependencyCache,
     symbols::SymbolType,
 };
-use crate::languages::groovy::definition::utils::{
-    get_wildcard_imports_from_source,
-};
+use crate::languages::groovy::definition::utils::get_wildcard_imports_from_source;
 use crate::languages::traits::LanguageSupport;
 
 use super::definition::external::find_external;
@@ -33,6 +31,67 @@ impl GroovySupport {
     pub fn new() -> Self {
         Self
     }
+
+    /// Check if a field access node is actually accessing an enum constant
+    /// This is a heuristic approach that checks common enum naming patterns
+    fn is_enum_constant_access(&self, field_node: &Node, source: &str, tree: &Tree) -> bool {
+        // Find the parent field_access node
+        let field_access = field_node.parent()
+            .and_then(|p| if p.kind() == "field_access" { Some(p) } else { None });
+        
+        if let Some(field_access_node) = field_access {
+            // Get the object part of the field access (e.g., "ResponseEnum" in "ResponseEnum.ILLEGAL_PRODUCTS")
+            if let Some(object_node) = field_access_node.child_by_field_name("object") {
+                if let Ok(object_name) = object_node.utf8_text(source.as_bytes()) {
+                    // First check if this object name refers to an enum in the same file
+                    if self.is_enum_type_in_tree(object_name, tree, source) {
+                        return true;
+                    }
+                    
+                    // Heuristic: if the object name ends with "Enum" or contains "Enum",
+                    // and the field name is ALL_CAPS, it's likely an enum constant
+                    if let Ok(field_name) = field_node.utf8_text(source.as_bytes()) {
+                        let looks_like_enum_type = object_name.contains("Enum") || 
+                                                 object_name.ends_with("Status") ||
+                                                 object_name.ends_with("Type") ||
+                                                 object_name.ends_with("Mode") ||
+                                                 object_name.ends_with("State");
+                        
+                        let looks_like_enum_constant = field_name.chars().all(|c| c.is_uppercase() || c == '_' || c.is_ascii_digit());
+                        
+                        if looks_like_enum_type && looks_like_enum_constant {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// Check if a given type name is an enum declaration in the current tree
+    fn is_enum_type_in_tree(&self, type_name: &str, tree: &Tree, source: &str) -> bool {
+        let query_text = r#"(enum_declaration name: (identifier) @enum_name)"#;
+        
+        if let Ok(query) = Query::new(&tree_sitter_groovy::language(), query_text) {
+            let mut cursor = QueryCursor::new();
+            let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
+            
+            while let Some(query_match) = matches.next() {
+                for capture in query_match.captures {
+                    if let Ok(enum_name) = capture.node.utf8_text(source.as_bytes()) {
+                        if enum_name == type_name {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
+
+
+
 }
 
 impl QueryProvider for GroovySupport {
@@ -294,7 +353,14 @@ impl LanguageSupport for GroovySupport {
                             "type_name" => SymbolType::Type,
                             "super_interface" => SymbolType::SuperInterface,
                             "super_class" => SymbolType::SuperClass,
-                            "field_usage" => SymbolType::FieldUsage,
+                            "field_usage" => {
+                                // Check if this is an enum constant access (e.g., SomeEnum.CONSTANT)
+                                if self.is_enum_constant_access(node, source, tree) {
+                                    SymbolType::EnumUsage
+                                } else {
+                                    SymbolType::FieldUsage
+                                }
+                            },
                             "var_usage" => SymbolType::VariableUsage,
                             "potential_field_usage" => {
                                 if capture_text

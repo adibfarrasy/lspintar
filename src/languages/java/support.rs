@@ -22,6 +22,120 @@ impl JavaSupport {
     pub fn new() -> Self {
         Self
     }
+
+    /// Check if a field access node is actually accessing an enum constant
+    /// This is a heuristic approach that checks common enum naming patterns
+    fn is_enum_constant_access(&self, field_node: &Node, source: &str, tree: &Tree) -> bool {
+        // Find the parent field_access node
+        let field_access = field_node.parent().and_then(|p| {
+            if p.kind() == "field_access" {
+                Some(p)
+            } else {
+                None
+            }
+        });
+
+        if let Some(field_access_node) = field_access {
+            // Get the object part of the field access (e.g., "ResponseEnum" in "ResponseEnum.ILLEGAL_PRODUCTS")
+            if let Some(object_node) = field_access_node.child_by_field_name("object") {
+                if let Ok(object_name) = object_node.utf8_text(source.as_bytes()) {
+                    // First check if this object name refers to an enum in the same file
+                    if self.is_enum_type_in_tree(object_name, tree, source) {
+                        return true;
+                    }
+
+                    // Heuristic: if the object name ends with "Enum" or contains "Enum",
+                    // and the field name is ALL_CAPS, it's likely an enum constant
+                    if let Ok(field_name) = field_node.utf8_text(source.as_bytes()) {
+                        let looks_like_enum_type = object_name.contains("Enum")
+                            || object_name.ends_with("Status")
+                            || object_name.ends_with("Type")
+                            || object_name.ends_with("Mode")
+                            || object_name.ends_with("State");
+
+                        let looks_like_enum_constant = field_name
+                            .chars()
+                            .all(|c| c.is_uppercase() || c == '_' || c.is_ascii_digit());
+
+                        if looks_like_enum_type && looks_like_enum_constant {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// Check if a given type name is an enum declaration in the current tree
+    fn is_enum_type_in_tree(&self, type_name: &str, tree: &Tree, source: &str) -> bool {
+        let query_text = r#"(enum_declaration name: (identifier) @enum_name)"#;
+
+        let language: tree_sitter::Language = tree_sitter_java::LANGUAGE.into();
+        if let Ok(query) = Query::new(&language, query_text) {
+            let mut cursor = QueryCursor::new();
+            let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
+
+            while let Some(query_match) = matches.next() {
+                for capture in query_match.captures {
+                    if let Ok(enum_name) = capture.node.utf8_text(source.as_bytes()) {
+                        if enum_name == type_name {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// Check if an identifier could be from a static enum import
+    fn is_static_enum_import(&self, node: &Node, source: &str, tree: &Tree) -> bool {
+        if let Ok(identifier_name) = node.utf8_text(source.as_bytes()) {
+            // Check if identifier is ALL_CAPS (typical enum constant pattern)
+            let looks_like_enum_constant = identifier_name
+                .chars()
+                .all(|c| c.is_uppercase() || c == '_' || c.is_ascii_digit());
+
+            if looks_like_enum_constant {
+                // Check for static enum imports in the file
+                return self.has_static_enum_imports(tree, source);
+            }
+        }
+        false
+    }
+
+    /// Check if the file has any static enum imports
+    fn has_static_enum_imports(&self, tree: &Tree, source: &str) -> bool {
+        let query_text = r#"
+            (import_declaration 
+                (scoped_identifier) @import_path 
+                (asterisk))
+        "#;
+
+        let language: tree_sitter::Language = tree_sitter_java::LANGUAGE.into();
+        if let Ok(query) = Query::new(&language, query_text) {
+            let mut cursor = QueryCursor::new();
+            let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
+
+            while let Some(query_match) = matches.next() {
+                for capture in query_match.captures {
+                    if let Ok(import_path) = capture.node.utf8_text(source.as_bytes()) {
+                        // Check if the import path contains "Enum" or ends with typical enum class patterns
+                        if import_path.contains("Enum")
+                            || import_path.contains("Status")
+                            || import_path.contains("Type")
+                            || import_path.contains("Mode")
+                            || import_path.contains("State")
+                        {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
 }
 
 impl QueryProvider for JavaSupport {
@@ -95,14 +209,12 @@ impl LanguageSupport for JavaSupport {
         uri: &str,
         dependency_cache: Arc<DependencyCache>,
     ) -> Result<Location> {
-
         if let Some(identifier_node) = find_identifier_at_position(tree, source, position) {
             let identifier_text = identifier_node.utf8_text(source.as_bytes()).unwrap_or("?");
 
             // Try to determine symbol type
             match self.determine_symbol_type_from_context(tree, &identifier_node, source) {
                 Ok(_symbol_type) => {
-
                     let result = self.find_definition_chain(
                         tree,
                         source,
@@ -128,7 +240,10 @@ impl LanguageSupport for JavaSupport {
             }
         } else {
             let file_path = uri.strip_prefix("file://").unwrap_or(uri);
-            warn!("Java: No identifier found at position {:?} in {} - file may not be indexed yet", position, file_path);
+            warn!(
+                "Java: No identifier found at position {:?} in {} - file may not be indexed yet",
+                position, file_path
+            );
 
             let root_node = tree.root_node();
             self.find_definition_chain(tree, source, dependency_cache, uri, &root_node)
@@ -268,16 +383,32 @@ impl LanguageSupport for JavaSupport {
         // Order of priority (higher priority first):
         let priority_order = [
             "import_name",
-            "var_decl", "field_decl", "class_decl", "interface_decl", 
-            "method_decl", "constructor_decl", "enum_decl", "param_decl",
-            "method_object", "method_name", "simple_method_name", "method_usage", "method_reference",
-            "type_name", "super_interface", "super_class",
-            "field_usage", "var_usage",
+            "var_decl",
+            "field_decl",
+            "class_decl",
+            "interface_decl",
+            "method_decl",
+            "constructor_decl",
+            "enum_decl",
+            "param_decl",
+            "method_object",
+            "method_name",
+            "simple_method_name",
+            "method_usage",
+            "method_reference",
+            "type_name",
+            "super_interface",
+            "super_class",
+            "field_usage",
+            "var_usage",
             "potential_field_usage", // Lowest priority - catch-all
         ];
 
         // Find the highest priority match
-        if let Some(&capture_name) = priority_order.iter().find(|&&name| matched_captures.contains(&name)) {
+        if let Some(&capture_name) = priority_order
+            .iter()
+            .find(|&&name| matched_captures.contains(&name))
+        {
             let symbol = match capture_name {
                 "import_name" => SymbolType::PackageDeclaration,
                 "var_decl" => SymbolType::VariableDeclaration,
@@ -291,11 +422,7 @@ impl LanguageSupport for JavaSupport {
 
                 "method_object" => {
                     // Check if this is a class name (uppercase) or variable (lowercase)
-                    if node_text
-                        .chars()
-                        .next()
-                        .map_or(false, |c| c.is_uppercase())
-                    {
+                    if node_text.chars().next().map_or(false, |c| c.is_uppercase()) {
                         SymbolType::Type
                     } else {
                         SymbolType::VariableUsage
@@ -308,11 +435,23 @@ impl LanguageSupport for JavaSupport {
                 "type_name" => SymbolType::Type,
                 "super_interface" => SymbolType::SuperInterface,
                 "super_class" => SymbolType::SuperClass,
-                "field_usage" => SymbolType::FieldUsage,
+                "field_usage" => {
+                    // Check if this is an enum constant access (e.g., SomeEnum.CONSTANT)
+                    if self.is_enum_constant_access(node, source, tree) {
+                        SymbolType::EnumUsage
+                    } else {
+                        SymbolType::FieldUsage
+                    }
+                }
                 "var_usage" => SymbolType::VariableUsage,
                 "potential_field_usage" => {
-                    // Default to field usage for unmatched identifiers
-                    SymbolType::FieldUsage
+                    // Check if this could be a static enum import
+                    if self.is_static_enum_import(node, source, tree) {
+                        SymbolType::EnumUsage
+                    } else {
+                        // Default to field usage for unmatched identifiers
+                        SymbolType::FieldUsage
+                    }
                 }
 
                 _ => SymbolType::VariableUsage,
@@ -402,14 +541,21 @@ impl LanguageSupport for JavaSupport {
             arg_count: call_signature.arg_count,
             arg_types: call_signature.arg_types.clone(),
         };
-        
+
         crate::languages::java::definition::method_resolution::find_method_with_signature(
-            tree, source, method_name, &java_call_sig
+            tree,
+            source,
+            method_name,
+            &java_call_sig,
         )
     }
 
-    fn find_field_declaration_type(&self, field_name: &str, tree: &Tree, source: &str) -> Option<String> {
-        
+    fn find_field_declaration_type(
+        &self,
+        field_name: &str,
+        tree: &Tree,
+        source: &str,
+    ) -> Option<String> {
         let query_text = r#"
             ; Field declaration with modifiers
             (field_declaration 
@@ -439,7 +585,7 @@ impl LanguageSupport for JavaSupport {
               declarator: (variable_declarator 
                 name: (identifier) @generic_field_name))
         "#;
-        
+
         let language: tree_sitter::Language = tree_sitter_java::LANGUAGE.into();
         let query = match tree_sitter::Query::new(&language, query_text) {
             Ok(q) => q,
@@ -447,19 +593,17 @@ impl LanguageSupport for JavaSupport {
                 return None;
             }
         };
-        
+
         let mut cursor = tree_sitter::QueryCursor::new();
         let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
-        
+
         while let Some(query_match) = matches.next() {
-            
             let mut found_field_name = false;
             let mut field_type = None;
-            
+
             for capture in query_match.captures {
                 let capture_name = query.capture_names()[capture.index as usize];
                 if let Ok(node_text) = capture.node.utf8_text(source.as_bytes()) {
-                    
                     match capture_name {
                         "field_name" | "generic_field_name" => {
                             if node_text == field_name {
@@ -473,33 +617,38 @@ impl LanguageSupport for JavaSupport {
                     }
                 }
             }
-            
+
             if found_field_name && field_type.is_some() {
                 return field_type;
             }
         }
-        
+
         None
     }
-    
-    fn find_variable_declaration_type(&self, variable_name: &str, tree: &Tree, source: &str, _usage_node: &Node) -> Option<String> {
-        
+
+    fn find_variable_declaration_type(
+        &self,
+        variable_name: &str,
+        tree: &Tree,
+        source: &str,
+        _usage_node: &Node,
+    ) -> Option<String> {
         let query_text = r#"
             (local_variable_declaration 
               type: (type_identifier) @var_type
               declarator: (variable_declarator 
                 name: (identifier) @var_name))
         "#;
-        
+
         let language: tree_sitter::Language = tree_sitter_java::LANGUAGE.into();
         let query = tree_sitter::Query::new(&language, query_text).ok()?;
         let mut cursor = tree_sitter::QueryCursor::new();
         let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
-        
+
         while let Some(query_match) = matches.next() {
             let mut found_var_name = false;
             let mut var_type = None;
-            
+
             for capture in query_match.captures {
                 let capture_name = query.capture_names()[capture.index as usize];
                 if let Ok(node_text) = capture.node.utf8_text(source.as_bytes()) {
@@ -516,32 +665,37 @@ impl LanguageSupport for JavaSupport {
                     }
                 }
             }
-            
+
             if found_var_name && var_type.is_some() {
                 return var_type;
             }
         }
-        
+
         None
     }
-    
-    fn find_parameter_type(&self, param_name: &str, tree: &Tree, source: &str, _usage_node: &Node) -> Option<String> {
-        
+
+    fn find_parameter_type(
+        &self,
+        param_name: &str,
+        tree: &Tree,
+        source: &str,
+        _usage_node: &Node,
+    ) -> Option<String> {
         let query_text = r#"
             (formal_parameter
               type: (type_identifier) @param_type
               name: (identifier) @param_name)
         "#;
-        
+
         let language: tree_sitter::Language = tree_sitter_java::LANGUAGE.into();
         let query = tree_sitter::Query::new(&language, query_text).ok()?;
         let mut cursor = tree_sitter::QueryCursor::new();
         let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
-        
+
         while let Some(query_match) = matches.next() {
             let mut found_param_name = false;
             let mut param_type = None;
-            
+
             for capture in query_match.captures {
                 let capture_name = query.capture_names()[capture.index as usize];
                 if let Ok(node_text) = capture.node.utf8_text(source.as_bytes()) {
@@ -558,15 +712,14 @@ impl LanguageSupport for JavaSupport {
                     }
                 }
             }
-            
+
             if found_param_name && param_type.is_some() {
                 return param_type;
             }
         }
-        
+
         None
     }
-
 
     fn find_instance_method_definition(
         &self,
@@ -579,15 +732,27 @@ impl LanguageSupport for JavaSupport {
         dependency_cache: Arc<DependencyCache>,
     ) -> Option<Location> {
         // Try to resolve the variable type using Java's type resolution methods
-        let variable_type = self.find_field_declaration_type(variable_name, tree, source)
-            .or_else(|| self.find_variable_declaration_type(variable_name, tree, source, usage_node))
+        let variable_type = self
+            .find_field_declaration_type(variable_name, tree, source)
+            .or_else(|| {
+                self.find_variable_declaration_type(variable_name, tree, source, usage_node)
+            })
             .or_else(|| self.find_parameter_type(variable_name, tree, source, usage_node));
 
         if let Some(_var_type) = variable_type {
             // Use the common method resolution to find the method in the type's class
-            if let Some(location) = crate::languages::common::method_resolution::find_instance_method_definition(
-                self, tree, source, file_uri, usage_node, variable_name, method_name, dependency_cache
-            ) {
+            if let Some(location) =
+                crate::languages::common::method_resolution::find_instance_method_definition(
+                    self,
+                    tree,
+                    source,
+                    file_uri,
+                    usage_node,
+                    variable_name,
+                    method_name,
+                    dependency_cache,
+                )
+            {
                 return Some(location);
             }
         }
@@ -605,7 +770,12 @@ impl LanguageSupport for JavaSupport {
     ) -> Result<Location> {
         // Use the common method resolution logic that handles static/instance method calls with cross-language support
         crate::languages::common::method_resolution::find_definition_chain_with_method_resolution(
-            self, tree, source, dependency_cache, file_uri, usage_node
+            self,
+            tree,
+            source,
+            dependency_cache,
+            file_uri,
+            usage_node,
         )
     }
 }
@@ -615,4 +785,3 @@ impl Default for JavaSupport {
         Self::new()
     }
 }
-

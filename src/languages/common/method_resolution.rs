@@ -531,6 +531,47 @@ fn detect_language_from_uri(uri: &str) -> Option<Box<dyn LanguageSupport + Send 
 
 
 /// Search for a specific method within a class file using tree-sitter (fallback without signature matching)
+/// Search for enum constants that might be mistaken for static method calls
+fn search_enum_constant_in_class_file(
+    tree: &Tree,
+    content: &str,
+    constant_name: &str,
+    file_uri: &str,
+    language_id: &str,
+) -> Option<Location> {
+    use tree_sitter::{QueryCursor, StreamingIterator};
+    
+    // Create language-specific enum constant queries
+    let enum_query = match language_id {
+        "kotlin" => r#"(enum_entry (simple_identifier) @constant_name)"#,
+        "java" | "groovy" => r#"(enum_constant name: (identifier) @constant_name)"#,
+        _ => return None,
+    };
+    
+    let language = match language_id {
+        "kotlin" => tree_sitter_kotlin::language(),
+        "java" => tree_sitter_java::LANGUAGE.into(),
+        "groovy" => tree_sitter_groovy::language(),
+        _ => return None,
+    };
+    
+    let query = tree_sitter::Query::new(&language, enum_query).ok()?;
+    let mut cursor = QueryCursor::new();
+    let mut matches = cursor.matches(&query, tree.root_node(), content.as_bytes());
+    
+    while let Some(query_match) = matches.next() {
+        for capture in query_match.captures {
+            if let Ok(capture_text) = capture.node.utf8_text(content.as_bytes()) {
+                if capture_text == constant_name {
+                    return crate::core::utils::node_to_lsp_location(&capture.node, file_uri);
+                }
+            }
+        }
+    }
+    
+    None
+}
+
 fn search_method_in_class_file(
     class_location: &Location,
     method_name: &str,
@@ -548,6 +589,12 @@ fn search_method_in_class_file(
     // Parse the target file with the appropriate language parser
     let mut parser = language_support.create_parser();
     let tree = parser.parse(&content, None)?;
+    
+    // First, try to find enum constants (they look like static method calls but aren't methods)
+    if let Some(enum_location) = search_enum_constant_in_class_file(&tree, &content, method_name, &class_location.uri.to_string(), language_support.language_id()) {
+        debug!("METHODRES: Found enum constant {} instead of method", method_name);
+        return Some(enum_location);
+    }
     
     // Create language-specific queries that capture method names directly
     let method_name_query = match language_support.language_id() {

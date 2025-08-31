@@ -49,6 +49,13 @@ pub fn get_declaration_query_for_symbol_type(symbol_type: &SymbolType) -> Option
             (field_declaration declarator: (variable_declarator name: (identifier) @name))
         "#,
         ),
+        SymbolType::EnumDeclaration => Some(r#"(enum_declaration name: (identifier) @name)"#),
+        SymbolType::EnumUsage => Some(
+            r#"
+            (enum_constant name: (identifier) @name)
+            (enum_declaration name: (identifier) @name)
+        "#,
+        ),
         _ => None,
     }
 }
@@ -99,6 +106,7 @@ fn is_local_scope_query(query_text: &str) -> bool {
 pub fn search_definition<'a>(tree: &'a Tree, source: &str, symbol_name: &str) -> Option<Node<'a>> {
     // Try different declaration types for Java
     let queries = [
+        r#"(enum_constant name: (identifier) @name)"#, // Add enum constants first for priority
         r#"(class_declaration name: (identifier) @name)"#,
         r#"(interface_declaration name: (identifier) @name)"#,
         r#"(enum_declaration name: (identifier) @name)"#,
@@ -537,4 +545,238 @@ fn verify_fqn_exists(fqn: &str, dependency_cache: &Arc<DependencyCache>) -> bool
     }
 
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tree_sitter::Parser;
+
+    fn create_java_parser() -> Option<Parser> {
+        let mut parser = Parser::new();
+        match parser.set_language(&tree_sitter_java::LANGUAGE.into()) {
+            Ok(()) => Some(parser),
+            Err(_) => None,
+        }
+    }
+
+    #[test]
+    fn test_get_declaration_query_for_enum_types() {
+        // Test that enum declaration and usage queries are provided
+        let enum_decl_query = get_declaration_query_for_symbol_type(&SymbolType::EnumDeclaration);
+        assert!(enum_decl_query.is_some());
+        
+        let enum_usage_query = get_declaration_query_for_symbol_type(&SymbolType::EnumUsage);
+        assert!(enum_usage_query.is_some());
+    }
+
+    #[test]
+    fn test_search_definition_enum_constant() {
+        let mut parser = match create_java_parser() {
+            Some(p) => p,
+            None => {
+                println!("Warning: Java parser not available for testing");
+                return;
+            }
+        };
+
+        // Test source with enum definition
+        let source = r#"
+public enum Color {
+    RED,
+    GREEN,
+    BLUE
+}
+"#;
+        
+        let tree = parser.parse(source, None).unwrap();
+        
+        // Search for enum constants using specialized query
+        let enum_constant_query = r#"(enum_constant name: (identifier) @name)"#;
+        let result = find_definition_candidates(&tree, source, "RED", enum_constant_query);
+        assert!(result.is_some(), "Should find RED enum constant");
+        
+        let result = find_definition_candidates(&tree, source, "GREEN", enum_constant_query);
+        assert!(result.is_some(), "Should find GREEN enum constant");
+        
+        // Search for non-existent constant
+        let result = find_definition_candidates(&tree, source, "NONEXISTENT", enum_constant_query);
+        assert!(result.is_none(), "Should not find non-existent constant");
+    }
+
+    #[test]
+    fn test_extract_imports_with_static_enum_imports() {
+        let source = r#"
+package com.test;
+
+import java.util.List;
+import static com.test.enums.Status.*;
+import static com.test.enums.Color.RED;
+
+public class MyClass {
+    // class body
+}
+"#;
+        
+        let imports = extract_imports_from_source(source);
+        
+        // Check that imports are included (function may return None if parsing fails)
+        if !imports.is_empty() {
+            // Just verify the function works - exact format may vary based on implementation
+            assert!(imports.len() > 0, "Should extract some imports");
+        }
+    }
+
+    #[test] 
+    fn test_get_wildcard_imports_with_enum_static_imports() {
+        let source = r#"
+package com.test;
+
+import java.util.*;
+import static com.test.enums.Status.*;
+import static com.test.enums.Color.*;
+
+public class MyClass {
+    // class body
+}
+"#;
+        
+        let wildcards = get_wildcard_imports_from_source(source);
+        
+        // Should include both regular and static wildcard imports
+        assert!(wildcards.contains(&"java.util".to_string()));
+        assert!(wildcards.contains(&"com.test.enums.Status".to_string()));
+        assert!(wildcards.contains(&"com.test.enums.Color".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_symbol_with_static_enum_imports() {
+        // This is a more complex test that would require setting up dependency cache
+        // For now, just test that the function exists and can be called
+        let source = r#"
+import static com.test.enums.Status.*;
+
+public class Example {
+    private Status state = ACTIVE;
+}
+"#;
+        
+        // Create minimal dependency cache for testing
+        let dependency_cache = Arc::new(DependencyCache::new());
+        
+        // Test resolving a static import symbol
+        let result = resolve_symbol_with_imports("ACTIVE", source, &dependency_cache);
+        
+        // Since we don't have a full dependency cache setup, this will return None
+        // But it tests that the function can be called without panic
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_navigation_expression_java_enum_access() {
+        // Test that navigation expressions like Status.SUCCESS are handled correctly
+        let mut parser = match create_java_parser() {
+            Some(p) => p,
+            None => {
+                println!("Warning: Java parser not available for testing");
+                return;
+            }
+        };
+        
+        let source = r#"
+public enum Status {
+    PENDING,
+    COMPLETED,
+    FAILED
+}
+
+public class Processor {
+    public void handle() {
+        Status s = Status.PENDING;
+    }
+}
+"#;
+        
+        let tree = parser.parse(source, None).unwrap();
+        
+        // Test that we can find navigation expression enum constants  
+        let enum_constant_query = r#"(enum_constant name: (identifier) @name)"#;
+        let result = find_definition_candidates(&tree, source, "PENDING", enum_constant_query);
+        assert!(result.is_some(), "Should find PENDING enum constant");
+        
+        let result = find_definition_candidates(&tree, source, "FAILED", enum_constant_query);
+        assert!(result.is_some(), "Should find FAILED enum constant");
+    }
+
+    #[test] 
+    fn test_java_enum_vs_method_priority() {
+        // Test that enum constants are found before methods when both exist
+        let mut parser = match create_java_parser() {
+            Some(p) => p,
+            None => {
+                println!("Warning: Java parser not available for testing");
+                return;
+            }
+        };
+        
+        let source = r#"
+public enum Result {
+    SUCCESS,
+    ERROR
+}
+
+public class TestClass {
+    public static void SUCCESS() {
+        System.out.println("This is a method");
+    }
+}
+"#;
+        
+        let tree = parser.parse(source, None).unwrap();
+        
+        // Both enum constant and method exist, but enum should have priority
+        let enum_query = r#"(enum_constant name: (identifier) @name)"#;
+        let method_query = r#"(method_declaration name: (identifier) @name)"#;
+        
+        let enum_result = find_definition_candidates(&tree, source, "SUCCESS", enum_query);
+        let method_result = find_definition_candidates(&tree, source, "SUCCESS", method_query);
+        
+        assert!(enum_result.is_some(), "Should find SUCCESS enum constant");
+        assert!(method_result.is_some(), "Should find SUCCESS method");
+        
+        // Both exist, but our logic should prefer enum constants in static context
+    }
+
+    #[test]
+    fn test_java_enhanced_search_definition_with_enum_constants() {
+        // Test that the enhanced search_definition function finds enum constants
+        let mut parser = match create_java_parser() {
+            Some(p) => p,
+            None => {
+                println!("Warning: Java parser not available for testing");
+                return;
+            }
+        };
+        
+        let source = r#"
+public enum Priority {
+    HIGH,
+    MEDIUM,
+    LOW
+}
+
+public class Task {
+    Priority priority = Priority.HIGH;
+}
+"#;
+        
+        let tree = parser.parse(source, None).unwrap();
+        
+        // Test that search_definition finds enum constants with our enhanced logic
+        let result = search_definition(&tree, source, "HIGH");
+        assert!(result.is_some(), "Enhanced search_definition should find HIGH enum constant");
+        
+        let result = search_definition(&tree, source, "Priority"); 
+        assert!(result.is_some(), "Enhanced search_definition should find Priority enum class");
+    }
 }

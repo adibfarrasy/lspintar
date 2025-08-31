@@ -70,6 +70,13 @@ pub fn search_local_definitions<'a>(
             candidates.into_iter().next()
         }
 
+        SymbolType::EnumDeclaration | SymbolType::EnumUsage => {
+            // For enum types and enum constants
+            let query_text = get_declaration_query_for_symbol_type(&symbol_type)?;
+            let candidates = find_definition_candidates(tree, source, &symbol_name, query_text)?;
+            candidates.into_iter().next()
+        }
+
         _ => {
             // For other symbol types, use the general candidate finding approach
             let query_text = get_declaration_query_for_symbol_type(&symbol_type)?;

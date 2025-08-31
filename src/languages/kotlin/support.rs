@@ -22,6 +22,67 @@ impl KotlinSupport {
     pub fn new() -> Self {
         Self
     }
+
+    /// Check if a navigation expression node is actually accessing an enum constant
+    /// This is a heuristic approach that checks common enum naming patterns
+    fn is_enum_constant_access(&self, field_node: &Node, source: &str, tree: &Tree) -> bool {
+        // For Kotlin, enum access is through navigation_expression
+        // Find the parent navigation_expression node
+        let navigation_expr = field_node.parent()
+            .and_then(|p| if p.kind() == "navigation_suffix" { p.parent() } else { None })
+            .and_then(|p| if p.kind() == "navigation_expression" { Some(p) } else { None });
+        
+        if let Some(nav_expr) = navigation_expr {
+            // Get the first child which should be the object identifier
+            if let Some(object_node) = nav_expr.child(0) {
+                if let Ok(object_name) = object_node.utf8_text(source.as_bytes()) {
+                    // First check if this object name refers to an enum in the same file
+                    if self.is_enum_type_in_tree(object_name, tree, source) {
+                        return true;
+                    }
+                    
+                    // Heuristic: if the object name ends with "Enum" or contains "Enum",
+                    // and the field name is ALL_CAPS, it's likely an enum constant
+                    if let Ok(field_name) = field_node.utf8_text(source.as_bytes()) {
+                        let looks_like_enum_type = object_name.contains("Enum") || 
+                                                 object_name.ends_with("Status") ||
+                                                 object_name.ends_with("Type") ||
+                                                 object_name.ends_with("Mode") ||
+                                                 object_name.ends_with("State");
+                        
+                        let looks_like_enum_constant = field_name.chars().all(|c| c.is_uppercase() || c == '_' || c.is_ascii_digit());
+                        
+                        if looks_like_enum_type && looks_like_enum_constant {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// Check if a given type name is an enum declaration in the current tree
+    fn is_enum_type_in_tree(&self, type_name: &str, tree: &Tree, source: &str) -> bool {
+        // In Kotlin, enums are class declarations with enum_class_body
+        let query_text = r#"(class_declaration (type_identifier) @enum_name (enum_class_body))"#;
+        
+        if let Ok(query) = Query::new(&tree_sitter_kotlin::language(), query_text) {
+            let mut cursor = QueryCursor::new();
+            let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
+            
+            while let Some(query_match) = matches.next() {
+                for capture in query_match.captures {
+                    if let Ok(enum_name) = capture.node.utf8_text(source.as_bytes()) {
+                        if enum_name == type_name {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
 }
 
 impl QueryProvider for KotlinSupport {
@@ -251,7 +312,14 @@ impl LanguageSupport for KotlinSupport {
                         "interface_decl" => SymbolType::InterfaceDeclaration,
                         "param_decl" => SymbolType::ParameterDeclaration,
                         "method_call" => SymbolType::MethodCall,
-                        "field_usage" => SymbolType::FieldUsage,
+                        "field_usage" => {
+                            // Check if this is an enum constant access (e.g., SomeEnum.CONSTANT)
+                            if self.is_enum_constant_access(node, source, tree) {
+                                SymbolType::EnumUsage
+                            } else {
+                                SymbolType::FieldUsage
+                            }
+                        },
                         "type_name" => SymbolType::Type,
                         "variable_usage" => SymbolType::VariableUsage,
                         _ => SymbolType::VariableUsage,
