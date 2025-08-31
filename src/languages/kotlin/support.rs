@@ -407,14 +407,24 @@ impl LanguageSupport for KotlinSupport {
                         let variable_name = object_node.utf8_text(source.as_bytes()).ok()?.to_string();
                         let method_name = method_node.utf8_text(source.as_bytes()).ok()?.to_string();
                         
+                        // Get the text of the node the user actually clicked on
+                        let usage_text = usage_node.utf8_text(source.as_bytes()).ok()?.to_string();
+                        
                         // Check if this is an instance call (variable starts with lowercase)
                         if variable_name.chars().next().map_or(false, |c| c.is_lowercase()) {
-                            return Some((variable_name, method_name));
+                            // Only return context if user navigated on the method name
+                            if usage_text == method_name {
+                                return Some((variable_name, method_name));
+                            } else if usage_text == variable_name {
+                                // User navigated on variable name - return None so go-to-definition goes to variable
+                                return None;
+                            }
                         }
                     }
                 }
             }
         }
+        
         None
     }
 
@@ -460,10 +470,17 @@ impl LanguageSupport for KotlinSupport {
                     if let Some(method_node) = method_node {
                         let class_name = object_node.utf8_text(source.as_bytes()).ok()?.to_string();
                         let method_name = method_node.utf8_text(source.as_bytes()).ok()?.to_string();
+                        let usage_text = usage_node.utf8_text(source.as_bytes()).ok()?.to_string();
                         
-                        // Only return for static calls (class names start with uppercase)
+                        // Only handle static calls (class names start with uppercase)
                         if class_name.chars().next().map_or(false, |c| c.is_uppercase()) {
-                            return Some((class_name, method_name));
+                            if usage_text == method_name {
+                                // Go-to-definition on method name - return method context
+                                return Some((class_name, method_name));
+                            } else if usage_text == class_name {
+                                // Go-to-definition on class name - return None so it goes to class definition
+                                return None;
+                            }
                         }
                     }
                 }
@@ -481,8 +498,88 @@ impl LanguageSupport for KotlinSupport {
         self.extract_kotlin_variable_type(variable_name, tree, source, usage_node)
     }
     
-    fn find_parameter_type(&self, _param_name: &str, _tree: &Tree, _source: &str, _usage_node: &Node) -> Option<String> {
-        // TODO: Implement Kotlin parameter type extraction
+    fn find_parameter_type(&self, param_name: &str, tree: &Tree, source: &str, _usage_node: &Node) -> Option<String> {
+        // Search for regular function parameters first
+        let function_param_query = r#"
+            (parameter
+              (simple_identifier) @param_name
+              (user_type (type_identifier) @param_type))
+        "#;
+        
+        // Search for constructor parameters (which can be used directly as properties in Kotlin)
+        let constructor_param_query = r#"
+            (primary_constructor
+              (class_parameter
+                (simple_identifier) @param_name
+                (user_type (type_identifier) @param_type)))
+        "#;
+        
+        let language = tree_sitter_kotlin::language();
+        
+        // First, try function parameters
+        if let Ok(query) = tree_sitter::Query::new(&language, function_param_query) {
+            let mut cursor = tree_sitter::QueryCursor::new();
+            let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
+            
+            while let Some(query_match) = matches.next() {
+                let mut found_param_name = false;
+                let mut param_type = None;
+                
+                for capture in query_match.captures {
+                    let capture_name = query.capture_names()[capture.index as usize];
+                    if let Ok(node_text) = capture.node.utf8_text(source.as_bytes()) {
+                        match capture_name {
+                            "param_name" => {
+                                if node_text == param_name {
+                                    found_param_name = true;
+                                }
+                            }
+                            "param_type" => {
+                                param_type = Some(node_text.to_string());
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                
+                if found_param_name && param_type.is_some() {
+                    return param_type;
+                }
+            }
+        }
+        
+        // Then try constructor parameters
+        if let Ok(query) = tree_sitter::Query::new(&language, constructor_param_query) {
+            let mut cursor = tree_sitter::QueryCursor::new();
+            let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
+            
+            while let Some(query_match) = matches.next() {
+                let mut found_param_name = false;
+                let mut param_type = None;
+                
+                for capture in query_match.captures {
+                    let capture_name = query.capture_names()[capture.index as usize];
+                    if let Ok(node_text) = capture.node.utf8_text(source.as_bytes()) {
+                        match capture_name {
+                            "param_name" => {
+                                if node_text == param_name {
+                                    found_param_name = true;
+                                }
+                            }
+                            "param_type" => {
+                                param_type = Some(node_text.to_string());
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                
+                if found_param_name && param_type.is_some() {
+                    return param_type;
+                }
+            }
+        }
+        
         None
     }
 
@@ -496,21 +593,23 @@ impl LanguageSupport for KotlinSupport {
         method_name: &str,
         dependency_cache: Arc<DependencyCache>,
     ) -> Option<Location> {
-        
-        // Step 1: Extract the variable type using Kotlin-specific logic
-        let variable_type = self.extract_kotlin_variable_type(variable_name, tree, source, usage_node)?;
-        
-        // Step 2: Find the class/interface definition for this type
-        if let Some(class_location) = self.find_kotlin_class_definition(&variable_type, tree, source, file_uri, dependency_cache.clone()) {
-            // Step 3: Search for the specific method within the class/interface file
-            use crate::languages::common::method_resolution::search_method_in_class_file_cross_language;
-            if let Some(method_location) = search_method_in_class_file_cross_language(&class_location, method_name) {
-                return Some(method_location);
-            }
-            
-            return Some(class_location);
+        // Use the common method resolution logic that handles signature matching and overloads
+        crate::languages::common::method_resolution::find_instance_method_definition(
+            self, tree, source, file_uri, usage_node, variable_name, method_name, dependency_cache
+        )
+    }
+
+    fn extract_call_signature(&self, usage_node: &Node, source: &str) -> Option<crate::languages::common::method_resolution::CallSignature> {
+        // Use Kotlin-specific signature extraction
+        if let Some(kotlin_signature) = crate::languages::kotlin::definition::method_resolution::extract_call_signature_from_context(usage_node, source) {
+            // Convert Kotlin's CallSignature to the common CallSignature format
+            Some(crate::languages::common::method_resolution::CallSignature {
+                arg_count: kotlin_signature.parameter_count,
+                arg_types: vec![None; kotlin_signature.parameter_count], // Kotlin signature doesn't track types yet
+            })
+        } else {
+            None
         }
-        None
     }
 }
 
@@ -549,83 +648,6 @@ impl KotlinSupport {
                 }
             }
         }
-        None
-    }
-    
-    /// Find class/interface definition for a given type name
-    fn find_kotlin_class_definition(&self, type_name: &str, tree: &Tree, source: &str, file_uri: &str, dependency_cache: Arc<DependencyCache>) -> Option<Location> {
-        
-        // First try to find it locally in the current file
-        if let Some(local_location) = self.find_local_class_definition(type_name, tree, source, file_uri) {
-            return Some(local_location);
-        }
-        
-        // Then search in project/workspace/external dependencies
-        // Create a dummy usage node to search for the type name
-        if let Some(type_node) = self.find_type_identifier_in_tree(type_name, tree, source) {
-            return self.find_in_project(source, file_uri, &type_node, dependency_cache.clone())
-                .or_else(|| self.find_in_workspace(source, file_uri, &type_node, dependency_cache.clone()))
-                .or_else(|| self.find_external(source, file_uri, &type_node, dependency_cache.clone()));
-        }
-        
-        None
-    }
-    
-    /// Find a class/interface definition locally in the current file
-    fn find_local_class_definition(&self, type_name: &str, tree: &Tree, source: &str, file_uri: &str) -> Option<Location> {
-        let query_text = r#"
-            (class_declaration (type_identifier) @class_name)
-            (interface_declaration (type_identifier) @interface_name)
-        "#;
-        
-        if let Ok(query) = Query::new(&tree_sitter_kotlin::language(), query_text) {
-            let mut cursor = QueryCursor::new();
-            let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
-            
-            while let Some(query_match) = matches.next() {
-                for capture in query_match.captures {
-                    let capture_text = capture.node.utf8_text(source.as_bytes()).unwrap_or("");
-                    if capture_text == type_name {
-                        let range = capture.node.range();
-                        return Some(Location {
-                            uri: tower_lsp::lsp_types::Url::from_file_path(file_uri).ok()?,
-                            range: tower_lsp::lsp_types::Range {
-                                start: Position {
-                                    line: range.start_point.row as u32,
-                                    character: range.start_point.column as u32,
-                                },
-                                end: Position {
-                                    line: range.end_point.row as u32,
-                                    character: range.end_point.column as u32,
-                                },
-                            },
-                        });
-                    }
-                }
-            }
-        }
-        
-        None
-    }
-    
-    /// Find a type identifier node in the tree for searching
-    fn find_type_identifier_in_tree<'a>(&self, type_name: &str, tree: &'a Tree, source: &str) -> Option<Node<'a>> {
-        let query_text = r#"(type_identifier) @type"#;
-        
-        if let Ok(query) = Query::new(&tree_sitter_kotlin::language(), query_text) {
-            let mut cursor = QueryCursor::new();
-            let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
-            
-            while let Some(query_match) = matches.next() {
-                for capture in query_match.captures {
-                    let capture_text = capture.node.utf8_text(source.as_bytes()).unwrap_or("");
-                    if capture_text == type_name {
-                        return Some(capture.node);
-                    }
-                }
-            }
-        }
-        
         None
     }
 }

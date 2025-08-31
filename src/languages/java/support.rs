@@ -208,10 +208,6 @@ impl LanguageSupport for JavaSupport {
 
         ; Method usage in various contexts
         (method_invocation name: (identifier) @method_usage)
-        
-        ; Field usage in method invocation objects
-        (method_invocation
-          object: (identifier) @field_usage)
 
         ; Variable usage in assignments and arguments
         (argument_list (identifier) @var_usage)
@@ -250,16 +246,12 @@ impl LanguageSupport for JavaSupport {
             .context("Failed to create Java symbol type detection query")?;
 
         let mut cursor = QueryCursor::new();
-        let mut found = false;
         let mut result = Ok(SymbolType::Type);
+        let mut matched_captures = Vec::new();
 
         cursor
             .matches(&query, tree.root_node(), source.as_bytes())
             .for_each(|query_match| {
-                if found {
-                    return;
-                }
-
                 for capture in query_match.captures {
                     let capture_text = capture.node.utf8_text(source.as_bytes()).unwrap();
                     let capture_range = capture.node.range();
@@ -267,51 +259,67 @@ impl LanguageSupport for JavaSupport {
 
                     if capture_text == node_text && capture_range == node_range {
                         let capture_name = query.capture_names()[capture.index as usize];
-                        let symbol = match capture_name {
-                            "import_name" => SymbolType::PackageDeclaration,
-                            "var_decl" => SymbolType::VariableDeclaration,
-                            "field_decl" => SymbolType::FieldDeclaration,
-                            "class_decl" => SymbolType::ClassDeclaration,
-                            "interface_decl" => SymbolType::InterfaceDeclaration,
-                            "method_decl" => SymbolType::MethodDeclaration,
-                            "constructor_decl" => SymbolType::MethodDeclaration,
-                            "enum_decl" => SymbolType::EnumDeclaration,
-                            "param_decl" => SymbolType::ParameterDeclaration,
-
-                            "method_object" => {
-                                // Check if this is a class name (uppercase) or variable (lowercase)
-                                if capture_text
-                                    .chars()
-                                    .next()
-                                    .map_or(false, |c| c.is_uppercase())
-                                {
-                                    SymbolType::Type
-                                } else {
-                                    SymbolType::VariableUsage
-                                }
-                            }
-                            "method_name" => SymbolType::MethodCall,
-                            "simple_method_name" => SymbolType::MethodCall,
-                            "method_usage" => SymbolType::MethodCall,
-                            "method_reference" => SymbolType::MethodCall,
-                            "type_name" => SymbolType::Type,
-                            "super_interface" => SymbolType::SuperInterface,
-                            "super_class" => SymbolType::SuperClass,
-                            "field_usage" => SymbolType::FieldUsage,
-                            "var_usage" => SymbolType::VariableUsage,
-                            "potential_field_usage" => {
-                                // Default to field usage for unmatched identifiers
-                                SymbolType::FieldUsage
-                            }
-
-                            _ => SymbolType::VariableUsage,
-                        };
-
-                        result = Ok(symbol);
-                        found = true;
+                        matched_captures.push(capture_name);
                     }
                 }
             });
+
+        // Prioritize specific matches over general ones
+        // Order of priority (higher priority first):
+        let priority_order = [
+            "import_name",
+            "var_decl", "field_decl", "class_decl", "interface_decl", 
+            "method_decl", "constructor_decl", "enum_decl", "param_decl",
+            "method_object", "method_name", "simple_method_name", "method_usage", "method_reference",
+            "type_name", "super_interface", "super_class",
+            "field_usage", "var_usage",
+            "potential_field_usage", // Lowest priority - catch-all
+        ];
+
+        // Find the highest priority match
+        if let Some(&capture_name) = priority_order.iter().find(|&&name| matched_captures.contains(&name)) {
+            let symbol = match capture_name {
+                "import_name" => SymbolType::PackageDeclaration,
+                "var_decl" => SymbolType::VariableDeclaration,
+                "field_decl" => SymbolType::FieldDeclaration,
+                "class_decl" => SymbolType::ClassDeclaration,
+                "interface_decl" => SymbolType::InterfaceDeclaration,
+                "method_decl" => SymbolType::MethodDeclaration,
+                "constructor_decl" => SymbolType::MethodDeclaration,
+                "enum_decl" => SymbolType::EnumDeclaration,
+                "param_decl" => SymbolType::ParameterDeclaration,
+
+                "method_object" => {
+                    // Check if this is a class name (uppercase) or variable (lowercase)
+                    if node_text
+                        .chars()
+                        .next()
+                        .map_or(false, |c| c.is_uppercase())
+                    {
+                        SymbolType::Type
+                    } else {
+                        SymbolType::VariableUsage
+                    }
+                }
+                "method_name" => SymbolType::MethodCall,
+                "simple_method_name" => SymbolType::MethodCall,
+                "method_usage" => SymbolType::MethodCall,
+                "method_reference" => SymbolType::MethodCall,
+                "type_name" => SymbolType::Type,
+                "super_interface" => SymbolType::SuperInterface,
+                "super_class" => SymbolType::SuperClass,
+                "field_usage" => SymbolType::FieldUsage,
+                "var_usage" => SymbolType::VariableUsage,
+                "potential_field_usage" => {
+                    // Default to field usage for unmatched identifiers
+                    SymbolType::FieldUsage
+                }
+
+                _ => SymbolType::VariableUsage,
+            };
+
+            result = Ok(symbol);
+        }
 
         result
     }

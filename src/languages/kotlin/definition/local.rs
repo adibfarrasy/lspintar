@@ -99,8 +99,13 @@ fn find_variable_declarations_in_scope<'a>(
     if let Some(lambda_params) = find_lambda_parameters(usage_node, source, symbol_name) {
         candidates.extend(lambda_params);
     }
+    
+    // 3. Check constructor parameters (for class members)
+    if let Some(constructor_params) = find_constructor_parameters(usage_node, source, symbol_name) {
+        candidates.extend(constructor_params);
+    }
 
-    // 3. Check for variable declarations in accessible scopes
+    // 4. Check for variable declarations in accessible scopes
     let mut current = usage_node.parent();
     while let Some(node) = current {
         // Check variable declarations in this scope that come before usage
@@ -374,4 +379,56 @@ fn get_declared_name(node: &Node, source: &str) -> Option<String> {
         _ => {}
     }
     None
+}
+
+/// Find constructor parameters that match the symbol name
+fn find_constructor_parameters<'a>(
+    usage_node: &Node<'a>,
+    source: &str,
+    symbol_name: &str,
+) -> Option<Vec<Node<'a>>> {
+    // Find the containing class
+    let mut current = usage_node.parent();
+    while let Some(node) = current {
+        if node.kind() == "class_declaration" {
+            // Look for primary_constructor
+            for child in node.children(&mut node.walk()) {
+                if child.kind() == "primary_constructor" {
+                    return Some(find_matching_constructor_params(&child, source, symbol_name));
+                }
+            }
+            break; // Don't look in parent classes
+        }
+        current = node.parent();
+    }
+    
+    None
+}
+
+/// Find constructor parameters that match the given name
+fn find_matching_constructor_params<'a>(
+    constructor_node: &Node<'a>,
+    source: &str,
+    symbol_name: &str,
+) -> Vec<Node<'a>> {
+    let mut params = Vec::new();
+    
+    // Look for class_parameter children
+    for child in constructor_node.children(&mut constructor_node.walk()) {
+        if child.kind() == "class_parameter" {
+            // Extract the parameter name
+            for param_child in child.children(&mut child.walk()) {
+                if param_child.kind() == "simple_identifier" {
+                    if let Ok(param_name) = param_child.utf8_text(source.as_bytes()) {
+                        if param_name == symbol_name {
+                            params.push(param_child);
+                        }
+                    }
+                    break; // Only check the first identifier (the parameter name)
+                }
+            }
+        }
+    }
+    
+    params
 }

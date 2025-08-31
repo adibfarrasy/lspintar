@@ -148,6 +148,13 @@ pub trait LanguageSupport: Send + Sync + QueryProvider {
         None
     }
 
+    /// Extract call signature from the usage context for method overload resolution
+    /// Each language can provide its own implementation for better signature matching
+    fn extract_call_signature(&self, usage_node: &Node, source: &str) -> Option<crate::languages::common::method_resolution::CallSignature> {
+        // Default implementation uses Groovy's signature extraction (for backward compatibility)
+        crate::languages::common::method_resolution::extract_call_signature_from_context(usage_node, source)
+    }
+
 }
 
 #[cfg(test)]

@@ -4,7 +4,6 @@ src/languages/java/definition/local.rs:190: Implement proper scope distance calc
 src/languages/java/definition/utils.rs:504: Could verify this FQN exists in cache/database, but for now assume it's correct
 src/languages/java/implementation.rs:121: Implement method call implementation finding
 src/languages/java/implementation.rs:133: Implement method implementation finding
-src/languages/kotlin/support.rs:485: Implement Kotlin parameter type extraction
 src/languages/common/method_resolution.rs:437: Implement workspace-level class resolution
 src/languages/common/method_resolution.rs:450: Implement external dependency class resolution
 src/languages/groovy/support.rs:110: replace this with more sophisticated handling
