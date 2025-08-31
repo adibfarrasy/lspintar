@@ -655,7 +655,7 @@ mod tests {
         let test_cases = vec![
             ("groovy", true),
             ("java", true),
-            ("kotlin", false), // Not implemented
+            ("kotlin", true), // Parser is available
             ("unknown", false),
         ];
 

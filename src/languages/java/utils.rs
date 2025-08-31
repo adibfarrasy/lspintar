@@ -78,7 +78,162 @@ fn find_identifier_at_byte_offset<'a>(node: Node<'a>, byte_offset: usize) -> Opt
     None
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tree_sitter::Parser;
 
+    fn create_java_parser() -> Option<Parser> {
+        let mut parser = Parser::new();
+        let language = tree_sitter_java::LANGUAGE;
+        parser.set_language(&language.into()).ok()?;
+        Some(parser)
+    }
 
+    #[test]
+    fn test_position_to_byte_offset_single_line() {
+        let source = "public class Test {}";
+        let position = Position { line: 0, character: 6 }; // Position at 'c' in 'class'
+        
+        let result = position_to_byte_offset(source, position);
+        assert_eq!(result, Some(6));
+    }
 
+    #[test]
+    fn test_position_to_byte_offset_multi_line() {
+        let source = "public class Test {\n    void method() {\n    }\n}";
+        let position = Position { line: 1, character: 4 }; // Position at 'v' in 'void'
+        
+        let result = position_to_byte_offset(source, position);
+        assert_eq!(result, Some(24));
+    }
+
+    #[test]
+    fn test_position_to_byte_offset_end_of_line() {
+        let source = "public class Test {\n}";
+        let position = Position { line: 0, character: 19 }; // End of first line
+        
+        let result = position_to_byte_offset(source, position);
+        assert_eq!(result, Some(19));
+    }
+
+    #[test]
+    fn test_position_to_byte_offset_invalid_position() {
+        let source = "public class Test {}";
+        let position = Position { line: 5, character: 0 }; // Line doesn't exist
+        
+        let result = position_to_byte_offset(source, position);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_position_to_byte_offset_utf8() {
+        let source = "class 测试 {}";
+        let position = Position { line: 0, character: 6 }; // Position at first UTF-8 char
+        
+        let result = position_to_byte_offset(source, position);
+        assert_eq!(result, Some(6));
+    }
+
+    #[test]
+    fn test_find_identifier_at_position_with_valid_java_code() {
+        let mut parser = match create_java_parser() {
+            Some(p) => p,
+            None => {
+                println!("Warning: Java parser not available for testing");
+                return;
+            }
+        };
+
+        let source = "public class TestClass {\n    void testMethod() {}\n}";
+        let tree = parser.parse(source, None).unwrap();
+        
+        // Test finding class identifier
+        let position = Position { line: 0, character: 13 }; // Position at 'T' in 'TestClass'
+        let result = find_identifier_at_position(&tree, source, position);
+        
+        assert!(result.is_some());
+        if let Some(node) = result {
+            assert_eq!(node.kind(), "identifier");
+            assert_eq!(node.utf8_text(source.as_bytes()).unwrap(), "TestClass");
+        }
+    }
+
+    #[test]
+    fn test_find_identifier_at_position_method_name() {
+        let mut parser = match create_java_parser() {
+            Some(p) => p,
+            None => {
+                println!("Warning: Java parser not available for testing");
+                return;
+            }
+        };
+
+        let source = "public class TestClass {\n    void testMethod() {}\n}";
+        let tree = parser.parse(source, None).unwrap();
+        
+        // Test finding method identifier
+        let position = Position { line: 1, character: 9 }; // Position at 't' in 'testMethod'
+        let result = find_identifier_at_position(&tree, source, position);
+        
+        assert!(result.is_some());
+        if let Some(node) = result {
+            assert_eq!(node.kind(), "identifier");
+            assert_eq!(node.utf8_text(source.as_bytes()).unwrap(), "testMethod");
+        }
+    }
+
+    #[test]
+    fn test_find_identifier_at_position_no_identifier() {
+        let mut parser = match create_java_parser() {
+            Some(p) => p,
+            None => {
+                println!("Warning: Java parser not available for testing");
+                return;
+            }
+        };
+
+        let source = "public class TestClass {\n    void testMethod() {}\n}";
+        let tree = parser.parse(source, None).unwrap();
+        
+        // Test position in whitespace
+        let position = Position { line: 0, character: 5 }; // Position in whitespace after 'public'
+        let result = find_identifier_at_position(&tree, source, position);
+        
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_find_identifier_at_byte_offset_tolerance() {
+        let mut parser = match create_java_parser() {
+            Some(p) => p,
+            None => {
+                println!("Warning: Java parser not available for testing");
+                return;
+            }
+        };
+
+        let source = "class Test {}";
+        let tree = parser.parse(source, None).unwrap();
+        let root_node = tree.root_node();
+        
+        // Find the identifier node for 'Test'
+        let class_decl = root_node.child(0).unwrap();
+        let mut cursor = class_decl.walk();
+        let mut identifier_node = None;
+        
+        for child in class_decl.children(&mut cursor) {
+            if child.kind() == "identifier" {
+                identifier_node = Some(child);
+                break;
+            }
+        }
+        
+        if let Some(id_node) = identifier_node {
+            // Test tolerance - should find identifier even when slightly off
+            let result = find_identifier_at_byte_offset(id_node, id_node.end_byte() + 1);
+            assert!(result.is_some());
+        }
+    }
+}
 
