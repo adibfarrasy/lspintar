@@ -11,16 +11,14 @@ pub struct Document {
     pub uri: String,
     pub content: String,
     pub version: i32,
-    pub language_id: String,
 }
 
 impl Document {
-    pub fn new(uri: String, content: String, version: i32, language_id: String) -> Self {
+    pub fn new(uri: String, content: String, version: i32, _language_id: String) -> Self {
         Self {
             uri,
             content,
             version,
-            language_id,
         }
     }
 
@@ -67,9 +65,6 @@ impl Document {
         offset
     }
 
-    pub fn line_count(&self) -> u32 {
-        self.content.lines().count() as u32
-    }
 }
 
 pub struct DocumentManager {
@@ -93,16 +88,8 @@ impl DocumentManager {
         self.documents.get(uri)
     }
 
-    pub fn get_mut(&mut self, uri: &str) -> Option<&mut Document> {
-        self.documents.get_mut(uri)
-    }
-
     pub fn remove(&mut self, uri: &str) -> Option<Document> {
         self.documents.remove(uri)
-    }
-
-    pub fn contains(&self, uri: &str) -> bool {
-        self.documents.contains_key(uri)
     }
 
     pub fn update_content(

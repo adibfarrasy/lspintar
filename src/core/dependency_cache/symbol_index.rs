@@ -3,7 +3,6 @@ use std::{collections::HashSet, path::PathBuf};
 use crate::{
     core::{
         constants::{EXTENSIONS, PROJECT_ROOT_MARKER, SOURCE_DIRS},
-        symbols::SymbolType,
         utils::{create_parser_for_language, detect_language_from_path, find_project_root},
     },
     languages::{
@@ -93,23 +92,6 @@ pub fn find_project_roots(dir: &PathBuf) -> Result<Vec<PathBuf>> {
     Ok(project_roots.into_iter().collect())
 }
 
-fn try_find_workspace_root(starting_path: &PathBuf) -> PathBuf {
-    let mut current_root = starting_path.clone();
-    loop {
-        match find_project_root(&current_root) {
-            Some(project_dir) => {
-                if let Some(maybe_ws_dir) = project_dir.parent() {
-                    current_root = maybe_ws_dir.to_path_buf();
-                } else {
-                    break; // Reached filesystem root
-                }
-            }
-            None => break,
-        }
-    }
-
-    current_root
-}
 
 pub async fn collect_source_files(
     project_root: &PathBuf,
@@ -240,9 +222,7 @@ pub struct ParsedSourceFile {
 
 #[derive(Debug, Clone)]
 pub struct SymbolDefinition {
-    pub name: String,
     pub fully_qualified_name: String,
-    pub symbol_type: SymbolType,
     pub source_file: PathBuf,
     pub line: usize,
     pub column: usize,

@@ -60,7 +60,7 @@ pub fn extract_groovy_symbols(parsed_file: &ParsedSourceFile) -> Result<Vec<Symb
     let package = extract_groovy_package(&parsed_file.tree, &parsed_file.content);
     let queries = get_extract_symbol_queries();
 
-    for (query, symbol_type) in queries {
+    for (query, _symbol_type) in queries {
         let mut cursor = QueryCursor::new();
 
         let matches = cursor.matches(
@@ -98,9 +98,7 @@ pub fn extract_groovy_symbols(parsed_file: &ParsedSourceFile) -> Result<Vec<Symb
                     };
 
                     symbols.push(SymbolDefinition {
-                        name,
                         fully_qualified_name,
-                        symbol_type: symbol_type.clone(),
                         source_file: parsed_file.file_path.clone(),
                         line: name_node.start_position().row,
                         column: name_node.start_position().column,

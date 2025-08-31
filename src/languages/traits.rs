@@ -17,77 +17,77 @@ pub trait LanguageSupport: Send + Sync + QueryProvider {
 
     fn find_definition(
         &self,
-        tree: &Tree,
-        source: &str,
+        _tree: &Tree,
+        _source: &str,
         position: Position,
         uri: &str,
-        dependency_cache: Arc<DependencyCache>,
+        _dependency_cache: Arc<DependencyCache>,
     ) -> Result<Location>;
 
     fn find_implementation(
         &self,
-        tree: &Tree,
-        source: &str,
+        _tree: &Tree,
+        _source: &str,
         position: Position,
-        dependency_cache: Arc<DependencyCache>,
+        _dependency_cache: Arc<DependencyCache>,
     ) -> Result<Vec<Location>>;
 
     fn provide_hover(&self, tree: &Tree, source: &str, location: Location) -> Option<Hover>;
 
     fn determine_symbol_type_from_context(
         &self,
-        tree: &Tree,
+        _tree: &Tree,
         node: &Node,
-        source: &str,
+        _source: &str,
     ) -> Result<SymbolType>;
 
     fn find_definition_chain(
         &self,
-        tree: &Tree,
-        source: &str,
-        dependency_cache: Arc<DependencyCache>,
-        file_uri: &str,
-        usage_node: &Node,
+        _tree: &Tree,
+        _source: &str,
+        _dependency_cache: Arc<DependencyCache>,
+        _file_uri: &str,
+        _usage_node: &Node,
     ) -> Result<Location>;
 
     fn find_local(
         &self,
-        tree: &Tree,
-        source: &str,
-        file_uri: &str,
-        usage_node: &Node,
+        _tree: &Tree,
+        _source: &str,
+        _file_uri: &str,
+        _usage_node: &Node,
     ) -> Option<Location>;
 
     fn find_in_project(
         &self,
-        source: &str,
-        file_uri: &str,
-        usage_node: &Node,
-        dependency_cache: Arc<DependencyCache>,
+        _source: &str,
+        _file_uri: &str,
+        _usage_node: &Node,
+        _dependency_cache: Arc<DependencyCache>,
     ) -> Option<Location>;
 
     fn find_in_workspace(
         &self,
-        source: &str,
-        file_uri: &str,
-        usage_node: &Node,
-        dependency_cache: Arc<DependencyCache>,
+        _source: &str,
+        _file_uri: &str,
+        _usage_node: &Node,
+        _dependency_cache: Arc<DependencyCache>,
     ) -> Option<Location>;
 
     fn find_external(
         &self,
-        source: &str,
-        file_uri: &str,
-        usage_node: &Node,
-        dependency_cache: Arc<DependencyCache>,
+        _source: &str,
+        _file_uri: &str,
+        _usage_node: &Node,
+        _dependency_cache: Arc<DependencyCache>,
     ) -> Option<Location>;
 
     /// Find a method with signature matching for overload resolution
     fn find_method_with_signature<'a>(
         &self,
         tree: &'a Tree,
-        source: &str,
-        method_name: &str,
+        _source: &str,
+        _method_name: &str,
         call_signature: &crate::languages::common::method_resolution::CallSignature,
     ) -> Option<tree_sitter::Node<'a>>;
 
@@ -105,9 +105,9 @@ pub trait LanguageSupport: Send + Sync + QueryProvider {
 
     fn set_start_position(
         &self,
-        source: &str,
-        usage_node: &Node,
-        file_uri: &str,
+        _source: &str,
+        _usage_node: &Node,
+        _file_uri: &str,
     ) -> Option<Location>;
 
     /// Extract static method context (ClassName.methodName) from usage node
@@ -132,35 +132,22 @@ pub trait LanguageSupport: Send + Sync + QueryProvider {
         crate::languages::common::method_resolution::extract_instance_method_context(usage_node, source)
     }
 
-    /// Resolve static method definition by finding class and then method within it
-    fn find_static_method_definition(
+
+    /// Resolve instance method definition by finding variable type and then method within it
+    fn find_instance_method_definition(
         &self,
-        tree: &Tree,
-        source: &str,
-        file_uri: &str,
-        usage_node: &Node,
-        class_name: &str,
-        method_name: &str,
-        dependency_cache: Arc<DependencyCache>,
+        _tree: &Tree,
+        _source: &str,
+        _file_uri: &str,
+        _usage_node: &Node,
+        _variable_name: &str,
+        _method_name: &str,
+        _dependency_cache: Arc<DependencyCache>,
     ) -> Option<Location> {
         // Default implementation - languages can override for specific behavior
         None
     }
 
-    /// Resolve instance method definition by finding variable type and then method within it
-    fn find_instance_method_definition(
-        &self,
-        tree: &Tree,
-        source: &str,
-        file_uri: &str,
-        usage_node: &Node,
-        variable_name: &str,
-        method_name: &str,
-        dependency_cache: Arc<DependencyCache>,
-    ) -> Option<Location> {
-        // Default implementation - languages can override for specific behavior
-        None
-    }
 }
 
 #[cfg(test)]
@@ -223,27 +210,7 @@ mod tests {
     }
 
     impl QueryProvider for MockLanguageSupport {
-        fn variable_declaration_queries(&self) -> &[&'static str] {
-            &[]
-        }
-
         fn method_declaration_queries(&self) -> &[&'static str] {
-            &[]
-        }
-
-        fn class_declaration_queries(&self) -> &[&'static str] {
-            &[]
-        }
-
-        fn interface_declaration_queries(&self) -> &[&'static str] {
-            &[]
-        }
-
-        fn parameter_queries(&self) -> &[&'static str] {
-            &[]
-        }
-
-        fn field_declaration_queries(&self) -> &[&'static str] {
             &[]
         }
 
@@ -252,10 +219,6 @@ mod tests {
         }
 
         fn import_queries(&self) -> &[&'static str] {
-            &[]
-        }
-
-        fn package_queries(&self) -> &[&'static str] {
             &[]
         }
     }
@@ -285,7 +248,7 @@ mod tests {
             uri: &str,
             dependency_cache: Arc<DependencyCache>,
         ) -> Result<Location> {
-            // Use the mock node as usage_node
+            // Use the mock node as _usage_node
             let root_node = tree.root_node();
             self.find_definition_chain(tree, source, dependency_cache, uri, &root_node)
         }
@@ -444,7 +407,6 @@ mod tests {
         language_support: MockLanguageSupport,
         expected_language_id: &'static str,
         expected_extensions: &'static [&'static str],
-        expected_find_definition_success: bool,
     }
 
     struct DefinitionChainTestCase {
@@ -461,21 +423,18 @@ mod tests {
                 language_support: MockLanguageSupport::new("groovy"),
                 expected_language_id: "groovy",
                 expected_extensions: &[".mock"],
-                expected_find_definition_success: false,
             },
             LanguageSupportTestCase {
                 name: "java language support",
                 language_support: MockLanguageSupport::new("java"),
                 expected_language_id: "java",
                 expected_extensions: &[".mock"],
-                expected_find_definition_success: false,
             },
             LanguageSupportTestCase {
                 name: "language with local resolution",
                 language_support: MockLanguageSupport::new("test").with_local_resolution(),
                 expected_language_id: "test",
                 expected_extensions: &[".mock"],
-                expected_find_definition_success: true,
             },
         ];
 

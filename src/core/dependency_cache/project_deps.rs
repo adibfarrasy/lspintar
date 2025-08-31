@@ -30,7 +30,7 @@ pub struct ProjectMetadata {
 pub enum IndexingStatus {
     InProgress,
     Completed,
-    Failed(String),
+    Failed(()),
 }
 
 pub struct ProjectMapper {
@@ -67,7 +67,7 @@ impl ProjectMapper {
         if let Some(mut metadata) = cache.project_metadata.get_mut(&project_root) {
             match result {
                 Ok(_) => metadata.indexing_status = IndexingStatus::Completed,
-                Err(ref e) => metadata.indexing_status = IndexingStatus::Failed(e.to_string()),
+                Err(_) => metadata.indexing_status = IndexingStatus::Failed(()),
             }
         }
 

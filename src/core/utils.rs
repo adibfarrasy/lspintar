@@ -254,13 +254,6 @@ pub fn node_to_lsp_location(node: &Node, file_uri: &str) -> Option<Location> {
     Some(Location { uri, range })
 }
 
-// Only get the closest node to root
-#[tracing::instrument(skip_all)]
-pub fn location_to_node<'a>(location: &Location, tree: &'a Tree) -> Option<Node<'a>> {
-    let position = location.range.start;
-    find_node_at_position(tree, position)
-}
-
 fn find_node_at_position<'a>(tree: &'a Tree, position: Position) -> Option<Node<'a>> {
     let mut current = tree.root_node();
 
@@ -291,6 +284,14 @@ fn find_node_at_position<'a>(tree: &'a Tree, position: Position) -> Option<Node<
         None
     }
 }
+
+// Only get the closest node to root
+#[tracing::instrument(skip_all)]
+pub fn location_to_node<'a>(location: &Location, tree: &'a Tree) -> Option<Node<'a>> {
+    let position = location.range.start;
+    find_node_at_position(tree, position)
+}
+
 
 pub fn is_project_root(current: &PathBuf) -> bool {
     tracing::debug!("Checking if {:?} is project root", current);

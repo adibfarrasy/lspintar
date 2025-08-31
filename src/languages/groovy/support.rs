@@ -11,13 +11,9 @@ use crate::core::queries::QueryProvider;
 use crate::core::{
     dependency_cache::DependencyCache,
     symbols::SymbolType,
-    utils::{find_project_root, path_to_file_uri, uri_to_path},
 };
-use crate::languages::groovy::definition::method_resolution::extract_call_signature_from_context;
 use crate::languages::groovy::definition::utils::{
-    get_wildcard_imports_from_source, prepare_symbol_lookup_key_with_wildcard_support,
-    resolve_variable_type, search_definition_in_project,
-    search_static_method_definition_in_project,
+    get_wildcard_imports_from_source,
 };
 use crate::languages::traits::LanguageSupport;
 
@@ -40,12 +36,6 @@ impl GroovySupport {
 }
 
 impl QueryProvider for GroovySupport {
-    fn variable_declaration_queries(&self) -> &[&'static str] {
-        &[
-            r#"(variable_declaration) @decl"#,
-            r#"(expression_statement (identifier) @bare_id)"#,
-        ]
-    }
 
     fn method_declaration_queries(&self) -> &[&'static str] {
         &[
@@ -54,24 +44,9 @@ impl QueryProvider for GroovySupport {
         ]
     }
 
-    fn class_declaration_queries(&self) -> &[&'static str] {
-        &[
-            r#"(class_declaration) @class"#,
-            r#"(enum_declaration) @enum"#,
-        ]
-    }
 
-    fn interface_declaration_queries(&self) -> &[&'static str] {
-        &[r#"(interface_declaration) @interface"#]
-    }
 
-    fn parameter_queries(&self) -> &[&'static str] {
-        &[r#"(formal_parameter (identifier) @param)"#]
-    }
 
-    fn field_declaration_queries(&self) -> &[&'static str] {
-        &[r#"(field_declaration) @field"#]
-    }
 
     fn symbol_type_detection_query(&self) -> &'static str {
         r#"
@@ -110,9 +85,6 @@ impl QueryProvider for GroovySupport {
         &[r#"(import_declaration) @import"#]
     }
 
-    fn package_queries(&self) -> &[&'static str] {
-        &[r#"(package_declaration) @package"#]
-    }
 }
 
 impl LanguageSupport for GroovySupport {
@@ -436,26 +408,6 @@ impl LanguageSupport for GroovySupport {
         )
     }
 
-    fn find_static_method_definition(
-        &self,
-        tree: &Tree,
-        source: &str,
-        file_uri: &str,
-        usage_node: &Node,
-        class_name: &str,
-        method_name: &str,
-        dependency_cache: Arc<DependencyCache>,
-    ) -> Option<Location> {
-        self.find_static_method_definition_impl(
-            tree,
-            source,
-            file_uri,
-            usage_node,
-            class_name,
-            method_name,
-            dependency_cache,
-        )
-    }
 
     fn find_instance_method_definition(
         &self,
@@ -464,7 +416,7 @@ impl LanguageSupport for GroovySupport {
         file_uri: &str,
         usage_node: &Node,
         variable_name: &str,
-        method_name: &str,
+        _method_name: &str,
         dependency_cache: Arc<DependencyCache>,
     ) -> Option<Location> {
         // Try to resolve the variable type using Groovy's type resolution methods
@@ -485,7 +437,7 @@ impl LanguageSupport for GroovySupport {
                     file_uri,
                     usage_node,
                     variable_name,
-                    method_name,
+                    _method_name,
                     dependency_cache,
                 )
             {
@@ -500,14 +452,14 @@ impl LanguageSupport for GroovySupport {
         &self,
         tree: &'a Tree,
         source: &str,
-        method_name: &str,
+        _method_name: &str,
         call_signature: &crate::languages::common::method_resolution::CallSignature,
     ) -> Option<tree_sitter::Node<'a>> {
         let result =
             crate::languages::groovy::definition::method_resolution::find_method_with_signature(
                 tree,
                 source,
-                method_name,
+                _method_name,
                 call_signature,
             );
         result
@@ -552,7 +504,7 @@ impl LanguageSupport for GroovySupport {
         let language = tree_sitter_groovy::language();
         let query = match tree_sitter::Query::new(&language, query_text) {
             Ok(q) => q,
-            Err(e) => {
+            Err(_) => {
                 return None;
             }
         };
@@ -560,10 +512,7 @@ impl LanguageSupport for GroovySupport {
         let mut cursor = tree_sitter::QueryCursor::new();
         let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
 
-        let mut match_count = 0;
-
         while let Some(query_match) = matches.next() {
-            match_count += 1;
 
             let mut found_field_name = false;
             let mut field_type = None;
@@ -691,53 +640,6 @@ impl LanguageSupport for GroovySupport {
 }
 
 impl GroovySupport {
-    /// Implementation of static method resolution
-    fn find_static_method_definition_impl(
-        &self,
-        tree: &Tree,
-        source: &str,
-        file_uri: &str,
-        usage_node: &Node,
-        class_name: &str,
-        method_name: &str,
-        dependency_cache: Arc<DependencyCache>,
-    ) -> Option<Location> {
-        debug!(
-            "find_static_method_definition_impl: looking for {}.{}",
-            class_name, method_name
-        );
-
-        // First, try to find the class definition using existing resolution chain
-        // We create a fake node with the class name for the search
-
-        // Find the class first using the standard resolution chain
-        let class_location = self
-            .find_local(tree, source, file_uri, usage_node)
-            .or_else(|| {
-                self.find_in_project(source, file_uri, usage_node, dependency_cache.clone())
-            })
-            .or_else(|| {
-                self.find_in_workspace(source, file_uri, usage_node, dependency_cache.clone())
-            })
-            .or_else(|| self.find_external(source, file_uri, usage_node, dependency_cache.clone()));
-
-        if let Some(location) = class_location {
-            debug!(
-                "find_static_method_definition_impl: found class {} at {:?}",
-                class_name, location.uri
-            );
-
-            // TODO: Now search for the method within the class file
-            // For now, return the class location as a placeholder
-            return Some(location);
-        }
-
-        debug!(
-            "find_static_method_definition_impl: could not find class {}",
-            class_name
-        );
-        None
-    }
 
     /// Check if an identifier is an imported class name
     fn is_imported_class(&self, class_name: &str, source: &str) -> bool {
@@ -817,389 +719,11 @@ impl GroovySupport {
         false
     }
 
-    /// Specialized resolution for static method calls
-    fn find_static_method_definition(
-        &self,
-        tree: &Tree,
-        source: &str,
-        file_uri: &str,
-        usage_node: &Node,
-        class_name: &str,
-        method_name: &str,
-        dependency_cache: Arc<DependencyCache>,
-    ) -> Option<Location> {
-        let class_node = self.create_temporary_class_node(tree, source, class_name);
-        if class_node.is_none() {
-            return None;
-        }
-        let class_node = class_node?;
 
-        let call_signature = extract_call_signature_from_context(usage_node, source);
 
-        let class_location = if let Some((project_root, fqn)) =
-            prepare_symbol_lookup_key_with_wildcard_support(
-                &class_node,
-                source,
-                file_uri,
-                None,
-                &dependency_cache,
-            ) {
-            let symbol_key = (project_root.clone(), fqn.clone());
 
-            if let Some(file_location) = dependency_cache.symbol_index.get(&symbol_key) {
-                let class_uri = path_to_file_uri(&file_location)?;
-                Some(tower_lsp::lsp_types::Location {
-                    uri: tower_lsp::lsp_types::Url::parse(&class_uri).ok()?,
-                    range: tower_lsp::lsp_types::Range::default(),
-                })
-            } else {
-                let workspace_projects: Vec<std::path::PathBuf> = dependency_cache
-                    .symbol_index
-                    .iter()
-                    .map(|entry| entry.key().0.clone())
-                    .collect::<std::collections::HashSet<_>>()
-                    .into_iter()
-                    .collect();
 
-                for other_project in workspace_projects {
-                    if other_project == project_root {
-                        continue;
-                    }
 
-                    let symbol_key = (other_project.clone(), fqn.clone());
-                    if let Some(file_location) = dependency_cache.symbol_index.get(&symbol_key) {
-                        let class_uri = path_to_file_uri(&file_location)?;
-                        return Some(tower_lsp::lsp_types::Location {
-                            uri: tower_lsp::lsp_types::Url::parse(&class_uri).ok()?,
-                            range: tower_lsp::lsp_types::Range::default(),
-                        });
-                    }
-                }
-                None
-            }
-        } else {
-            None
-        }
-        .or_else(|| {
-            self.find_local(tree, source, file_uri, &class_node)
-                .or_else(|| {
-                    self.find_in_project(source, file_uri, &class_node, dependency_cache.clone())
-                })
-                .or_else(|| {
-                    self.find_in_workspace(source, file_uri, &class_node, dependency_cache.clone())
-                })
-                .or_else(|| {
-                    self.find_external(source, file_uri, &class_node, dependency_cache.clone())
-                })
-        });
-
-        if class_location.is_none() {
-            return None;
-        }
-        let class_location = class_location?;
-
-        let method_location = if let Some(call_sig) = call_signature {
-            search_static_method_definition_in_project(
-                file_uri,
-                source,
-                usage_node,
-                &class_location.uri.to_string(),
-                self,
-            )
-        } else {
-            search_definition_in_project(
-                file_uri,
-                source,
-                usage_node,
-                &class_location.uri.to_string(),
-                self,
-            )
-        };
-
-        method_location
-    }
-
-    /// Create a temporary node for class name resolution
-    fn create_temporary_class_node<'a>(
-        &self,
-        tree: &'a Tree,
-        source: &str,
-        class_name: &str,
-    ) -> Option<Node<'a>> {
-        let query_text = r#"
-            (method_invocation 
-              object: (identifier) @class_name)
-        "#;
-
-        let query = Query::new(&tree_sitter_groovy::language(), query_text).ok()?;
-        let mut cursor = QueryCursor::new();
-
-        let mut result = None;
-        cursor
-            .matches(&query, tree.root_node(), source.as_bytes())
-            .for_each(|query_match| {
-                for capture in query_match.captures {
-                    let node_text = capture.node.utf8_text(source.as_bytes()).unwrap_or("");
-                    if node_text == class_name {
-                        result = Some(capture.node);
-                        return;
-                    }
-                }
-            });
-
-        result
-    }
-
-    /// Specialized resolution for instance method calls like variable.method()
-    fn find_instance_method_definition(
-        &self,
-        tree: &Tree,
-        source: &str,
-        file_uri: &str,
-        usage_node: &Node,
-        variable_name: &str,
-        method_name: &str,
-        dependency_cache: Arc<DependencyCache>,
-    ) -> Option<Location> {
-        let variable_type = resolve_variable_type(variable_name, tree, source, usage_node);
-        if variable_type.is_none() {
-            return None;
-        }
-        let variable_type = variable_type.unwrap();
-
-        let call_signature = extract_call_signature_from_context(usage_node, source);
-
-        let class_location = self.resolve_class_through_standard_chain(
-            &variable_type,
-            tree,
-            source,
-            file_uri,
-            dependency_cache.clone(),
-        );
-
-        if class_location.is_none() {
-            return None;
-        }
-        let class_location = class_location.unwrap();
-
-        let result = search_definition_in_project(
-            file_uri,
-            source,
-            usage_node,
-            &class_location.uri.to_string(),
-            self,
-        );
-
-        let result = if result.is_none() && call_signature.is_some() {
-            search_static_method_definition_in_project(
-                file_uri,
-                source,
-                usage_node,
-                &class_location.uri.to_string(),
-                self,
-            )
-        } else {
-            result
-        };
-
-        result
-    }
-
-    /// Resolve a class through the standard resolution chain by creating a virtual lookup
-    fn resolve_class_through_standard_chain(
-        &self,
-        class_name: &str,
-        tree: &Tree,
-        source: &str,
-        file_uri: &str,
-        dependency_cache: Arc<DependencyCache>,
-    ) -> Option<Location> {
-        let current_file_path = uri_to_path(file_uri)?;
-        let project_root = find_project_root(&current_file_path)?;
-
-        let direct_symbol_key = (project_root.clone(), class_name.to_string());
-        if let Some(file_location) = dependency_cache.symbol_index.get(&direct_symbol_key) {
-            let class_uri = path_to_file_uri(&file_location)?;
-            return Some(Location {
-                uri: tower_lsp::lsp_types::Url::parse(&class_uri).ok()?,
-                range: tower_lsp::lsp_types::Range::default(),
-            });
-        }
-
-        for entry in dependency_cache.symbol_index.iter() {
-            let (entry_project_root, fqn) = entry.key();
-            if fqn.ends_with(&format!(".{}", class_name)) || fqn == class_name {
-                let class_uri = path_to_file_uri(entry.value())?;
-                return Some(Location {
-                    uri: tower_lsp::lsp_types::Url::parse(&class_uri).ok()?,
-                    range: tower_lsp::lsp_types::Range::default(),
-                });
-            }
-        }
-
-        if let Some(mock_node) = self.find_identifier_node_in_tree(tree, source, class_name) {
-            if let Some((_, fqn)) = prepare_symbol_lookup_key_with_wildcard_support(
-                &mock_node,
-                source,
-                file_uri,
-                Some(project_root.clone()),
-                &dependency_cache,
-            ) {
-                let symbol_key = (project_root.clone(), fqn.clone());
-                if let Some(file_location) = dependency_cache.symbol_index.get(&symbol_key) {
-                    let class_uri = path_to_file_uri(&file_location)?;
-                    return Some(Location {
-                        uri: tower_lsp::lsp_types::Url::parse(&class_uri).ok()?,
-                        range: tower_lsp::lsp_types::Range::default(),
-                    });
-                } else {
-                }
-
-                let workspace_projects: Vec<std::path::PathBuf> = dependency_cache
-                    .symbol_index
-                    .iter()
-                    .map(|entry| entry.key().0.clone())
-                    .collect::<std::collections::HashSet<_>>()
-                    .into_iter()
-                    .collect();
-
-                for other_project in workspace_projects {
-                    if other_project == project_root {
-                        continue;
-                    }
-
-                    let symbol_key = (other_project, fqn.clone());
-                    if let Some(file_location) = dependency_cache.symbol_index.get(&symbol_key) {
-                        let class_uri = path_to_file_uri(&file_location)?;
-                        return Some(Location {
-                            uri: tower_lsp::lsp_types::Url::parse(&class_uri).ok()?,
-                            range: tower_lsp::lsp_types::Range::default(),
-                        });
-                    }
-                }
-            } else {
-            }
-        } else {
-        }
-
-        None
-    }
-
-    /// Find an identifier node in the tree that matches the given text
-    fn find_identifier_node_in_tree<'a>(
-        &self,
-        tree: &'a Tree,
-        source: &str,
-        identifier: &str,
-    ) -> Option<Node<'a>> {
-        let query_text = r#"(identifier) @name"#;
-        let query = Query::new(&tree_sitter_groovy::language(), query_text).ok()?;
-        let mut cursor = QueryCursor::new();
-
-        let mut result = None;
-        cursor
-            .matches(&query, tree.root_node(), source.as_bytes())
-            .for_each(|query_match| {
-                for capture in query_match.captures {
-                    let node_text = capture.node.utf8_text(source.as_bytes()).unwrap_or("");
-                    if node_text == identifier {
-                        result = Some(capture.node);
-                        return;
-                    }
-                }
-            });
-
-        result
-    }
-
-    /// Sequential cross-file resolution to avoid race conditions with dependency cache
-    fn find_cross_file_sequential(
-        &self,
-        source: &str,
-        file_uri: &str,
-        usage_node: &Node,
-        dependency_cache: Arc<DependencyCache>,
-    ) -> Option<Location> {
-        let symbol_name = usage_node.utf8_text(source.as_bytes()).ok()?;
-
-        if symbol_name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_')
-        {
-            if let Some(location) =
-                self.find_in_project(source, file_uri, usage_node, dependency_cache.clone())
-            {
-                // If the definition is in the same file, don't call set_start_position
-                // as it may find the wrong identifier with the same name
-                if location.uri.to_string() == file_uri {
-                    return Some(location);
-                } else {
-                    let uri_string = location.uri.to_string();
-                    // Skip set_start_position for builtin sources as they are already correctly positioned
-                    if uri_string.contains("lspintar_builtin_sources") {
-                        return Some(location);
-                    } else {
-                        return self.set_start_position(source, usage_node, &uri_string);
-                    }
-                }
-            }
-        }
-
-        if let Some(location) =
-            self.find_in_workspace(source, file_uri, usage_node, dependency_cache.clone())
-        {
-            // If the definition is in the same file, don't call set_start_position
-            // as it may find the wrong identifier with the same name
-            if location.uri.to_string() == file_uri {
-                return Some(location);
-            } else {
-                let uri_string = location.uri.to_string();
-                // Skip set_start_position for builtin sources as they are already correctly positioned
-                if uri_string.contains("lspintar_builtin_sources") {
-                    return Some(location);
-                } else {
-                    return self.set_start_position(source, usage_node, &uri_string);
-                }
-            }
-        }
-
-        if let Some(location) =
-            self.find_external(source, file_uri, usage_node, dependency_cache.clone())
-        {
-            // If the definition is in the same file, don't call set_start_position
-            // as it may find the wrong identifier with the same name
-            if location.uri.to_string() == file_uri {
-                return Some(location);
-            } else {
-                let uri_string = location.uri.to_string();
-                // Skip set_start_position for builtin sources as they are already correctly positioned
-                if uri_string.contains("lspintar_builtin_sources") {
-                    return Some(location);
-                } else {
-                    return self.set_start_position(source, usage_node, &uri_string);
-                }
-            }
-        }
-
-        if let Some(location) = self.find_in_project(source, file_uri, usage_node, dependency_cache)
-        {
-            // If the definition is in the same file, don't call set_start_position
-            // as it may find the wrong identifier with the same name
-            if location.uri.to_string() == file_uri {
-                return Some(location);
-            } else {
-                let uri_string = location.uri.to_string();
-                // Skip set_start_position for builtin sources as they are already correctly positioned
-                if uri_string.contains("lspintar_builtin_sources") {
-                    return Some(location);
-                } else {
-                    return self.set_start_position(source, usage_node, &uri_string);
-                }
-            }
-        }
-
-        None
-    }
 }
 
 impl Default for GroovySupport {

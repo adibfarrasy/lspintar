@@ -10,7 +10,6 @@ pub struct CallSignature {
 pub struct MethodSignature {
     pub param_count: usize,
     pub param_types: Vec<String>,
-    pub param_names: Vec<String>,
 }
 
 /// Enhanced method resolution that finds the best matching method based on call signature
@@ -94,11 +93,8 @@ fn extract_call_signature_from_invocation(method_invocation: &Node, source: &str
 
     let mut arg_types = Vec::new();
     let mut cursor = arguments.walk();
-    let mut arg_count = 0;
 
     for child in arguments.named_children(&mut cursor) {
-        arg_count += 1;
-        
         let arg_type = infer_argument_type(&child, source);
         arg_types.push(arg_type);
     }
@@ -117,7 +113,6 @@ fn extract_method_signature(method_node: &Node, source: &str) -> Option<MethodSi
     let parameters = method_node.child_by_field_name("parameters")?;
 
     let mut param_types = Vec::new();
-    let mut param_names = Vec::new();
     let mut cursor = parameters.walk();
 
     let mut has_spread = false;
@@ -134,15 +129,6 @@ fn extract_method_signature(method_node: &Node, source: &str) -> Option<MethodSi
             } else {
                 param_types.push("def".to_string()); // Groovy default
             }
-
-            if let Some(param_name) = child.child_by_field_name("name") {
-                param_names.push(
-                    param_name
-                        .utf8_text(source.as_bytes())
-                        .unwrap_or("")
-                        .to_string(),
-                );
-            }
         }
 
         if child.kind() == "spread_parameter" {
@@ -157,7 +143,6 @@ fn extract_method_signature(method_node: &Node, source: &str) -> Option<MethodSi
             param_types.len()
         },
         param_types,
-        param_names,
     })
 }
 
@@ -299,7 +284,7 @@ fn infer_argument_type(arg_node: &Node, source: &str) -> Option<String> {
     }
 }
 
-fn contains_floating_point_operand(binary_expr: &Node, source: &str) -> bool {
+fn contains_floating_point_operand(binary_expr: &Node, _source: &str) -> bool {
     let mut cursor = binary_expr.walk();
     for child in binary_expr.children(&mut cursor) {
         match child.kind() {

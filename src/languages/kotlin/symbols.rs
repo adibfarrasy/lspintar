@@ -155,9 +155,7 @@ pub fn extract_kotlin_symbols(parsed_file: &ParsedSourceFile) -> Result<Vec<Symb
                     };
 
                     symbols.push(SymbolDefinition {
-                        name,
                         fully_qualified_name,
-                        symbol_type: symbol_type.clone(),
                         source_file: parsed_file.file_path.clone(),
                         line: name_node.start_position().row,
                         column: name_node.start_position().column,
@@ -345,9 +343,7 @@ class MyClass : BaseClass, MyInterface {
         assert_eq!(symbols.len(), 2); // class + method
         
         let class_symbol = &symbols[0];
-        assert_eq!(class_symbol.name, "MyClass");
         assert_eq!(class_symbol.fully_qualified_name, "com.example.MyClass");
-        assert_eq!(class_symbol.symbol_type, SymbolType::ClassDeclaration);
     }
 
     #[test]
@@ -364,7 +360,6 @@ object MySingleton {
         
         assert!(!symbols.is_empty());
         let object_symbol = &symbols[0];
-        assert_eq!(object_symbol.name, "MySingleton");
         assert_eq!(object_symbol.fully_qualified_name, "com.example.MySingleton");
     }
 
@@ -381,8 +376,9 @@ interface MyInterface {
         let symbols = extract_kotlin_symbols(&parsed_file).unwrap();
         
         assert!(!symbols.is_empty());
+        // Check that we extracted an interface symbol
         let interface_symbol = symbols.iter()
-            .find(|s| s.symbol_type == SymbolType::InterfaceDeclaration);
+            .find(|s| s.fully_qualified_name.ends_with("MyInterface"));
         assert!(interface_symbol.is_some());
     }
 
@@ -399,8 +395,8 @@ class PublicClass
         let symbols = extract_kotlin_symbols(&parsed_file).unwrap();
         
         // Should only contain the public class
-        assert!(symbols.iter().any(|s| s.name == "PublicClass"));
+        assert!(symbols.iter().any(|s| s.fully_qualified_name.ends_with("PublicClass")));
         // Private class should be filtered out
-        assert!(!symbols.iter().any(|s| s.name == "PrivateClass"));
+        assert!(!symbols.iter().any(|s| s.fully_qualified_name.ends_with("PrivateClass")));
     }
 }

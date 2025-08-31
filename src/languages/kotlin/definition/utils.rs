@@ -330,7 +330,7 @@ pub fn resolve_symbol_with_imports(
 
     // Try with current package (but only for non-basic types)
     if let Some(package) = extract_package_from_source(source) {
-        let result = format!("{}.{}", package, symbol_name);
+        let _result = format!("{}.{}", package, symbol_name);
         // Only return if we can verify it exists - but for now just fall through
     }
 
@@ -361,7 +361,7 @@ pub fn prepare_symbol_lookup_key_with_wildcard_support(
     usage_node: &Node,
     source: &str,
     file_uri: &str,
-    call_signature: Option<CallSignature>,
+    _call_signature: Option<CallSignature>,
     dependency_cache: &Arc<DependencyCache>,
 ) -> Option<(PathBuf, String)> {
     let symbol_name = usage_node.utf8_text(source.as_bytes()).ok()?.to_string();
@@ -379,7 +379,7 @@ pub fn search_definition_in_project(
     origin_source: &str,
     usage_node: &Node,
     target_file_uri: &str,
-    language_support: &dyn LanguageSupport,
+    _language_support: &dyn LanguageSupport,
 ) -> Option<Location> {
     let symbol_name = usage_node.utf8_text(origin_source.as_bytes()).ok()?;
     let origin_tree = uri_to_tree(origin_file_uri)?;

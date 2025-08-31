@@ -26,11 +26,6 @@ pub struct GitState {
     pub dependencies_hash: String,
 }
 
-#[derive(Debug, Clone)]
-pub struct FileMetadata {
-    pub mtime: u64,
-    pub size: u64,
-}
 
 pub struct PersistenceLayer {
     conn: Mutex<Connection>,
@@ -215,72 +210,7 @@ impl PersistenceLayer {
         Ok(())
     }
 
-    /// Check if file metadata has changed since last index
-    /// Called from: textDocument/didOpen, before cache lookups
-    pub fn is_file_stale(&self, file_path: &Path) -> Result<bool> {
-        let metadata = fs::metadata(file_path);
-        if metadata.is_err() {
-            return Ok(true); // File doesn't exist, consider stale
-        }
-        let metadata = metadata?;
 
-        let current_mtime = metadata.modified()?.duration_since(UNIX_EPOCH)?.as_secs();
-        let current_size = metadata.len();
-
-        // Check symbol_index table first
-        let stored_result = self
-            .conn
-            .lock()
-            .unwrap()
-            .prepare(
-                "SELECT mtime, size FROM symbol_index WHERE file_path = ? AND project_path = ?",
-            )?
-            .query_row(
-                params![
-                    file_path.to_string_lossy(),
-                    self.project_path.to_string_lossy()
-                ],
-                |row| {
-                    let stored_mtime: i64 = row.get(0)?;
-                    let stored_size: i64 = row.get(1)?;
-                    Ok((stored_mtime as u64, stored_size as u64))
-                },
-            );
-
-        match stored_result {
-            Ok((stored_mtime, stored_size)) => {
-                Ok(stored_mtime != current_mtime || stored_size != current_size)
-            }
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(true), // Not in cache
-            Err(e) => Err(e.into()),
-        }
-    }
-
-    /// Load symbol index: (project_root, fqn) -> file_path
-    /// Called from: LSP initialize (bulk load), workspace/symbol requests
-    pub fn load_symbol_index(&self) -> Result<DashMap<(PathBuf, String), PathBuf>> {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT project_path, fully_qualified_name, file_path FROM symbol_index WHERE project_path LIKE ?"
-        )?;
-
-        let workspace_pattern = format!("{}%", self.project_path.to_string_lossy());
-        let rows = stmt.query_map(params![workspace_pattern], |row| {
-            let project_path: String = row.get(0)?;
-            let fqn: String = row.get(1)?;
-            let file_path: String = row.get(2)?;
-            Ok((PathBuf::from(project_path), fqn, PathBuf::from(file_path)))
-        })?;
-
-        let map = DashMap::new();
-        for row in rows {
-            let (project_path, fqn, file_path) = row?;
-            let key = (project_path, fqn);
-            map.insert(key, file_path);
-        }
-
-        Ok(map)
-    }
 
     /// Store symbol index to database
     /// Called from: After indexing project files, textDocument/didSave (incremental)
@@ -342,46 +272,6 @@ impl PersistenceLayer {
         Ok(())
     }
 
-    /// Load builtin class infos: class_name -> SourceFileInfo
-    /// Called from: LSP initialize (bulk load)
-    pub fn load_builtin_infos(&self) -> Result<DashMap<String, SourceFileInfo>> {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT class_name, source_path, zip_internal_path, dependency_info 
-             FROM builtin_infos",
-        )?;
-
-        let rows = stmt.query_map([], |row| {
-            let class_name: String = row.get(0)?;
-            let source_path: String = row.get(1)?;
-            let zip_internal_path: Option<String> = row.get(2)?;
-            let dependency_info_json: Option<String> = row.get(3)?;
-            Ok((
-                class_name,
-                source_path,
-                zip_internal_path,
-                dependency_info_json,
-            ))
-        })?;
-
-        let map = DashMap::new();
-        for row in rows {
-            let (class_name, source_path, zip_internal_path, dependency_info_json) = row?;
-
-            let dependency = if let Some(json) = dependency_info_json {
-                deserialize_external_dependency(&json).ok().flatten()
-            } else {
-                None
-            };
-
-            let source_info =
-                SourceFileInfo::new(PathBuf::from(source_path), zip_internal_path, dependency);
-
-            map.insert(class_name, source_info);
-        }
-
-        Ok(map)
-    }
 
     /// Store builtin infos to database
     /// Called from: After scanning JAVA_HOME/GROOVY_HOME, when builtins change
@@ -513,53 +403,6 @@ impl PersistenceLayer {
         Ok(())
     }
 
-    /// Load project external infos: (project_root, type_name) -> SourceFileInfo
-    /// Called from: LSP initialize, workspace/symbol for external dependencies
-    pub fn load_project_external_infos(
-        &self,
-    ) -> Result<DashMap<(PathBuf, String), SourceFileInfo>> {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT project_path, type_name, source_path, zip_internal_path, dependency_info 
-             FROM project_external_infos WHERE project_path LIKE ?",
-        )?;
-
-        let workspace_pattern = format!("{}%", self.project_path.to_string_lossy());
-        let rows = stmt.query_map(params![workspace_pattern], |row| {
-            let project_path: String = row.get(0)?;
-            let type_name: String = row.get(1)?;
-            let source_path: String = row.get(2)?;
-            let zip_internal_path: Option<String> = row.get(3)?;
-            let dependency_info_json: Option<String> = row.get(4)?;
-            Ok((
-                PathBuf::from(project_path),
-                type_name,
-                source_path,
-                zip_internal_path,
-                dependency_info_json,
-            ))
-        })?;
-
-        let map = DashMap::new();
-        for row in rows {
-            let (project_path, type_name, source_path, zip_internal_path, dependency_info_json) =
-                row?;
-
-            let dependency = if let Some(json) = dependency_info_json {
-                deserialize_external_dependency(&json).ok().flatten()
-            } else {
-                None
-            };
-
-            let source_info =
-                SourceFileInfo::new(PathBuf::from(source_path), zip_internal_path, dependency);
-
-            let key = (project_path, type_name);
-            map.insert(key, source_info);
-        }
-
-        Ok(map)
-    }
 
     /// Store project external infos to database
     /// Called from: After gradle dependency resolution, workspace/didChangeWatchedFiles on build.gradle
@@ -625,132 +468,8 @@ impl PersistenceLayer {
         Ok(())
     }
 
-    /// Invalidate cache entries for specific files
-    /// Called from: textDocument/didChange, workspace/didChangeWatchedFiles
-    pub fn invalidate_files(&self, file_paths: &[PathBuf]) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
-        let tx = conn.unchecked_transaction()?;
 
-        for file_path in file_paths {
-            let file_path_str = file_path.to_string_lossy();
 
-            // Delete from symbol_index
-            tx.execute(
-                "DELETE FROM symbol_index WHERE file_path = ? AND project_path = ?",
-                params![file_path_str, self.project_path.to_string_lossy()],
-            )?;
-
-            // Delete from project_external_infos
-            tx.execute(
-                "DELETE FROM project_external_infos WHERE source_path = ? AND project_path = ?",
-                params![file_path_str, self.project_path.to_string_lossy()],
-            )?;
-
-            // For inheritance_index, we need to check if file_path exists in the locations blob
-            // This is more complex, so for now we'll just mark the cache as potentially stale
-        }
-
-        tx.commit()?;
-        Ok(())
-    }
-
-    /// Clean up entries for files that no longer exist
-    /// Called from: Periodic maintenance, after git checkout/pull
-    pub fn cleanup_missing_files(&self, existing_files: &[PathBuf]) -> Result<()> {
-        let existing_set: std::collections::HashSet<PathBuf> =
-            existing_files.iter().cloned().collect();
-        let conn = self.conn.lock().unwrap();
-        let tx = conn.unchecked_transaction()?;
-
-        // Get all file paths from symbol_index
-        let mut stmt =
-            tx.prepare("SELECT DISTINCT file_path FROM symbol_index WHERE project_path = ?")?;
-
-        let rows = stmt.query_map(params![self.project_path.to_string_lossy()], |row| {
-            let path: String = row.get(0)?;
-            Ok(PathBuf::from(path))
-        })?;
-
-        let mut file_paths = Vec::new();
-        for row in rows {
-            file_paths.push(row?);
-        }
-        drop(stmt); // Explicitly drop the statement
-
-        // Delete entries for missing files
-        for file_path in file_paths {
-            if !existing_set.contains(&file_path) && !file_path.exists() {
-                tx.execute(
-                    "DELETE FROM symbol_index WHERE file_path = ? AND project_path = ?",
-                    params![
-                        file_path.to_string_lossy(),
-                        self.project_path.to_string_lossy()
-                    ],
-                )?;
-
-                tx.execute(
-                    "DELETE FROM project_external_infos WHERE source_path = ? AND project_path = ?",
-                    params![
-                        file_path.to_string_lossy(),
-                        self.project_path.to_string_lossy()
-                    ],
-                )?;
-            }
-        }
-
-        tx.commit()?;
-
-        // VACUUM to reclaim space
-        self.conn.lock().unwrap().execute("VACUUM", [])?;
-
-        Ok(())
-    }
-
-    /// Check current database size and enforce limits
-    /// Called from: LSP shutdown, periodic maintenance
-    pub fn enforce_size_limit(&self, max_size_mb: u64) -> Result<()> {
-        // Get database file size by looking at the database file
-        let conn = self.conn.lock().unwrap();
-        let db_path = conn
-            .path()
-            .ok_or_else(|| anyhow!("Cannot get database path"))?;
-        let db_size = fs::metadata(db_path)?.len();
-        let max_size_bytes = max_size_mb * 1024 * 1024;
-
-        if db_size > max_size_bytes {
-            let tx = conn.unchecked_transaction()?;
-
-            // Delete oldest entries from each table (keep most recent 70%)
-            let tables_and_conditions = [
-                ("symbol_index", "project_path = ?"),
-                ("builtin_infos", "1 = 1"), // No project filtering for builtins
-                ("inheritance_index", "project_path = ?"),
-                ("project_external_infos", "project_path = ?"),
-            ];
-
-            for (table, condition) in &tables_and_conditions {
-                let delete_query = format!(
-                    "DELETE FROM {} WHERE {} AND indexed_at < (
-                        SELECT indexed_at FROM {} WHERE {} 
-                        ORDER BY indexed_at DESC 
-                        LIMIT 1 OFFSET (SELECT COUNT(*) * 7 / 10 FROM {} WHERE {})
-                    )",
-                    table, condition, table, condition, table, condition
-                );
-
-                if condition.contains("project_path") {
-                    tx.execute(&delete_query, params![self.project_path.to_string_lossy()])?;
-                } else {
-                    tx.execute(&delete_query, [])?;
-                }
-            }
-
-            tx.commit()?;
-            self.conn.lock().unwrap().execute("VACUUM", [])?;
-        }
-
-        Ok(())
-    }
 
     /// Get current git state for comparison
     fn get_current_git_state(&self) -> Result<GitState> {
@@ -805,35 +524,6 @@ impl PersistenceLayer {
         format!("{:x}", result)[..16].to_string()
     }
 
-    /// Bulk load all cached data for project startup
-    /// Called from: LSP initialize after git state validation
-    pub fn load_all_caches(
-        &self,
-    ) -> Result<(
-        DashMap<(PathBuf, String), PathBuf>, // symbol_index
-        DashMap<String, SourceFileInfo>,     // builtin_infos
-        DashMap<(PathBuf, String), Vec<(PathBuf, usize, usize)>>, // inheritance_index
-        DashMap<(PathBuf, String), SourceFileInfo>, // project_external_infos
-    )> {
-        let symbol_index = self.load_symbol_index().unwrap_or_else(|_| DashMap::new());
-
-        let builtin_infos = self.load_builtin_infos().unwrap_or_else(|_| DashMap::new());
-
-        let inheritance_index = self
-            .load_inheritance_index()
-            .unwrap_or_else(|_| DashMap::new());
-
-        let project_external_infos = self
-            .load_project_external_infos()
-            .unwrap_or_else(|_| DashMap::new());
-
-        Ok((
-            symbol_index,
-            builtin_infos,
-            inheritance_index,
-            project_external_infos,
-        ))
-    }
 
     /// Store project metadata to database
     pub fn store_project_metadata(

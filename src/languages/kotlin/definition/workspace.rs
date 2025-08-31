@@ -18,7 +18,7 @@ pub fn find_in_workspace(
     _language_support: &dyn LanguageSupport,
 ) -> Option<Location> {
     let symbol_name = usage_node.utf8_text(source.as_bytes()).ok()?.to_string();
-    let current_project = uri_to_path(file_uri).and_then(|path| find_project_root(&path))?;
+    let _current_project = uri_to_path(file_uri).and_then(|path| find_project_root(&path))?;
     
     // Try to resolve the symbol with import context
     let fqn = resolve_symbol_with_imports(&symbol_name, source, &dependency_cache)?;
@@ -38,7 +38,7 @@ pub fn find_in_workspace(
     for search_fqn in search_keys {
         // Search through the symbol index
         for entry in dependency_cache.symbol_index.iter() {
-            let ((entry_project_root, entry_fqn), file_path) = (entry.key(), entry.value());
+            let ((_entry_project_root, entry_fqn), file_path) = (entry.key(), entry.value());
             
             // Check if this entry might contain our symbol
             if entry_fqn == &search_fqn || 

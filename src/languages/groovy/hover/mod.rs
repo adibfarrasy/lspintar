@@ -14,7 +14,6 @@ mod class;
 mod field;
 mod interface;
 mod method;
-mod utils;
 
 pub fn handle(
     tree: &Tree,

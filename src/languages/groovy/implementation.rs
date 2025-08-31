@@ -40,7 +40,7 @@ pub fn handle(
             futures::executor::block_on(find_implementations(symbol_name, &dependency_cache))
         }
         SymbolType::MethodCall => {
-            handle_method_call_implementation(tree, source, position, dependency_cache, language_support)
+            handle_method_call_implementation(tree, source, position, dependency_cache)
         }
         SymbolType::MethodDeclaration => futures::executor::block_on(async {
             // TODO: currently only handle interfaces.
@@ -243,7 +243,6 @@ fn handle_method_call_implementation(
     source: &str,
     position: Position,
     dependency_cache: Arc<DependencyCache>,
-    language_support: &dyn LanguageSupport,
 ) -> Result<Vec<Location>> {
     let identifier_node = find_identifier_at_position(tree, source, position)?;
     
@@ -269,26 +268,7 @@ fn handle_method_call_implementation(
     }
 }
 
-/// Find a node at a specific position in the tree
-fn find_node_at_position(tree: &Tree, position: Position) -> Option<tree_sitter::Node> {
-    let point = tree_sitter::Point {
-        row: position.line as usize,
-        column: position.character as usize,
-    };
-    
-    tree.root_node().descendant_for_point_range(point, point)
-}
 
-/// Check if a node is contained within an interface declaration
-fn find_containing_interface(mut node: tree_sitter::Node) -> Option<tree_sitter::Node> {
-    while let Some(parent) = node.parent() {
-        if parent.kind() == "interface_declaration" {
-            return Some(parent);
-        }
-        node = parent;
-    }
-    None
-}
 
 /// Find implementations of a specific interface method
 async fn find_interface_method_implementations(

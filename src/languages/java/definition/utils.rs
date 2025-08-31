@@ -126,7 +126,7 @@ pub fn search_definition_in_project(
     origin_source: &str,
     usage_node: &Node,
     target_file_uri: &str,
-    language_support: &dyn LanguageSupport,
+    _language_support: &dyn LanguageSupport,
 ) -> Option<Location> {
     let symbol_name = usage_node.utf8_text(origin_source.as_bytes()).ok()?;
     let origin_tree = uri_to_tree(origin_file_uri)?;
@@ -199,7 +199,7 @@ pub fn prepare_symbol_lookup_key_with_wildcard_support(
     // Debug: show comprehensive cache information
 
     // Show all project roots in cache
-    let project_roots: std::collections::HashSet<_> = dependency_cache
+    let _project_roots: std::collections::HashSet<_> = dependency_cache
         .symbol_index
         .iter()
         .map(|entry| entry.key().0.clone())
@@ -207,7 +207,7 @@ pub fn prepare_symbol_lookup_key_with_wildcard_support(
 
     // Show symbols for current project
     if !dependency_cache.symbol_index.is_empty() {
-        let current_project_keys: Vec<_> = dependency_cache
+        let _current_project_keys: Vec<_> = dependency_cache
             .symbol_index
             .iter()
             .filter(|entry| entry.key().0 == project_root)
@@ -419,7 +419,7 @@ pub fn extract_package_from_source(source: &str) -> Option<String> {
 pub fn resolve_symbol_with_imports(
     symbol_name: &str,
     source: &str,
-    dependency_cache: &Arc<DependencyCache>,
+    _dependency_cache: &Arc<DependencyCache>,
 ) -> Option<String> {
     use tracing::debug;
 

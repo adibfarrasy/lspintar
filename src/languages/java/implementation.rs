@@ -35,7 +35,7 @@ pub fn handle(
         }
         SymbolType::MethodCall => {
             // Find the method declaration and then its implementations
-            handle_method_call_implementation(tree, source, position, dependency_cache, language_support)
+            handle_method_call_implementation(tree, source, position, dependency_cache)
         }
         SymbolType::MethodDeclaration => {
             // Find implementations of this method (if it's in an interface or abstract class)
@@ -113,11 +113,10 @@ async fn find_implementations(
 }
 
 fn handle_method_call_implementation(
-    tree: &Tree,
-    source: &str,
-    position: Position,
-    dependency_cache: Arc<DependencyCache>,
-    language_support: &dyn LanguageSupport,
+    _tree: &Tree,
+    _source: &str,
+    _position: Position,
+    _dependency_cache: Arc<DependencyCache>,
 ) -> Result<Vec<Location>> {
     // TODO: Implement method call implementation finding
     // This should find the method declaration first, then find its implementations

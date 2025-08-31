@@ -126,26 +126,6 @@ impl DependencyCache {
         Ok(())
     }
 
-    /// Invalidate cache entries for specific files
-    pub async fn invalidate_files(
-        &self,
-        project_root: &PathBuf,
-        file_paths: &[PathBuf],
-    ) -> Result<()> {
-        let persistence = PersistenceLayer::new(project_root.clone())
-            .context("Failed to initialize persistence layer")?;
-
-        persistence.invalidate_files(file_paths)?;
-
-        // Also remove from in-memory cache
-        for file_path in file_paths {
-            self.symbol_index.retain(|_, v| v != file_path);
-            self.project_external_infos
-                .retain(|_, v| &v.source_path != file_path);
-        }
-
-        Ok(())
-    }
 
     #[tracing::instrument(skip_all)]
     pub async fn index_external_dependency(self: Arc<Self>, current_dir: PathBuf) -> Result<()> {
@@ -675,7 +655,6 @@ impl DependencyCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::symbols::SymbolType;
     use std::path::PathBuf;
 
     struct DependencyCacheTestCase {
@@ -689,7 +668,6 @@ mod tests {
         project_root: PathBuf,
         class_name: String,
         fqn: String,
-        file_path: PathBuf,
     }
 
     struct DependencyCacheTestExpected {
@@ -708,7 +686,6 @@ mod tests {
                     project_root: PathBuf::from("/test/project"),
                     class_name: "TestClass".to_string(),
                     fqn: "com.example.TestClass".to_string(),
-                    file_path: PathBuf::from("/test/project/TestClass.groovy"),
                 },
                 expected: DependencyCacheTestExpected {
                     should_find_symbol: false,
@@ -738,7 +715,6 @@ mod tests {
                     project_root: PathBuf::from("/test/project"),
                     class_name: "TestClass".to_string(),
                     fqn: "com.example.TestClass".to_string(),
-                    file_path: PathBuf::from("/test/project/TestClass.groovy"),
                 },
                 expected: DependencyCacheTestExpected {
                     should_find_symbol: true,
@@ -765,7 +741,7 @@ mod tests {
                         .symbol_index
                         .insert((project_root.clone(), fqn2.clone()), file2);
 
-                    let mut helpers = vec![fqn1, fqn2];
+                    let helpers = vec![fqn1, fqn2];
                     cache
                         .class_name_index
                         .insert((project_root, "Helper".to_string()), helpers);
@@ -775,7 +751,6 @@ mod tests {
                     project_root: PathBuf::from("/test/project"),
                     class_name: "Helper".to_string(),
                     fqn: "com.example.util.Helper".to_string(),
-                    file_path: PathBuf::from("/test/project/util/Helper.groovy"),
                 },
                 expected: DependencyCacheTestExpected {
                     should_find_symbol: true,
@@ -843,9 +818,7 @@ mod tests {
             InheritanceTestCase {
                 name: "class with no inheritance",
                 symbol: SymbolDefinition {
-                    name: "SimpleClass".to_string(),
                     fully_qualified_name: "com.example.SimpleClass".to_string(),
-                    symbol_type: SymbolType::ClassDeclaration,
                     source_file: PathBuf::from("/test/SimpleClass.groovy"),
                     line: 1,
                     column: 0,
@@ -857,9 +830,7 @@ mod tests {
             InheritanceTestCase {
                 name: "class with superclass only",
                 symbol: SymbolDefinition {
-                    name: "ChildClass".to_string(),
                     fully_qualified_name: "com.example.ChildClass".to_string(),
-                    symbol_type: SymbolType::ClassDeclaration,
                     source_file: PathBuf::from("/test/ChildClass.groovy"),
                     line: 1,
                     column: 0,
@@ -871,9 +842,7 @@ mod tests {
             InheritanceTestCase {
                 name: "class with interfaces only",
                 symbol: SymbolDefinition {
-                    name: "ImplClass".to_string(),
                     fully_qualified_name: "com.example.ImplClass".to_string(),
-                    symbol_type: SymbolType::ClassDeclaration,
                     source_file: PathBuf::from("/test/ImplClass.groovy"),
                     line: 1,
                     column: 0,
@@ -888,9 +857,7 @@ mod tests {
             InheritanceTestCase {
                 name: "class with both superclass and interfaces",
                 symbol: SymbolDefinition {
-                    name: "ComplexClass".to_string(),
                     fully_qualified_name: "com.example.ComplexClass".to_string(),
-                    symbol_type: SymbolType::ClassDeclaration,
                     source_file: PathBuf::from("/test/ComplexClass.groovy"),
                     line: 1,
                     column: 0,

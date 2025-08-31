@@ -35,7 +35,7 @@ pub fn handle(
         }
         SymbolType::MethodCall => {
             // Find the method declaration and then its implementations
-            handle_method_call_implementation(tree, source, position, dependency_cache, language_support)
+            handle_method_call_implementation(tree, source, position, dependency_cache)
         }
         SymbolType::MethodDeclaration => {
             // Find implementations of this method (if it's in an interface or abstract class)
@@ -111,7 +111,6 @@ fn handle_method_call_implementation(
     source: &str,
     position: Position,
     dependency_cache: Arc<DependencyCache>,
-    language_support: &dyn LanguageSupport,
 ) -> Result<Vec<Location>> {
     let identifier_node = find_identifier_at_position(tree, source, position)
         .ok_or_else(|| anyhow::anyhow!("Could not find identifier at position"))?;

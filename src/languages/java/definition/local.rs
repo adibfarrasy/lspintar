@@ -105,7 +105,7 @@ pub fn search_local_definitions<'a>(
 /// 2. Variable declarations in parent blocks
 /// 3. Method parameters
 fn find_variable_declarations_in_scope<'a>(
-    tree: &'a Tree,
+    _tree: &'a Tree,
     source: &str,
     usage_node: &Node<'a>,
     symbol_name: &str,
@@ -179,7 +179,7 @@ fn find_local_variables_in_block<'a>(
 
 /// Find the closest declaration based on scope distance
 fn find_closest_declaration<'a>(
-    usage_node: &Node<'a>,
+    _usage_node: &Node<'a>,
     candidates: &[Node<'a>],
 ) -> Option<Node<'a>> {
     if candidates.is_empty() {

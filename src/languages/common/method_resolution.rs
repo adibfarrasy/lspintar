@@ -54,13 +54,13 @@ pub fn extract_static_method_context(usage_node: &Node, source: &str) -> Option<
     {
         // This looks like a static method call (ClassName.method)
         if usage_text == method_name {
-            debug!("extract_static_method_context: usage_node matches method name - static method call detected");
+            debug!("extract_static_method_context: _usage_node matches method name - static method call detected");
             Some((class_name, method_name))
         } else if usage_text == class_name {
-            debug!("extract_static_method_context: usage_node matches class name - returning static method context anyway");
+            debug!("extract_static_method_context: _usage_node matches class name - returning static method context anyway");
             Some((class_name, method_name))
         } else {
-            debug!("extract_static_method_context: usage_node '{}' matches neither class '{}' nor method '{}'", 
+            debug!("extract_static_method_context: _usage_node '{}' matches neither class '{}' nor method '{}'", 
                    usage_text, class_name, method_name);
             None
         }
@@ -112,13 +112,13 @@ pub fn extract_instance_method_context(
     {
         // This looks like an instance method call (variable.method)
         if usage_text == method_name {
-            debug!("extract_instance_method_context: usage_node matches method name - instance method call detected");
+            debug!("extract_instance_method_context: _usage_node matches method name - instance method call detected");
             Some((variable_name, method_name))
         } else if usage_text == variable_name {
-            debug!("extract_instance_method_context: usage_node matches variable name - returning instance method context anyway");
+            debug!("extract_instance_method_context: _usage_node matches variable name - returning instance method context anyway");
             Some((variable_name, method_name))
         } else {
-            debug!("extract_instance_method_context: usage_node '{}' matches neither variable '{}' nor method '{}'", 
+            debug!("extract_instance_method_context: _usage_node '{}' matches neither variable '{}' nor method '{}'", 
                    usage_text, variable_name, method_name);
             None
         }
@@ -149,7 +149,7 @@ pub fn find_static_method_definition(
     tree: &Tree,
     source: &str,
     file_uri: &str,
-    usage_node: &Node,
+    _usage_node: &Node,
     class_name: &str,
     method_name: &str,
     dependency_cache: Arc<DependencyCache>,
@@ -160,8 +160,8 @@ pub fn find_static_method_definition(
     );
 
     // Create a temporary node representing the class name for resolution
-    // This is needed because the existing resolution methods expect a usage_node
-    // For now, we'll use the existing usage_node but this should be improved
+    // This is needed because the existing resolution methods expect a _usage_node
+    // For now, we'll use the existing _usage_node but this should be improved
     
     // First strategy: Try to resolve the class name directly
     let class_location = try_resolve_class_name(
@@ -196,7 +196,7 @@ pub fn find_static_method_definition(
 /// Try to resolve a class name using various resolution strategies
 fn try_resolve_class_name(
     language_support: &dyn LanguageSupport,
-    tree: &Tree,
+    _tree: &Tree,
     source: &str,
     file_uri: &str,
     class_name: &str,
@@ -284,7 +284,7 @@ fn try_resolve_class_fqn(class_name: &str, source: &str, language_support: &dyn 
     
     let query = match tree_sitter::Query::new(&language, &query_text) {
         Ok(q) => q,
-        Err(e) => {
+        Err(_) => {
             return None;
         }
     };
@@ -292,12 +292,9 @@ fn try_resolve_class_fqn(class_name: &str, source: &str, language_support: &dyn 
     let mut cursor = tree_sitter::QueryCursor::new();
     let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
     
-    let mut import_count = 0;
-    
     while let Some(query_match) = matches.next() {
         for capture in query_match.captures {
             if let Ok(full_import_text) = capture.node.utf8_text(source.as_bytes()) {
-                import_count += 1;
                 
                 // Extract just the import path from "import com.example.Class"
                 let import_text = full_import_text
@@ -321,17 +318,6 @@ fn try_resolve_class_fqn(class_name: &str, source: &str, language_support: &dyn 
     None
 }
 
-/// Split FQN into package and class parts for cache lookup
-fn split_fqn(fqn: &str) -> Option<(String, String)> {
-    if let Some(last_dot) = fqn.rfind('.') {
-        let package_part = &fqn[..last_dot];
-        let class_part = &fqn[last_dot + 1..];
-        Some((package_part.to_string(), class_part.to_string()))
-    } else {
-        // No package, just class name
-        Some(("".to_string(), fqn.to_string()))
-    }
-}
 
 /// Try to find symbol in projects using dependency cache
 fn try_find_symbol_in_projects(
@@ -752,13 +738,13 @@ fn find_class_definition(
             crate::languages::ALL_LANGUAGE_SUPPORTS.iter().map(|f| f()).collect();
         
         // Try each language support's find_definition method
-        for (i, lang_support) in language_supports.iter().enumerate() {
+        for (_i, lang_support) in language_supports.iter().enumerate() {
             
             match lang_support.find_definition(tree, source, type_position, file_uri, dependency_cache.clone()) {
                 Ok(location) => {
                     return Some(location);
                 }
-                Err(e) => {
+                Err(_) => {
                 }
             }
         }
@@ -837,383 +823,14 @@ fn extract_variable_type_from_tree(
 }
 
 
-/// Find variable or field declaration by name
-fn find_variable_or_field_declaration(
-    language_support: &dyn LanguageSupport,
-    tree: &Tree,
-    source: &str,
-    file_uri: &str,
-    variable_name: &str,
-    dependency_cache: Arc<DependencyCache>,
-) -> Option<Location> {
-    debug!("find_variable_or_field_declaration: looking for '{}'", variable_name);
-    
-    // First, try to find as a local variable or parameter
-    if let Some(location) = find_local_variable_by_name(tree, source, file_uri, variable_name) {
-        debug!("find_variable_or_field_declaration: found as local variable");
-        return Some(location);
-    }
-    
-    // Next, try to find as a class field in the current file
-    if let Some(location) = find_field_in_current_file(tree, source, file_uri, variable_name) {
-        debug!("find_variable_or_field_declaration: found as field in current file");
-        return Some(location);
-    }
-    
-    // Could also be in parent class or imported - for now we'll focus on current file
-    debug!("find_variable_or_field_declaration: not found");
-    None
-}
 
-/// Find a local variable by name in the current file
-fn find_local_variable_by_name(tree: &Tree, source: &str, file_uri: &str, variable_name: &str) -> Option<Location> {
-    use tower_lsp::lsp_types::{Position, Range, Url};
-    
-    // Search for local variable declarations with this name
-    let query_text = r#"
-        (local_variable_declaration
-          declarator: (variable_declarator
-            name: (identifier) @var_name))
-        (parameter
-          name: (identifier) @param_name)
-    "#;
-    
-    let language = tree.language();
-    let query = tree_sitter::Query::new(&language, query_text).ok()?;
-    let mut cursor = tree_sitter::QueryCursor::new();
-    let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
-    
-    while let Some(query_match) = matches.next() {
-        for capture in query_match.captures {
-            if let Ok(text) = capture.node.utf8_text(source.as_bytes()) {
-                if text == variable_name {
-                    let range = capture.node.range();
-                    let start = Position::new(range.start_point.row as u32, range.start_point.column as u32);
-                    let end = Position::new(range.end_point.row as u32, range.end_point.column as u32);
-                    let uri = Url::parse(file_uri).ok()?;
-                    return Some(Location::new(uri, Range::new(start, end)));
-                }
-            }
-        }
-    }
-    
-    None
-}
 
-/// Find a field in the current file
-fn find_field_in_current_file(tree: &Tree, source: &str, file_uri: &str, field_name: &str) -> Option<Location> {
-    use tower_lsp::lsp_types::{Position, Range, Url};
-    
-    debug!("find_field_in_current_file: searching for field '{}'", field_name);
-    
-    // Search for field declarations with this name
-    // This query works for Java/Groovy
-    let query_text = r#"
-        (field_declaration
-          declarator: (variable_declarator
-            name: (identifier) @field_name))
-    "#;
-    
-    let language = tree.language();
-    let query = match tree_sitter::Query::new(&language, query_text) {
-        Ok(q) => q,
-        Err(e) => {
-            debug!("find_field_in_current_file: failed to create query: {:?}", e);
-            return None;
-        }
-    };
-    
-    let mut cursor = tree_sitter::QueryCursor::new();
-    let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
-    
-    while let Some(query_match) = matches.next() {
-        for capture in query_match.captures {
-            if let Ok(text) = capture.node.utf8_text(source.as_bytes()) {
-                debug!("find_field_in_current_file: checking field '{}' against '{}'", text, field_name);
-                if text == field_name {
-                    debug!("find_field_in_current_file: found matching field!");
-                    let range = capture.node.range();
-                    let start = Position::new(range.start_point.row as u32, range.start_point.column as u32);
-                    let end = Position::new(range.end_point.row as u32, range.end_point.column as u32);
-                    let uri = Url::parse(file_uri).ok()?;
-                    return Some(Location::new(uri, Range::new(start, end)));
-                }
-            }
-        }
-    }
-    
-    debug!("find_field_in_current_file: field '{}' not found", field_name);
-    None
-}
 
-/// Extract type from source text as a fallback
-fn extract_type_from_source_text(location: &Location, variable_name: &str, source: &str) -> Option<String> {
-    debug!("extract_type_from_source_text: attempting regex-based extraction for {}", variable_name);
-    
-    // Find the line in the source that contains the declaration
-    let lines: Vec<&str> = source.lines().collect();
-    let line_num = location.range.start.line as usize;
-    
-    if line_num >= lines.len() {
-        return None;
-    }
-    
-    // Look at a few lines around the location to find the type
-    let start = if line_num > 2 { line_num - 2 } else { 0 };
-    let end = std::cmp::min(line_num + 3, lines.len());
-    
-    for i in start..end {
-        let line = lines[i];
-        // Look for patterns like "TypeName variableName" or "@Inject TypeName variableName"
-        if line.contains(variable_name) {
-            // Try to extract type using simple pattern matching
-            let trimmed = line.trim();
-            
-            // Remove annotations
-            let without_annotations = trimmed.split('@')
-                .last()
-                .unwrap_or(trimmed)
-                .trim();
-            
-            // Look for the variable name and extract what comes before it
-            if let Some(var_pos) = without_annotations.find(variable_name) {
-                let before_var = &without_annotations[..var_pos].trim();
-                // Get the last word before the variable name (that's likely the type)
-                if let Some(type_name) = before_var.split_whitespace().last() {
-                    if !is_modifier(type_name) && type_name != variable_name {
-                        debug!("extract_type_from_source_text: extracted type '{}' from line: {}", type_name, line);
-                        return Some(type_name.to_string());
-                    }
-                }
-            }
-        }
-    }
-    
-    debug!("extract_type_from_source_text: could not extract type for {}", variable_name);
-    None
-}
 
-/// Extract the type of a variable from its declaration location
-fn extract_variable_type(variable_location: &Location, variable_name: &str, language_support: &dyn LanguageSupport) -> Option<String> {
-    debug!(
-        "extract_variable_type: extracting type for variable {} from {:?}",
-        variable_name, variable_location.uri
-    );
-    
-    // Read the file and find the variable declaration
-    use std::fs;
-    let file_path = variable_location.uri.to_file_path().ok()?;
-    let content = fs::read_to_string(&file_path).ok()?;
-    
-    // Parse the file with tree-sitter
-    let mut parser = language_support.create_parser();
-    let tree = parser.parse(&content, None)?;
-    
-    // Find the variable declaration node at the given location
-    let start_line = variable_location.range.start.line as usize;
-    let start_col = variable_location.range.start.character as usize;
-    
-    // Find the node at the declaration position
-    let root = tree.root_node();
-    let declaration_node = find_node_at_position(root, start_line, start_col)?;
-    
-    debug!("extract_variable_type: found declaration node of kind: {}", declaration_node.kind());
-    
-    // Try to extract type using language-specific patterns
-    extract_type_from_declaration_node(&declaration_node, variable_name, &content)
-}
 
-/// Find node at a specific position in the tree
-fn find_node_at_position(node: Node, line: usize, col: usize) -> Option<Node> {
-    let point = tree_sitter::Point::new(line, col);
-    
-    // Check if this node contains the position
-    if !(node.range().start_point <= point && point <= node.range().end_point) {
-        return None;
-    }
-    
-    // Try to find the most specific child
-    for i in 0..node.child_count() {
-        if let Some(child) = node.child(i) {
-            if let Some(found) = find_node_at_position(child, line, col) {
-                return Some(found);
-            }
-        }
-    }
-    
-    // This node itself is the most specific
-    Some(node)
-}
 
-/// Extract type from a declaration node using tree-sitter
-fn extract_type_from_declaration_node(node: &Node, variable_name: &str, source: &str) -> Option<String> {
-    debug!("extract_type_from_declaration_node: examining node of kind '{}' for variable '{}'", node.kind(), variable_name);
-    
-    // If we're starting from an identifier, walk up to find the declaration
-    let mut current = *node;
-    if current.kind() == "identifier" {
-        // Walk up to find the actual declaration node
-        while let Some(parent) = current.parent() {
-            let parent_kind = parent.kind();
-            debug!("extract_type_from_declaration_node: walking up, parent kind: {}", parent_kind);
-            if parent_kind == "field_declaration" || parent_kind == "local_variable_declaration" || 
-               parent_kind == "property_declaration" || parent_kind == "variable_declaration" {
-                current = parent;
-                break;
-            }
-            current = parent;
-        }
-    }
-    
-    // Now extract type from the declaration node
-    loop {
-        let kind = current.kind();
-        debug!("extract_type_from_declaration_node: processing node kind: {}", kind);
-        
-        // Java/Groovy patterns
-        if kind == "field_declaration" || kind == "local_variable_declaration" {
-            debug!("extract_type_from_declaration_node: found declaration node, extracting type");
-            
-            // Look for type child
-            if let Some(type_node) = current.child_by_field_name("type") {
-                if let Ok(type_text) = type_node.utf8_text(source.as_bytes()) {
-                    debug!("extract_type_from_declaration_node: found type via 'type' field: {}", type_text);
-                    // Clean up the type (remove annotations, etc.)
-                    let clean_type = type_text.split_whitespace().last().unwrap_or(type_text);
-                    return Some(clean_type.to_string());
-                }
-            }
-            
-            // Also check direct children for type information
-            for i in 0..current.child_count() {
-                if let Some(child) = current.child(i) {
-                    let child_kind = child.kind();
-                    debug!("extract_type_from_declaration_node: checking child {} of kind '{}'", i, child_kind);
-                    
-                    // Skip modifiers and annotations
-                    if child_kind == "modifiers" || child_kind == "marker_annotation" || child_kind == "annotation" {
-                        continue;
-                    }
-                    
-                    if child_kind == "type_identifier" || child_kind == "simple_type" || child_kind == "scoped_type_identifier" {
-                        if let Ok(type_text) = child.utf8_text(source.as_bytes()) {
-                            debug!("extract_type_from_declaration_node: found type from child: {}", type_text);
-                            return Some(type_text.to_string());
-                        }
-                    }
-                    
-                    // For generic types, get the base type
-                    if child_kind == "generic_type" {
-                        // First try the whole generic type
-                        if let Some(base_type) = child.child(0) {
-                            if base_type.kind() == "type_identifier" || base_type.kind() == "scoped_type_identifier" {
-                                if let Ok(type_text) = base_type.utf8_text(source.as_bytes()) {
-                                    debug!("extract_type_from_declaration_node: found generic base type: {}", type_text);
-                                    return Some(type_text.to_string());
-                                }
-                            }
-                        }
-                    }
-                    
-                    // Sometimes the type is nested deeper
-                    if child_kind == "variable_declarator" {
-                        // Skip the declarator, we want the type that comes before it
-                        continue;
-                    }
-                }
-            }
-            
-            // If we still haven't found the type, log what we have
-            debug!("extract_type_from_declaration_node: could not extract type from field_declaration");
-            if let Ok(decl_text) = current.utf8_text(source.as_bytes()) {
-                debug!("extract_type_from_declaration_node: full declaration text: {}", decl_text);
-            }
-        }
-        
-        // Kotlin patterns
-        if kind == "property_declaration" || kind == "variable_declaration" {
-            // Look for user_type child
-            for i in 0..current.child_count() {
-                if let Some(child) = current.child(i) {
-                    if child.kind() == "user_type" {
-                        if let Some(type_id) = child.child_by_field_name("type_identifier")
-                            .or_else(|| child.child(0)) {
-                            if let Ok(type_text) = type_id.utf8_text(source.as_bytes()) {
-                                debug!("extract_type_from_declaration_node: found Kotlin type: {}", type_text);
-                                return Some(type_text.to_string());
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        
-        // Move up to parent
-        if let Some(parent) = current.parent() {
-            current = parent;
-        } else {
-            break;
-        }
-    }
-    
-    debug!("extract_type_from_declaration_node: could not extract type for variable {}", variable_name);
-    None
-}
 
-/// Extract type name from a variable declaration line (fallback text-based approach)
-fn extract_type_from_declaration(line: &str, variable_name: &str) -> Option<String> {
-    let trimmed = line.trim();
-    
-    // Pattern 1: "Type variableName = ..." (Java/Groovy style)
-    // Pattern 2: "val variableName: Type = ..." (Kotlin style) 
-    // Pattern 3: "var variableName: Type = ..." (Kotlin style)
-    
-    // Java/Groovy pattern: look for "Type variableName"
-    if let Some(var_pos) = trimmed.find(&format!(" {}", variable_name)) {
-        let before_var = &trimmed[..var_pos].trim();
-        
-        // Split by whitespace and take the last token as the type
-        let tokens: Vec<&str> = before_var.split_whitespace().collect();
-        if let Some(type_token) = tokens.last() {
-            // Filter out modifiers like public, private, static, final, etc.
-            if !is_modifier(type_token) {
-                return Some(type_token.to_string());
-            }
-            
-            // Look for the token before modifiers
-            for token in tokens.iter().rev() {
-                if !is_modifier(token) {
-                    return Some(token.to_string());
-                }
-            }
-        }
-    }
-    
-    // Kotlin pattern: "val/var variableName: Type"
-    if trimmed.contains(&format!("{}: ", variable_name)) {
-        if let Some(colon_pos) = trimmed.find(&format!("{}: ", variable_name)) {
-            let after_colon = &trimmed[colon_pos + variable_name.len() + 2..];
-            
-            // Extract type name (up to = or whitespace)
-            let type_end = after_colon.find('=').unwrap_or(after_colon.len());
-            let type_part = after_colon[..type_end].trim();
-            
-            if !type_part.is_empty() {
-                return Some(type_part.to_string());
-            }
-        }
-    }
-    
-    None
-}
 
-/// Check if a token is a language modifier
-fn is_modifier(token: &str) -> bool {
-    matches!(token, "public" | "private" | "protected" | "static" | "final" | "abstract" |
-                   "synchronized" | "volatile" | "transient" | "native" | "strictfp" |
-                   "val" | "var" | "const" | "lateinit" | "open" | "override" | "inner" |
-                   "sealed" | "data" | "enum" | "annotation")
-}
 
 /// Common enhanced find_definition_chain that handles method resolution
 pub fn find_definition_chain_with_method_resolution(

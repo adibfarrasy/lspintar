@@ -336,7 +336,6 @@ pub struct CallSignature {
 pub struct MethodSignature {
     pub param_count: usize,
     pub param_types: Vec<String>,
-    pub param_names: Vec<String>,
 }
 
 #[tracing::instrument(skip_all)]
@@ -368,7 +367,6 @@ fn extract_method_signature(method_node: &Node, source: &str) -> Option<MethodSi
     let parameters = method_node.child_by_field_name("parameters")?;
 
     let mut param_types = Vec::new();
-    let mut param_names = Vec::new();
     let mut cursor = parameters.walk();
 
     let mut has_spread = false;
@@ -385,15 +383,6 @@ fn extract_method_signature(method_node: &Node, source: &str) -> Option<MethodSi
             } else {
                 param_types.push("def".to_string()); // Groovy default
             }
-
-            if let Some(param_name) = child.child_by_field_name("name") {
-                param_names.push(
-                    param_name
-                        .utf8_text(source.as_bytes())
-                        .unwrap_or("")
-                        .to_string(),
-                );
-            }
         }
 
         if child.kind() == "spread_parameter" {
@@ -408,7 +397,6 @@ fn extract_method_signature(method_node: &Node, source: &str) -> Option<MethodSi
             param_types.len()
         },
         param_types,
-        param_names,
     })
 }
 
@@ -554,7 +542,7 @@ fn infer_argument_type(arg_node: &Node, source: &str) -> Option<String> {
     }
 }
 
-fn contains_floating_point_operand(binary_expr: &Node, source: &str) -> bool {
+fn contains_floating_point_operand(binary_expr: &Node, _source: &str) -> bool {
     let mut cursor = binary_expr.walk();
     for child in binary_expr.children(&mut cursor) {
         match child.kind() {
@@ -687,73 +675,4 @@ fn find_as_field<'a>(tree: &'a Tree, source: &str, symbol_name: &str) -> Option<
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::core::utils::create_parser_for_language;
-    use crate::languages::groovy::support::GroovySupport;
-    use tower_lsp::lsp_types::Position;
-    use tree_sitter::Tree;
-
-    struct VariableDefinitionTestCase {
-        name: &'static str,
-        source_code: &'static str,
-        usage_position: Position, // Position of variable usage
-        expected_declaration_text: &'static str, // Expected text of declaration
-        should_find_definition: bool,
-    }
-
-    fn create_test_tree(source: &str) -> Tree {
-        let mut parser = create_parser_for_language("groovy").unwrap();
-        parser.parse(source, None).unwrap()
-    }
-
-    fn find_node_at_position<'a>(
-        tree: &'a Tree,
-        source: &str,
-        position: Position,
-    ) -> Option<tree_sitter::Node<'a>> {
-        let target_byte = position_to_byte_offset(source, position)?;
-        let mut current = tree.root_node();
-
-        loop {
-            let mut found_child = None;
-            let mut cursor = current.walk();
-
-            for child in current.children(&mut cursor) {
-                if child.start_byte() <= target_byte && target_byte <= child.end_byte() {
-                    found_child = Some(child);
-                    break;
-                }
-            }
-
-            match found_child {
-                Some(child) => current = child,
-                None => break,
-            }
-        }
-
-        Some(current)
-    }
-
-    fn position_to_byte_offset(source: &str, position: Position) -> Option<usize> {
-        let mut byte_offset = 0;
-        let mut line = 0;
-        let mut column = 0;
-
-        for ch in source.chars() {
-            if line == position.line as usize && column == position.character as usize {
-                return Some(byte_offset);
-            }
-
-            if ch == '\n' {
-                line += 1;
-                column = 0;
-            } else {
-                column += 1;
-            }
-
-            byte_offset += ch.len_utf8();
-        }
-
-        None
-    }
 }

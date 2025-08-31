@@ -17,8 +17,6 @@ pub struct DiagnosticRequest {
 }
 
 pub struct DiagnosticManager {
-    client: Client,
-    language_registry: Arc<LanguageRegistry>,
     pending_requests: Arc<RwLock<HashMap<String, DiagnosticRequest>>>,
     request_sender: mpsc::UnboundedSender<DiagnosticRequest>,
 }
@@ -29,8 +27,6 @@ impl DiagnosticManager {
         let pending_requests = Arc::new(RwLock::new(HashMap::new()));
 
         let manager = Self {
-            client: client.clone(),
-            language_registry: language_registry.clone(),
             pending_requests: pending_requests.clone(),
             request_sender,
         };

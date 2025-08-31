@@ -165,7 +165,7 @@ pub fn extract_method_signature(tree: &Tree, node: &Node, source: &str) -> Optio
     None
 }
 
-fn find_containing_class(tree: &Tree, method_node: &Node, source: &str) -> Option<String> {
+fn find_containing_class(_tree: &Tree, method_node: &Node, source: &str) -> Option<String> {
     // Walk up the tree from the method node to find the containing class
     let mut current = method_node.parent()?;
 

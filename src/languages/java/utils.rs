@@ -1,4 +1,4 @@
-use tower_lsp::lsp_types::{Position, Range};
+use tower_lsp::lsp_types::Position;
 use tree_sitter::{Node, Tree};
 
 pub fn find_identifier_at_position<'a>(tree: &'a Tree, source: &str, position: Position) -> Option<Node<'a>> {
@@ -19,24 +19,7 @@ pub fn find_identifier_at_position<'a>(tree: &'a Tree, source: &str, position: P
     result
 }
 
-fn get_context_around_offset(source: &str, byte_offset: usize, context_size: usize) -> Option<String> {
-    let start = byte_offset.saturating_sub(context_size);
-    let end = (byte_offset + context_size).min(source.len());
-    source.get(start..end).map(|s| s.replace('\n', "\\n"))
-}
 
-fn find_deepest_node_containing_offset<'a>(node: Node<'a>, byte_offset: usize) -> Option<Node<'a>> {
-    if node.start_byte() <= byte_offset && byte_offset < node.end_byte() {
-        for child in node.children(&mut node.walk()) {
-            if let Some(deeper) = find_deepest_node_containing_offset(child, byte_offset) {
-                return Some(deeper);
-            }
-        }
-        Some(node)
-    } else {
-        None
-    }
-}
 
 fn position_to_byte_offset(source: &str, position: Position) -> Option<usize> {
     let mut byte_offset = 0;
@@ -95,52 +78,7 @@ fn find_identifier_at_byte_offset<'a>(node: Node<'a>, byte_offset: usize) -> Opt
     None
 }
 
-pub fn extract_identifier_name(node: &Node, source: &str) -> Option<String> {
-    if matches!(node.kind(), "identifier" | "type_identifier") {
-        let start = node.start_byte();
-        let end = node.end_byte();
-        Some(source[start..end].to_string())
-    } else {
-        None
-    }
-}
 
-pub fn position_to_point(position: Position) -> tree_sitter::Point {
-    tree_sitter::Point {
-        row: position.line as usize,
-        column: position.character as usize,
-    }
-}
 
-pub fn point_to_position(point: tree_sitter::Point) -> Position {
-    Position {
-        line: point.row as u32,
-        character: point.column as u32,
-    }
-}
 
-pub fn node_to_range(node: &Node, source: &str) -> Range {
-    Range {
-        start: byte_to_position(source, node.start_byte()),
-        end: byte_to_position(source, node.end_byte()),
-    }
-}
 
-pub fn byte_to_position(source: &str, byte_offset: usize) -> Position {
-    let mut line = 0;
-    let mut character = 0;
-
-    for (i, ch) in source.char_indices() {
-        if i >= byte_offset {
-            break;
-        }
-        if ch == '\n' {
-            line += 1;
-            character = 0;
-        } else {
-            character += ch.len_utf16() as u32;
-        }
-    }
-
-    Position { line, character }
-}

@@ -85,7 +85,7 @@ fn find_in_project_dependencies(
 
     // Search in other projects in the workspace
     for entry in dependency_cache.symbol_index.iter() {
-        let ((project_root, _), file_path) = (entry.key(), entry.value());
+        let ((project_root, _), _file_path) = (entry.key(), entry.value());
 
         if !checked_projects.contains(project_root) {
             checked_projects.insert(project_root.clone());
@@ -142,7 +142,7 @@ fn fallback_impl(
 ) -> Option<Location> {
     // Fallback: try to resolve using wildcard imports
     let symbol_name = usage_node.utf8_text(source.as_bytes()).ok()?;
-    let current_project = uri_to_path(file_uri).and_then(|path| find_project_root(&path))?;
+    let _current_project = uri_to_path(file_uri).and_then(|path| find_project_root(&path))?;
 
     // Get wildcard imports from the current file
     let wildcard_imports = get_wildcard_imports_from_source(source);
@@ -152,7 +152,7 @@ fn fallback_impl(
 
         // Search in all projects for this fully qualified name
         for entry in dependency_cache.symbol_index.iter() {
-            let ((project_root, fqn), file_path) = (entry.key(), entry.value());
+            let ((_project_root, fqn), file_path) = (entry.key(), entry.value());
 
             if fqn == &full_symbol_name {
                 let target_uri = path_to_file_uri(&file_path)?;

@@ -25,37 +25,11 @@ impl JavaSupport {
 }
 
 impl QueryProvider for JavaSupport {
-    fn variable_declaration_queries(&self) -> &[&'static str] {
-        &[
-            r#"(local_variable_declaration) @local_decl"#,
-            r#"(field_declaration) @field_decl"#,
-        ]
-    }
-
     fn method_declaration_queries(&self) -> &[&'static str] {
         &[
             r#"(method_declaration) @method"#,
             r#"(constructor_declaration) @constructor"#,
         ]
-    }
-
-    fn class_declaration_queries(&self) -> &[&'static str] {
-        &[
-            r#"(class_declaration) @class"#,
-            r#"(enum_declaration) @enum"#,
-        ]
-    }
-
-    fn interface_declaration_queries(&self) -> &[&'static str] {
-        &[r#"(interface_declaration) @interface"#]
-    }
-
-    fn parameter_queries(&self) -> &[&'static str] {
-        &[r#"(formal_parameter (identifier) @param)"#]
-    }
-
-    fn field_declaration_queries(&self) -> &[&'static str] {
-        &[r#"(field_declaration) @field"#]
     }
 
     fn symbol_type_detection_query(&self) -> &'static str {
@@ -87,10 +61,6 @@ impl QueryProvider for JavaSupport {
 
     fn import_queries(&self) -> &[&'static str] {
         &[r#"(import_declaration) @import"#]
-    }
-
-    fn package_queries(&self) -> &[&'static str] {
-        &[r#"(package_declaration) @package"#]
     }
 }
 
@@ -131,7 +101,7 @@ impl LanguageSupport for JavaSupport {
 
             // Try to determine symbol type
             match self.determine_symbol_type_from_context(tree, &identifier_node, source) {
-                Ok(symbol_type) => {
+                Ok(_symbol_type) => {
 
                     let result = self.find_definition_chain(
                         tree,
@@ -465,7 +435,7 @@ impl LanguageSupport for JavaSupport {
         let language: tree_sitter::Language = tree_sitter_java::LANGUAGE.into();
         let query = match tree_sitter::Query::new(&language, query_text) {
             Ok(q) => q,
-            Err(e) => {
+            Err(_e) => {
                 return None;
             }
         };
@@ -473,10 +443,7 @@ impl LanguageSupport for JavaSupport {
         let mut cursor = tree_sitter::QueryCursor::new();
         let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
         
-        let mut match_count = 0;
-        
         while let Some(query_match) = matches.next() {
-            match_count += 1;
             
             let mut found_field_name = false;
             let mut field_type = None;
@@ -592,21 +559,6 @@ impl LanguageSupport for JavaSupport {
         None
     }
 
-    fn find_static_method_definition(
-        &self,
-        tree: &Tree,
-        source: &str,
-        file_uri: &str,
-        usage_node: &Node,
-        class_name: &str,
-        method_name: &str,
-        dependency_cache: Arc<DependencyCache>,
-    ) -> Option<Location> {
-        // Use the common method resolution to find the static method in the class
-        crate::languages::common::method_resolution::find_static_method_definition(
-            self, tree, source, file_uri, usage_node, class_name, method_name, dependency_cache
-        )
-    }
 
     fn find_instance_method_definition(
         &self,
@@ -656,48 +608,3 @@ impl Default for JavaSupport {
     }
 }
 
-// Helper functions
-fn extract_package_from_tree(tree: &Tree, source: &str) -> Option<String> {
-    let query_text = r#"(package_declaration (scoped_identifier) @package)"#;
-    let language: tree_sitter::Language = tree_sitter_java::LANGUAGE.into();
-    let query = Query::new(&language, query_text).ok()?;
-    let mut cursor = QueryCursor::new();
-
-    let mut result = None;
-    cursor
-        .matches(&query, tree.root_node(), source.as_bytes())
-        .take(1)
-        .for_each(|query_match| {
-            for capture in query_match.captures {
-                result = capture
-                    .node
-                    .utf8_text(source.as_bytes())
-                    .ok()
-                    .map(String::from);
-            }
-        });
-
-    result
-}
-
-fn check_if_abstract(node: &Node, source: &str) -> bool {
-    // Check if a class/method has abstract modifier
-    let mut current = Some(*node);
-    while let Some(node) = current {
-        if node.kind().ends_with("_declaration") {
-            // Look for modifiers child
-            for child in node.children(&mut node.walk()) {
-                if child.kind() == "modifiers" {
-                    if let Ok(modifier_text) = child.utf8_text(source.as_bytes()) {
-                        if modifier_text.contains("abstract") {
-                            return true;
-                        }
-                    }
-                }
-            }
-            break;
-        }
-        current = node.parent();
-    }
-    false
-}

@@ -81,7 +81,7 @@ pub fn search_local_definitions<'a>(
 
 /// Find variable declarations that are accessible from the usage point
 fn find_variable_declarations_in_scope<'a>(
-    tree: &'a Tree,
+    _tree: &'a Tree,
     source: &str,
     usage_node: &Node<'a>,
     symbol_name: &str,
@@ -305,15 +305,6 @@ fn find_variables_in_block<'a>(
     }
 }
 
-fn is_declaration_node(node: &Node) -> bool {
-    matches!(
-        node.kind(),
-        "function_declaration" | "property_declaration" | "class_declaration" 
-        | "interface_declaration" | "object_declaration" | "parameter" | "class_parameter" | "lambda_parameter"
-        | "catch_block" | "multi_variable_declaration" | "variable_declaration"
-        | "enum_declaration" | "annotation_declaration" | "type_alias"
-    )
-}
 
 fn get_declared_name(node: &Node, source: &str) -> Option<String> {
     match node.kind() {

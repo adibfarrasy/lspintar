@@ -18,7 +18,6 @@ use crate::{
     lsp_warning,
 };
 
-use super::method_resolution::find_method_with_signature;
 use super::utils::{prepare_symbol_lookup_key_with_wildcard_support, search_definition};
 
 #[tracing::instrument(skip_all)]
@@ -28,8 +27,6 @@ pub async fn find_external(
     usage_node: &Node<'_>,
     dependency_cache: Arc<DependencyCache>,
 ) -> Option<Location> {
-    let symbol_name = usage_node.utf8_text(source.as_bytes()).ok()?.to_string();
-
     let current_project = uri_to_path(file_uri).and_then(|path| {
         find_project_root(&path).or_else(|| find_external_dependency_root(&path))
     })?;
@@ -172,39 +169,6 @@ fn search_external_definition_and_convert(
     node_to_lsp_location(&definition_node, &file_uri)
 }
 
-/// Enhanced external method resolution that handles method calls in external dependencies
-#[tracing::instrument(skip_all)]
-fn search_external_method_definition_and_convert(
-    method_name: &str,
-    call_signature: Option<super::method_resolution::CallSignature>,
-    external_info: SourceFileInfo,
-) -> Option<Location> {
-    let tree = external_info
-        .get_tree()
-        .context(format!("failed to get tree for method {method_name}"))
-        .ok()?;
-
-    let content = external_info
-        .get_content()
-        .context(format!("failed to get content for method {method_name}"))
-        .ok()?;
-
-    let definition_node = if let Some(call_sig) = call_signature {
-        // Use signature-based method matching for external methods
-        find_method_with_signature(&tree, &content, method_name, &call_sig)
-    } else {
-        // Fallback to simple method search
-        search_definition(&tree, &content, method_name, SymbolType::MethodCall)
-    }
-    .context(format!("method definition for {method_name} not found"))
-    .ok()?;
-
-    let file_uri = get_uri(&external_info.clone())
-        .context(format!("file_uri for method {method_name} not found"))
-        .ok()?;
-
-    node_to_lsp_location(&definition_node, &file_uri)
-}
 
 /// Check if a class is a core Groovy or Java class that should prioritize builtin sources
 /// over JAR dependencies to avoid unnecessary decompilation

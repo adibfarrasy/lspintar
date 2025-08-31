@@ -114,7 +114,7 @@ pub fn search_definition_in_project(
     current_source: &str,
     usage_node: &Node,
     other_file_uri: &str,
-    language_support: &dyn LanguageSupport,
+    _language_support: &dyn LanguageSupport,
 ) -> Option<Location> {
 
     let current_tree = uri_to_tree(current_file_uri)?;
@@ -154,31 +154,6 @@ pub fn search_definition_in_project(
     }
 }
 
-/// Enhanced method resolution for static method calls
-pub fn search_static_method_definition_in_project(
-    current_file_uri: &str,
-    current_source: &str,
-    usage_node: &Node,
-    other_file_uri: &str,
-    language_support: &dyn LanguageSupport,
-) -> Option<Location> {
-    let current_tree = uri_to_tree(current_file_uri)?;
-    let symbol_name = usage_node.utf8_text(current_source.as_bytes()).ok()?;
-
-    // Get the method invocation parent to extract call signature
-    let method_invocation = find_parent_method_invocation_node(usage_node)?;
-    let call_signature = extract_call_signature_from_context(usage_node, current_source)?;
-
-    let other_tree = uri_to_tree(other_file_uri)?;
-    let other_path = uri_to_path(other_file_uri)?;
-    let other_source = read_to_string(other_path).ok()?;
-
-    // Use signature-based method matching
-    let definition_node =
-        find_method_with_signature(&other_tree, &other_source, symbol_name, &call_signature)?;
-
-    return node_to_lsp_location(&definition_node, &other_file_uri);
-}
 
 fn find_parent_method_invocation_node<'a>(node: &Node<'a>) -> Option<Node<'a>> {
     let mut current = node.parent();
@@ -191,46 +166,6 @@ fn find_parent_method_invocation_node<'a>(node: &Node<'a>) -> Option<Node<'a>> {
     None
 }
 
-/// Detect if a method call is static and extract the class name
-pub fn extract_static_method_context(usage_node: &Node, source: &str) -> Option<(String, String)> {
-    let usage_text = usage_node.utf8_text(source.as_bytes()).unwrap_or("");
-
-    let method_invocation = find_parent_method_invocation_node(usage_node);
-    if method_invocation.is_none() {
-        return None;
-    }
-    let method_invocation = method_invocation.unwrap();
-
-    // Check if this method invocation has an object field (static method pattern)
-    let object_node = method_invocation.child_by_field_name("object")?;
-    let method_name_node = method_invocation.child_by_field_name("name")?;
-
-    let class_name = object_node.utf8_text(source.as_bytes()).ok()?.to_string();
-    let method_name = method_name_node
-        .utf8_text(source.as_bytes())
-        .ok()?
-        .to_string();
-
-
-    // Only return Some for actual static method calls (class name starts with uppercase)
-    if class_name
-        .chars()
-        .next()
-        .map_or(false, |c| c.is_uppercase())
-    {
-        // This looks like a static method call (ClassName.method)
-        if usage_text == method_name {
-            Some((class_name, method_name))
-        } else if usage_text == class_name {
-            Some((class_name, method_name))
-        } else {
-            None
-        }
-    } else {
-        // This looks like an instance method call (variable.method) - not a static method call
-        None
-    }
-}
 
 /// Detect if a method call is on an instance and extract the variable name
 pub fn extract_instance_method_context(
@@ -256,7 +191,7 @@ pub fn extract_instance_method_context(
         .to_string();
 
 
-    // Verify that the usage_node is the method name part
+    // Verify that the _usage_node is the method name part
     if usage_text == method_name {
         // Check if the object looks like a variable (lowercase first letter) vs class (uppercase first letter)
         if variable_name.chars().next()?.is_lowercase() {
@@ -622,26 +557,6 @@ fn find_containing_method_node<'a>(node: &Node<'a>) -> Option<Node<'a>> {
     None
 }
 
-#[tracing::instrument(skip_all)]
-pub fn prepare_symbol_lookup_key(
-    usage_node: &Node,
-    source: &str,
-    file_uri: &str,
-    project_root: Option<PathBuf>,
-    dependency_cache: &DependencyCache,
-) -> Option<(PathBuf, String)> {
-    let symbol_bytes = usage_node.utf8_text(source.as_bytes()).ok()?;
-    let symbol_name = symbol_bytes.to_string();
-
-    let current_file_path = uri_to_path(file_uri)?;
-
-    let project_root = project_root
-        .or_else(|| find_project_root(&current_file_path))
-        .or_else(|| find_external_dependency_root(&current_file_path))?;
-
-    resolve_through_imports(&symbol_name, source, &project_root, dependency_cache)
-        .or_else(|| resolve_same_package(&symbol_name, source, &project_root, dependency_cache))
-}
 
 /// Enhanced symbol lookup that supports wildcard imports using the class name index
 pub fn prepare_symbol_lookup_key_with_wildcard_support(
@@ -942,7 +857,7 @@ fn resolve_same_package(
 pub fn resolve_symbol_with_imports(
     symbol_name: &str,
     source: &str,
-    dependency_cache: &DependencyCache,
+    _dependency_cache: &DependencyCache,
 ) -> Option<String> {
         
     // Extract imports from source

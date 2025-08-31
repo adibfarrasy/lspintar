@@ -32,12 +32,6 @@ impl LogMessage {
         }
     }
 
-    pub fn log(content: impl Into<String>) -> Self {
-        Self {
-            message_type: MessageType::LOG,
-            content: content.into(),
-        }
-    }
 }
 
 pub struct LoggingService {

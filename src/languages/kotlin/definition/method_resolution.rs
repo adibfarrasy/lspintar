@@ -22,24 +22,16 @@ fn find_parent_call_expression<'a>(node: &Node<'a>) -> Option<Node<'a>> {
     None
 }
 
-fn extract_call_signature_from_call_node(call_node: &Node, source: &str) -> Option<CallSignature> {
+fn extract_call_signature_from_call_node(call_node: &Node, _source: &str) -> Option<CallSignature> {
     let mut parameter_count = 0;
-    let mut parameter_types = Vec::new();
     
     // Look for value_arguments in the call expression
     for child in call_node.children(&mut call_node.walk()) {
         if child.kind() == "value_arguments" {
-            // Count and analyze each argument
+            // Count each argument
             for arg_child in child.children(&mut child.walk()) {
                 if arg_child.kind() == "value_argument" {
                     parameter_count += 1;
-                    
-                    // Try to infer parameter type from the argument
-                    if let Some(param_type) = infer_parameter_type(&arg_child, source) {
-                        parameter_types.push(param_type);
-                    } else {
-                        parameter_types.push("Any".to_string());
-                    }
                 }
             }
         }
@@ -47,38 +39,9 @@ fn extract_call_signature_from_call_node(call_node: &Node, source: &str) -> Opti
     
     Some(CallSignature {
         parameter_count,
-        parameter_types,
     })
 }
 
-fn infer_parameter_type(value_argument: &Node, source: &str) -> Option<String> {
-    // Look at the actual argument expression to infer type
-    for child in value_argument.children(&mut value_argument.walk()) {
-        match child.kind() {
-            "integer_literal" => return Some("Int".to_string()),
-            "real_literal" => return Some("Double".to_string()),
-            "string_literal" => return Some("String".to_string()),
-            "boolean_literal" => return Some("Boolean".to_string()),
-            "character_literal" => return Some("Char".to_string()),
-            "null_literal" => return Some("Nothing?".to_string()),
-            "simple_identifier" => {
-                // Could be a variable - would need more context to determine type
-                return Some("Any".to_string());
-            }
-            "call_expression" => {
-                // Method call - would need return type analysis
-                return Some("Any".to_string());
-            }
-            "collection_literal" => {
-                // Array/List literal
-                return Some("List<Any>".to_string());
-            }
-            _ => {}
-        }
-    }
-    
-    None
-}
 
 /// Find method declarations that match the given signature
 pub fn find_method_with_signature<'a>(
@@ -113,7 +76,7 @@ pub fn find_method_with_signature<'a>(
     None
 }
 
-fn method_signature_matches(function_node: &Node, source: &str, call_signature: &CallSignature) -> bool {
+fn method_signature_matches(function_node: &Node, _source: &str, call_signature: &CallSignature) -> bool {
     // Count parameters in the function declaration
     let mut param_count = 0;
     
@@ -135,5 +98,4 @@ fn method_signature_matches(function_node: &Node, source: &str, call_signature: 
 #[derive(Debug, Clone)]
 pub struct CallSignature {
     pub parameter_count: usize,
-    pub parameter_types: Vec<String>,
 }

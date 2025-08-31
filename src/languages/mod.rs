@@ -53,11 +53,4 @@ impl LanguageRegistry {
         self.languages.get(language_id).cloned()
     }
 
-    pub fn get_language(&self, language_id: &str) -> Option<Arc<dyn LanguageSupport>> {
-        self.languages.get(language_id).cloned()
-    }
-
-    pub fn supported_extensions(&self) -> Vec<&str> {
-        self.extension_map.keys().map(|s| s.as_str()).collect()
-    }
 }

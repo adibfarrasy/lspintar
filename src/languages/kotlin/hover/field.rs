@@ -1,6 +1,6 @@
 use tree_sitter::{Node, Query, QueryCursor, StreamingIterator, Tree};
 
-use super::utils::partition_modifiers;
+use crate::languages::common::hover::partition_modifiers;
 
 #[tracing::instrument(skip_all)]
 pub fn extract_field_signature(tree: &Tree, node: &Node, source: &str) -> Option<String> {
@@ -198,7 +198,7 @@ pub fn extract_field_signature(tree: &Tree, node: &Node, source: &str) -> Option
     None
 }
 
-fn find_containing_class(tree: &Tree, field_node: &Node, source: &str) -> Option<String> {
+fn find_containing_class(_tree: &Tree, field_node: &Node, source: &str) -> Option<String> {
     // Walk up the tree from the field node to find the containing class
     let mut current = field_node.parent()?;
 

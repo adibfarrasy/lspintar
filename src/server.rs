@@ -349,22 +349,17 @@ impl LanguageServer for LspServer {
             .to_string();
         let position = params.text_document_position_params.position;
 
-        match self.find_definition(uri.clone(), position).await {
-            Ok(location) => {
-                let other_uri = location.uri.to_string();
-                let (content, tree) = self.get_content_and_tree(&other_uri).await?;
+        if let Ok(location) = self.find_definition(uri.clone(), position).await {
+            let other_uri = location.uri.to_string();
+            let (content, tree) = self.get_content_and_tree(&other_uri).await?;
 
-                let language_support = self
-                    .language_registry
-                    .detect_language(&other_uri)
-                    .ok_or(tower_lsp::jsonrpc::Error::internal_error())?;
+            let language_support = self
+                .language_registry
+                .detect_language(&other_uri)
+                .ok_or(tower_lsp::jsonrpc::Error::internal_error())?;
 
-                if let Some(hover) = language_support.provide_hover(&tree, &content, location) {
-                    return Ok(Some(hover));
-                } else {
-                }
-            }
-            Err(e) => {
+            if let Some(hover) = language_support.provide_hover(&tree, &content, location) {
+                return Ok(Some(hover));
             }
         }
 
@@ -390,19 +385,19 @@ impl LanguageServer for LspServer {
             .map(Some)
     }
 
-    async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
+    async fn completion(&self, _params: CompletionParams) -> Result<Option<CompletionResponse>> {
         todo!()
     }
 
-    async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
+    async fn code_action(&self, _params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
         todo!()
     }
 
-    async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
+    async fn formatting(&self, _params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
         todo!()
     }
 
-    async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
+    async fn references(&self, _params: ReferenceParams) -> Result<Option<Vec<Location>>> {
         todo!()
     }
 }
@@ -575,17 +570,6 @@ impl LspServer {
             .retain(|cache_key, _| cache_key.uri != uri);
     }
 
-    fn cleanup_expired_caches(&self) {
-        const CLEANUP_INTERVAL: Duration = Duration::from_secs(300); // 5 minutes
-        const DEFINITION_CACHE_TTL: Duration = Duration::from_secs(30);
-        const SYMBOL_CACHE_TTL: Duration = Duration::from_secs(60);
-
-        self.definition_cache
-            .retain(|_, cached_def| !cached_def.is_expired(DEFINITION_CACHE_TTL));
-
-        self.position_symbol_cache
-            .retain(|_, cached_symbol| !cached_symbol.is_expired(SYMBOL_CACHE_TTL));
-    }
 
     async fn get_content_and_tree(&self, uri: &str) -> Result<(String, Tree)> {
         {
@@ -818,41 +802,17 @@ mod tests {
     use std::sync::Arc;
     use tower_lsp::lsp_types::{Position, Range, Url};
 
-    struct LspServerTestCase {
-        name: &'static str,
-        setup: fn() -> (LspServer, Arc<LanguageRegistry>),
-        test_operation: &'static str,
-        expected_success: bool,
-    }
-
-    fn create_mock_client() -> tower_lsp::Client {
-        // This is a simplified mock - in real tests you'd use a proper mock
-        // For now, we'll skip client-dependent tests
-        unimplemented!("Mock client not implemented for these tests")
-    }
-
-    fn create_test_server() -> (LspServer, Arc<LanguageRegistry>) {
-        let registry = Arc::new(LanguageRegistry::new());
-
-        // Note: This would normally create a real client, but for unit tests
-        // we'd need a mock implementation
-        // let client = create_mock_client();
-        // let server = LspServer::new(client, registry.clone());
-
-        // For now, we'll test the components that don't require a client
-        unimplemented!("Full server creation requires mock client")
-    }
 
     #[test]
     fn test_server_creation_basic() {
         // Test basic server structure without client dependency
-        let registry = Arc::new(LanguageRegistry::new());
+        let _registry = Arc::new(LanguageRegistry::new());
 
         // Test that we can create the basic components
-        let documents = Arc::new(RwLock::new(DocumentManager::new()));
+        let _documents = Arc::new(RwLock::new(DocumentManager::new()));
         let diagnostics: Arc<DashMap<String, DiagnosticManager>> = Arc::new(DashMap::new());
         let dependency_cache = Arc::new(DependencyCache::new());
-        let workspace_root: Arc<RwLock<Option<PathBuf>>> = Arc::new(RwLock::new(None));
+        let _workspace_root: Arc<RwLock<Option<PathBuf>>> = Arc::new(RwLock::new(None));
 
         // Verify basic properties
         assert_eq!(diagnostics.len(), 0);
@@ -877,7 +837,6 @@ mod tests {
     }
 
     struct ConfigurationTestCase {
-        name: &'static str,
         input_json: serde_json::Value,
         expected_gradle_cache: Option<&'static str>,
         expected_build_on_init: Option<bool>,
@@ -887,13 +846,11 @@ mod tests {
     fn test_configuration_parsing() {
         let test_cases = vec![
             ConfigurationTestCase {
-                name: "empty configuration",
                 input_json: serde_json::json!({}),
                 expected_gradle_cache: None,
                 expected_build_on_init: None,
             },
             ConfigurationTestCase {
-                name: "gradle cache configuration",
                 input_json: serde_json::json!({
                     "gradle_cache_dir": "/home/user/.gradle/caches"
                 }),
@@ -901,7 +858,6 @@ mod tests {
                 expected_build_on_init: None,
             },
             ConfigurationTestCase {
-                name: "build on init configuration",
                 input_json: serde_json::json!({
                     "build_on_init": true
                 }),
@@ -909,7 +865,6 @@ mod tests {
                 expected_build_on_init: Some(true),
             },
             ConfigurationTestCase {
-                name: "full configuration",
                 input_json: serde_json::json!({
                     "gradle_cache_dir": "/custom/gradle/cache",
                     "build_on_init": false
@@ -962,7 +917,6 @@ mod tests {
     }
 
     struct InitializeParamsTestCase {
-        name: &'static str,
         root_uri: Option<&'static str>,
         workspace_folders: Option<Vec<&'static str>>,
         expected_has_root: bool,
@@ -972,13 +926,11 @@ mod tests {
     fn test_initialize_params_structure() {
         let test_cases = vec![
             InitializeParamsTestCase {
-                name: "with root URI",
                 root_uri: Some("file:///workspace/project"),
                 workspace_folders: None,
                 expected_has_root: true,
             },
             InitializeParamsTestCase {
-                name: "with workspace folders",
                 root_uri: None,
                 workspace_folders: Some(vec![
                     "file:///workspace/project1",
@@ -987,7 +939,6 @@ mod tests {
                 expected_has_root: true,
             },
             InitializeParamsTestCase {
-                name: "no root specified",
                 root_uri: None,
                 workspace_folders: None,
                 expected_has_root: false,
@@ -1021,8 +972,7 @@ mod tests {
 
             assert_eq!(
                 has_root, test_case.expected_has_root,
-                "Test '{}': root detection mismatch",
-                test_case.name
+                "Root detection mismatch"
             );
         }
     }

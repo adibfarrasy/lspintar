@@ -10,7 +10,6 @@ pub struct CallSignature {
 pub struct MethodSignature {
     pub param_count: usize,
     pub param_types: Vec<String>,
-    pub param_names: Vec<String>,
 }
 
 /// Enhanced method resolution that finds the best matching method based on call signature
@@ -103,7 +102,6 @@ pub fn extract_method_signature(method_decl: &Node, source: &str) -> Option<Meth
     let parameters = method_decl.child_by_field_name("parameters")?;
     
     let mut param_types = Vec::new();
-    let mut param_names = Vec::new();
     let mut cursor = parameters.walk();
 
     for child in parameters.named_children(&mut cursor) {
@@ -112,18 +110,12 @@ pub fn extract_method_signature(method_decl: &Node, source: &str) -> Option<Meth
                 let type_text = type_node.utf8_text(source.as_bytes()).unwrap_or("Unknown");
                 param_types.push(type_text.to_string());
             }
-            
-            if let Some(name_node) = child.child_by_field_name("name") {
-                let name_text = name_node.utf8_text(source.as_bytes()).unwrap_or("Unknown");
-                param_names.push(name_text.to_string());
-            }
         }
     }
 
     Some(MethodSignature {
         param_count: param_types.len(),
         param_types,
-        param_names,
     })
 }
 

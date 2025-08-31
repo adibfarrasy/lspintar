@@ -25,12 +25,6 @@ impl KotlinSupport {
 }
 
 impl QueryProvider for KotlinSupport {
-    fn variable_declaration_queries(&self) -> &[&'static str] {
-        &[
-            r#"(property_declaration) @decl"#,
-            r#"(variable_declaration) @local_decl"#,
-        ]
-    }
 
     fn method_declaration_queries(&self) -> &[&'static str] {
         &[
@@ -40,27 +34,9 @@ impl QueryProvider for KotlinSupport {
         ]
     }
 
-    fn class_declaration_queries(&self) -> &[&'static str] {
-        &[
-            r#"(class_declaration) @class"#,
-            r#"(object_declaration) @object"#,
-        ]
-    }
 
-    fn interface_declaration_queries(&self) -> &[&'static str] {
-        &[r#"(interface_declaration) @interface"#]
-    }
 
-    fn parameter_queries(&self) -> &[&'static str] {
-        &[
-            r#"(parameter (simple_identifier) @param)"#,
-            r#"(class_parameter (simple_identifier) @param)"#,
-        ]
-    }
 
-    fn field_declaration_queries(&self) -> &[&'static str] {
-        &[r#"(property_declaration) @property"#]
-    }
 
     fn symbol_type_detection_query(&self) -> &'static str {
         r#"
@@ -165,9 +141,6 @@ impl QueryProvider for KotlinSupport {
         &[r#"(import_header) @import"#]
     }
 
-    fn package_queries(&self) -> &[&'static str] {
-        &[r#"(package_header) @package"#]
-    }
 }
 
 impl LanguageSupport for KotlinSupport {
@@ -370,9 +343,6 @@ impl LanguageSupport for KotlinSupport {
         // Convert the common CallSignature to Kotlin's CallSignature
         let kotlin_call_sig = crate::languages::kotlin::definition::method_resolution::CallSignature {
             parameter_count: call_signature.arg_count,
-            parameter_types: call_signature.arg_types.iter()
-                .map(|t| t.as_deref().unwrap_or("Any").to_string())
-                .collect(),
         };
         
         crate::languages::kotlin::definition::method_resolution::find_method_with_signature(
@@ -502,29 +472,6 @@ impl LanguageSupport for KotlinSupport {
         None
     }
 
-    fn find_static_method_definition(
-        &self,
-        tree: &Tree,
-        source: &str,
-        file_uri: &str,
-        usage_node: &Node,
-        class_name: &str,
-        method_name: &str,
-        dependency_cache: Arc<DependencyCache>,
-    ) -> Option<Location> {
-        // For Kotlin static methods (companion object methods)
-        // Find the class/interface definition first
-        self.find_local(tree, source, file_uri, usage_node)
-            .or_else(|| {
-                self.find_in_project(source, file_uri, usage_node, dependency_cache.clone())
-            })
-            .or_else(|| {
-                self.find_in_workspace(source, file_uri, usage_node, dependency_cache.clone())
-            })
-            .or_else(|| {
-                self.find_external(source, file_uri, usage_node, dependency_cache.clone())
-            })
-    }
 
     fn find_field_declaration_type(&self, field_name: &str, tree: &Tree, source: &str) -> Option<String> {
         self.extract_kotlin_variable_type(field_name, tree, source, &tree.root_node())
@@ -534,7 +481,7 @@ impl LanguageSupport for KotlinSupport {
         self.extract_kotlin_variable_type(variable_name, tree, source, usage_node)
     }
     
-    fn find_parameter_type(&self, param_name: &str, tree: &Tree, source: &str, _usage_node: &Node) -> Option<String> {
+    fn find_parameter_type(&self, _param_name: &str, _tree: &Tree, _source: &str, _usage_node: &Node) -> Option<String> {
         // TODO: Implement Kotlin parameter type extraction
         None
     }

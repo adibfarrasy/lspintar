@@ -43,22 +43,6 @@ impl SourceFileInfo {
         }
     }
 
-    pub fn new_with_decompiled_content(
-        source_path: PathBuf,
-        zip_internal_path: Option<String>,
-        dependency: Option<ExternalDependency>,
-        decompiled_content: String,
-    ) -> Self {
-        Self {
-            source_path,
-            zip_internal_path,
-            dependency,
-            inner: Arc::new(RwLock::new(SourceFileInfoInner {
-                tree: None,
-                content: Some(decompiled_content),
-            })),
-        }
-    }
 
     pub fn new_for_decompilation(
         source_path: PathBuf,
@@ -114,11 +98,6 @@ impl SourceFileInfo {
         Ok(tree)
     }
 
-    pub fn clear_cache(&self) {
-        let mut inner = self.inner.write().unwrap();
-        inner.tree = None;
-        inner.content = None;
-    }
 
     /// Decompile a .class file on-demand when content is requested
     fn decompile_on_demand(&self) -> Result<String> {

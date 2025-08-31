@@ -224,7 +224,7 @@ fn extract_type_usage_info(node: &Node, source: &str) -> Option<String> {
     }
 }
 
-fn extract_variable_info(tree: &Tree, node: &Node, source: &str) -> Option<String> {
+fn extract_variable_info(_tree: &Tree, node: &Node, source: &str) -> Option<String> {
     // Try to find variable declaration
     let var_node = find_parent_of_kind(node, "variable_declaration")
         .or_else(|| find_parent_of_kind(node, "local_variable_declaration"));
