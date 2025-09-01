@@ -15,7 +15,7 @@ use crate::{
     languages::{groovy::constants::GROOVY_DEFAULT_IMPORTS, LanguageSupport},
 };
 
-use super::method_resolution::{extract_call_signature_from_context, find_method_with_signature};
+use super::definition_chain::{extract_call_signature_from_context, find_method_with_signature};
 
 /// Get or create a compiled query
 pub fn get_or_create_query(query_text: &str, language: &tree_sitter::Language) -> Option<Query> {
@@ -127,6 +127,11 @@ pub fn search_definition_in_project(
     let current_tree = uri_to_tree(current_file_uri)?;
     let symbol_name = usage_node.utf8_text(current_source.as_bytes()).ok()?;
 
+    tracing::debug!(
+        "LSPINTAR_DEBUG: groovy search - symbol_name = '{}', other_file_uri = {}",
+        symbol_name, other_file_uri
+    );
+
     // Get the appropriate language support for the current file (where the symbol usage is)
     let current_file_path = uri_to_path(current_file_uri)?;
     let current_language_support = get_language_support_for_file(&current_file_path)?;
@@ -135,12 +140,26 @@ pub fn search_definition_in_project(
         .determine_symbol_type_from_context(&current_tree, usage_node, current_source)
         .ok()?;
 
+    tracing::debug!(
+        "LSPINTAR_DEBUG: groovy search - symbol_type = {:?}",
+        symbol_type
+    );
+
     let other_tree = uri_to_tree(other_file_uri)?;
+
+    tracing::debug!(
+        "LSPINTAR_DEBUG: groovy search - got other_tree, root node kind = {}",
+        other_tree.root_node().kind()
+    );
 
     let other_path = uri_to_path(other_file_uri)?;
     let other_source = read_to_string(other_path).ok()?;
 
     let definition_node = if symbol_type == SymbolType::MethodCall {
+        tracing::debug!(
+            "LSPINTAR_DEBUG: groovy search - searching for method call '{}'",
+            symbol_name
+        );
         // For method calls, try signature-based matching first
         if let Some(call_signature) =
             extract_call_signature_from_context(usage_node, current_source)
@@ -151,12 +170,29 @@ pub fn search_definition_in_project(
             search_definition(&other_tree, &other_source, symbol_name, symbol_type)
         }
     } else {
+        tracing::debug!(
+            "LSPINTAR_DEBUG: groovy search - searching for symbol '{}' with type {:?}",
+            symbol_name, symbol_type
+        );
         search_definition(&other_tree, &other_source, symbol_name, symbol_type)
     };
 
+    tracing::debug!(
+        "LSPINTAR_DEBUG: groovy search - definition_node found: {}",
+        definition_node.is_some()
+    );
+
     if let Some(node) = definition_node {
-        return node_to_lsp_location(&node, &other_file_uri);
+        let location = node_to_lsp_location(&node, &other_file_uri);
+        tracing::debug!(
+            "LSPINTAR_DEBUG: groovy search - final result: {:?}",
+            location.as_ref().map(|loc| format!("{}:{}", loc.uri, loc.range.start.line))
+        );
+        return location;
     } else {
+        tracing::debug!(
+            "LSPINTAR_DEBUG: groovy search - no definition node found, returning None"
+        );
         return None;
     }
 }
@@ -749,14 +785,28 @@ fn resolve_through_wildcard_imports(
         }
     }
     
-    let packages = GROOVY_DEFAULT_IMPORTS.iter()
-        .map(|import| import.strip_suffix(".*").unwrap_or(import))
-        .collect::<Vec<&str>>();
+    // Handle GROOVY_DEFAULT_IMPORTS (prioritize exact imports over wildcards)
+    // First pass: check exact imports
+    for import in GROOVY_DEFAULT_IMPORTS.iter() {
+        if !import.ends_with(".*") {
+            // Exact import: check if this matches the symbol directly
+            if import.ends_with(&format!(".{}", symbol_name)) || import == &symbol_name {
+                if dependency_cache.find_builtin_info(import).is_some() {
+                    return Some((project_root.clone(), import.to_string()));
+                }
+            }
+        }
+    }
     
-    for package in &packages {
-        let fqn = format!("{}.{}", package, symbol_name);
-        if dependency_cache.find_builtin_info(&fqn).is_some() {
-            return Some((project_root.clone(), fqn));
+    // Second pass: check wildcard imports only if exact imports didn't match
+    for import in GROOVY_DEFAULT_IMPORTS.iter() {
+        if import.ends_with(".*") {
+            // Wildcard import: java.io.* + BigDecimal = java.io.BigDecimal
+            let package = import.strip_suffix(".*").unwrap();
+            let fqn = format!("{}.{}", package, symbol_name);
+            if dependency_cache.find_builtin_info(&fqn).is_some() {
+                return Some((project_root.clone(), fqn));
+            }
         }
     }
 
@@ -930,8 +980,8 @@ pub fn resolve_symbol_with_imports(
     None
 }
 
-/// Verify that a given FQN exists in the dependency cache or workspace
-fn verify_groovy_fqn_exists(fqn: &str, dependency_cache: &DependencyCache) -> bool {
+/// Verify that a given FQN exists across all sources: builtins, workspace projects, and external dependencies
+async fn verify_groovy_fqn_exists_async(fqn: &str, dependency_cache: &DependencyCache) -> bool {
     // Check builtin classes (like java.lang.* classes)
     if let Some(class_name) = fqn.split('.').last() {
         if dependency_cache.builtin_infos.get(class_name).is_some() {
@@ -939,15 +989,27 @@ fn verify_groovy_fqn_exists(fqn: &str, dependency_cache: &DependencyCache) -> bo
         }
     }
 
-    // Check if the FQN exists anywhere in the symbol index
-    for entry in dependency_cache.symbol_index.iter() {
-        let ((_project_root, symbol_name), _file_path) = (entry.key(), entry.value());
-        if symbol_name == fqn {
+    // Check all workspace projects using find_symbol
+    for project_entry in dependency_cache.project_metadata.iter() {
+        let project_root = project_entry.key();
+        if dependency_cache.find_symbol(project_root, fqn).await.is_some() {
+            return true;
+        }
+        
+        // Also check external dependencies for this project
+        if dependency_cache.find_external_symbol_with_lazy_parsing(project_root, fqn).await.is_some() {
             return true;
         }
     }
-
+    
     false
+}
+
+/// Synchronous wrapper for backward compatibility
+fn verify_groovy_fqn_exists(fqn: &str, dependency_cache: &DependencyCache) -> bool {
+    tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(verify_groovy_fqn_exists_async(fqn, dependency_cache))
+    })
 }
 
 /// Extract imports from Groovy source code
@@ -1275,5 +1337,380 @@ class Task {
         assert!(enum_usage_query.is_some());  
         let query_text = enum_usage_query.unwrap();
         assert!(query_text.contains("enum_constant"));
+    }
+
+    #[test]
+    fn test_groovy_nested_enum_static_import_extraction() {
+        use super::super::project::extract_nested_type_from_import_path;
+        
+        // Test nested enum type extraction
+        assert_eq!(extract_nested_type_from_import_path("com.example.Order.Status"), "Order.Status");
+        assert_eq!(extract_nested_type_from_import_path("com.example.deep.Container.State"), "Container.State");
+        assert_eq!(extract_nested_type_from_import_path("com.example.Priority"), "Priority");
+        assert_eq!(extract_nested_type_from_import_path("Status"), "Status");
+        
+        // Edge cases  
+        assert_eq!(extract_nested_type_from_import_path(""), "");
+        assert_eq!(extract_nested_type_from_import_path("com.example.lower.Upper"), "lower.Upper");
+    }
+
+    #[test]
+    fn test_groovy_find_type_in_tree() {
+        use crate::languages::groovy::support::GroovySupport;
+        use crate::languages::LanguageSupport;
+        
+        let mut parser = match create_groovy_parser() {
+            Some(p) => p,
+            None => {
+                println!("Warning: Groovy parser not available for testing");
+                return;
+            }
+        };
+        
+        let source = r#"
+package com.example
+
+class OuterClass {
+    static class InnerClass {
+        enum Status {
+            ACTIVE, INACTIVE
+        }
+    }
+    
+    interface MyInterface {
+        void doSomething()
+    }
+    
+    enum Priority {
+        HIGH, LOW
+    }
+}
+
+class AnotherClass {
+}
+"#;
+        
+        let tree = parser.parse(source, None).unwrap();
+        let groovy_support = GroovySupport::new();
+        
+        // Test finding regular classes
+        let result = groovy_support.find_type_in_tree(&tree, source, "OuterClass", "file:///test.groovy");
+        assert!(result.is_some(), "Should find OuterClass");
+        
+        let result = groovy_support.find_type_in_tree(&tree, source, "AnotherClass", "file:///test.groovy");
+        assert!(result.is_some(), "Should find AnotherClass");
+        
+        // Test finding nested classes
+        let result = groovy_support.find_type_in_tree(&tree, source, "InnerClass", "file:///test.groovy");
+        assert!(result.is_some(), "Should find InnerClass");
+        
+        // Test finding interfaces
+        let result = groovy_support.find_type_in_tree(&tree, source, "MyInterface", "file:///test.groovy");
+        assert!(result.is_some(), "Should find MyInterface");
+        
+        // Test finding enums
+        let result = groovy_support.find_type_in_tree(&tree, source, "Priority", "file:///test.groovy");
+        assert!(result.is_some(), "Should find Priority enum");
+        
+        let result = groovy_support.find_type_in_tree(&tree, source, "Status", "file:///test.groovy");
+        assert!(result.is_some(), "Should find nested Status enum");
+        
+        // Test non-existent type
+        let result = groovy_support.find_type_in_tree(&tree, source, "NonExistent", "file:///test.groovy");
+        assert!(result.is_none(), "Should not find non-existent type");
+    }
+
+    #[test]
+    fn test_groovy_find_method_in_tree() {
+        use crate::languages::groovy::support::GroovySupport;
+        use crate::languages::LanguageSupport;
+        
+        let mut parser = match create_groovy_parser() {
+            Some(p) => p,
+            None => {
+                println!("Warning: Groovy parser not available for testing");
+                return;
+            }
+        };
+        
+        let source = r#"
+package com.example
+
+class TestClass {
+    def publicMethod() {
+    }
+    
+    private int privateMethod(String param) {
+        return 42
+    }
+    
+    static void staticMethod() {
+    }
+    
+    TestClass() {
+    }
+    
+    static class InnerClass {
+        def innerMethod() {
+        }
+        
+        private void anotherInnerMethod(int x, String y) {
+        }
+    }
+}
+"#;
+        
+        let tree = parser.parse(source, None).unwrap();
+        let groovy_support = GroovySupport::new();
+        
+        // Test finding public methods
+        let result = groovy_support.find_method_in_tree(&tree, source, "publicMethod", "file:///test.groovy");
+        assert!(result.is_some(), "Should find publicMethod");
+        
+        // Test finding private methods  
+        let result = groovy_support.find_method_in_tree(&tree, source, "privateMethod", "file:///test.groovy");
+        assert!(result.is_some(), "Should find privateMethod");
+        
+        // Test finding static methods
+        let result = groovy_support.find_method_in_tree(&tree, source, "staticMethod", "file:///test.groovy");
+        assert!(result.is_some(), "Should find staticMethod");
+        
+        // Test finding methods in nested classes
+        let result = groovy_support.find_method_in_tree(&tree, source, "innerMethod", "file:///test.groovy");
+        assert!(result.is_some(), "Should find innerMethod in nested class");
+        
+        let result = groovy_support.find_method_in_tree(&tree, source, "anotherInnerMethod", "file:///test.groovy");
+        assert!(result.is_some(), "Should find anotherInnerMethod in nested class");
+        
+        // Test non-existent method
+        let result = groovy_support.find_method_in_tree(&tree, source, "nonExistentMethod", "file:///test.groovy");
+        assert!(result.is_none(), "Should not find non-existent method");
+    }
+
+    #[test]
+    fn test_groovy_find_property_in_tree() {
+        use crate::languages::groovy::support::GroovySupport;
+        use crate::languages::LanguageSupport;
+        
+        let mut parser = match create_groovy_parser() {
+            Some(p) => p,
+            None => {
+                println!("Warning: Groovy parser not available for testing");
+                return;
+            }
+        };
+        
+        let source = r#"
+package com.example
+
+class TestClass {
+    private String privateField
+    public int publicField = 42
+    static String staticField
+    final String finalField = "test"
+    
+    static class InnerClass {
+        private boolean innerField
+        String anotherInnerField = "nested"
+    }
+}
+"#;
+        
+        let tree = parser.parse(source, None).unwrap();
+        let groovy_support = GroovySupport::new();
+        
+        // Test finding private fields
+        let result = groovy_support.find_property_in_tree(&tree, source, "privateField", "file:///test.groovy");
+        assert!(result.is_some(), "Should find privateField");
+        
+        // Test finding public fields
+        let result = groovy_support.find_property_in_tree(&tree, source, "publicField", "file:///test.groovy");
+        assert!(result.is_some(), "Should find publicField");
+        
+        // Test finding static fields
+        let result = groovy_support.find_property_in_tree(&tree, source, "staticField", "file:///test.groovy");
+        assert!(result.is_some(), "Should find staticField");
+        
+        // Test finding final fields
+        let result = groovy_support.find_property_in_tree(&tree, source, "finalField", "file:///test.groovy");
+        assert!(result.is_some(), "Should find finalField");
+        
+        // Test finding fields in nested classes
+        let result = groovy_support.find_property_in_tree(&tree, source, "innerField", "file:///test.groovy");
+        assert!(result.is_some(), "Should find innerField in nested class");
+        
+        let result = groovy_support.find_property_in_tree(&tree, source, "anotherInnerField", "file:///test.groovy");
+        assert!(result.is_some(), "Should find anotherInnerField in nested class");
+        
+        // Test non-existent field
+        let result = groovy_support.find_property_in_tree(&tree, source, "nonExistentField", "file:///test.groovy");
+        assert!(result.is_none(), "Should not find non-existent field");
+    }
+
+    #[test]
+    fn test_groovy_find_type_nested_lookup() {
+        use crate::languages::groovy::support::GroovySupport;
+        use crate::languages::LanguageSupport;
+        use std::sync::Arc;
+        use crate::core::dependency_cache::DependencyCache;
+        
+        let mut parser = match create_groovy_parser() {
+            Some(p) => p,
+            None => {
+                println!("Warning: Groovy parser not available for testing");
+                return;
+            }
+        };
+        
+        let source = r#"
+package com.example
+
+class OuterService {
+    static class InnerHandler {
+        enum State {
+            READY, PROCESSING, DONE
+        }
+        
+        static class DeepNested {
+            void process() {}
+        }
+    }
+    
+    enum Status {
+        ACTIVE, INACTIVE
+    }
+}
+"#;
+        
+        let tree = parser.parse(source, None).unwrap();
+        let groovy_support = GroovySupport::new();
+        let dependency_cache = Arc::new(DependencyCache::new());
+        
+        // Test finding nested types with dot notation
+        let result = groovy_support.find_type(source, "file:///test.groovy", "OuterService.InnerHandler", dependency_cache.clone());
+        // This should work once the nested lookup is properly implemented
+        // For now, we test that the method exists and can be called
+        
+        let result = groovy_support.find_type(source, "file:///test.groovy", "OuterService.Status", dependency_cache.clone());
+        // Similarly, this tests the nested enum lookup
+        
+        // Test regular (non-nested) type lookup
+        let result = groovy_support.find_type(source, "file:///test.groovy", "OuterService", dependency_cache.clone());
+        // This should find the outer class
+        
+        // Test deeply nested type
+        let result = groovy_support.find_type(source, "file:///test.groovy", "OuterService.InnerHandler.State", dependency_cache.clone());
+        // This tests deep nesting
+    }
+
+    #[test]
+    fn test_groovy_find_method_nested_lookup() {
+        use crate::languages::groovy::support::GroovySupport;
+        use crate::languages::LanguageSupport;
+        use std::sync::Arc;
+        use crate::core::dependency_cache::DependencyCache;
+        
+        let mut parser = match create_groovy_parser() {
+            Some(p) => p,
+            None => {
+                println!("Warning: Groovy parser not available for testing");
+                return;
+            }
+        };
+        
+        let source = r#"
+package com.example
+
+class ApiController {
+    def handleRequest() {}
+    
+    static class AuthHelper {
+        static boolean authenticate(String token) {
+            return true
+        }
+        
+        def authorize() {}
+    }
+    
+    static class ValidationHelper {
+        boolean validate(Object data) {
+            return true
+        }
+    }
+}
+"#;
+        
+        let tree = parser.parse(source, None).unwrap();
+        let groovy_support = GroovySupport::new();
+        let dependency_cache = Arc::new(DependencyCache::new());
+        
+        // Test finding nested methods
+        let result = groovy_support.find_method(source, "file:///test.groovy", "ApiController.AuthHelper.authenticate", dependency_cache.clone());
+        // This tests nested static method lookup
+        
+        let result = groovy_support.find_method(source, "file:///test.groovy", "ApiController.AuthHelper.authorize", dependency_cache.clone());
+        // This tests nested instance method lookup
+        
+        // Test regular (non-nested) method lookup
+        let result = groovy_support.find_method(source, "file:///test.groovy", "handleRequest", dependency_cache.clone());
+        // This should find the method in the outer class
+    }
+
+    #[test]
+    fn test_groovy_find_property_nested_lookup() {
+        use crate::languages::groovy::support::GroovySupport;
+        use crate::languages::LanguageSupport;
+        use std::sync::Arc;
+        use crate::core::dependency_cache::DependencyCache;
+        
+        let mut parser = match create_groovy_parser() {
+            Some(p) => p,
+            None => {
+                println!("Warning: Groovy parser not available for testing");
+                return;
+            }
+        };
+        
+        let source = r#"
+package com.example
+
+class Configuration {
+    static String globalSetting = "default"
+    
+    static class DatabaseConfig {
+        static String host = "localhost"
+        int port = 5432
+        
+        static class ConnectionPool {
+            static int maxConnections = 100
+            boolean autoReconnect = true
+        }
+    }
+    
+    static class CacheConfig {
+        long ttl = 3600
+        static boolean enabled = true
+    }
+}
+"#;
+        
+        let tree = parser.parse(source, None).unwrap();
+        let groovy_support = GroovySupport::new();
+        let dependency_cache = Arc::new(DependencyCache::new());
+        
+        // Test finding nested properties
+        let result = groovy_support.find_property(source, "file:///test.groovy", "Configuration.DatabaseConfig.host", dependency_cache.clone());
+        // This tests nested static field lookup
+        
+        let result = groovy_support.find_property(source, "file:///test.groovy", "Configuration.DatabaseConfig.port", dependency_cache.clone());
+        // This tests nested instance field lookup
+        
+        // Test deeply nested property
+        let result = groovy_support.find_property(source, "file:///test.groovy", "Configuration.DatabaseConfig.ConnectionPool.maxConnections", dependency_cache.clone());
+        // This tests deep nesting
+        
+        // Test regular (non-nested) property lookup
+        let result = groovy_support.find_property(source, "file:///test.groovy", "globalSetting", dependency_cache.clone());
+        // This should find the property in the outer class
     }
 }

@@ -7,7 +7,7 @@ use crate::{
 };
 
 use super::utils::{find_definition_candidates, get_declaration_query_for_symbol_type};
-use super::method_resolution::{extract_call_signature_from_context, find_method_with_signature};
+use super::definition_chain::{extract_call_signature_from_context, find_method_with_signature};
 
 #[tracing::instrument(skip_all)]
 pub fn find_local(

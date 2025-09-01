@@ -20,7 +20,27 @@ pub async fn find_in_project(
 ) -> Option<Location> {
     let symbol_text = usage_node.utf8_text(source.as_bytes()).unwrap_or("");
     
-    // First, try regular symbol resolution
+    // FIRST: Check for nested enum access patterns (e.g., Product.Status.DISABLING)
+    if let Some(parent) = usage_node.parent() {
+        if parent.kind() == "field_access" {
+            if let Some(enum_type_node) = parent.child_by_field_name("object") {
+                if let Some(enum_type_name) = resolve_nested_enum_type(source, &enum_type_node) {
+                    if enum_type_name.contains('.') {
+                        return find_nested_enum_using_regular_resolution(
+                            source,
+                            file_uri,
+                            &enum_type_name,
+                            symbol_text,
+                            dependency_cache.clone(),
+                            language_support,
+                        ).await;
+                    }
+                }
+            }
+        }
+    }
+    
+    // SECOND: Try regular symbol resolution
     let regular_search_result = try_regular_symbol_search(
         source, 
         file_uri, 
@@ -78,8 +98,34 @@ pub async fn find_in_project(
     None
 }
 
+/// Resolve nested enum type from field access chain (e.g., Foo.Status -> fully qualified path)
+pub fn resolve_nested_enum_type(source: &str, enum_type_node: &Node<'_>) -> Option<String> {
+    
+    // For simple identifier, return as-is
+    if enum_type_node.kind() == "identifier" {
+        let result = enum_type_node.utf8_text(source.as_bytes()).ok().map(|s| s.to_string());
+        return result;
+    }
+    
+    // For nested field access (Foo.Status), extract the full path
+    if enum_type_node.kind() == "field_access" {
+        let object = enum_type_node.child_by_field_name("object")?;
+        let field = enum_type_node.child_by_field_name("field")?;
+        
+        let object_text = object.utf8_text(source.as_bytes()).ok()?;
+        let field_text = field.utf8_text(source.as_bytes()).ok()?;
+        
+        let result = Some(format!("{}.{}", object_text, field_text));
+        return result;
+    }
+    
+    // Fallback: extract the full text
+    let result = enum_type_node.utf8_text(source.as_bytes()).ok().map(|s| s.to_string());
+    result
+}
+
 /// Extract package name from Groovy source code
-fn extract_package_from_source(source: &str) -> Option<String> {
+pub fn extract_package_from_source(source: &str) -> Option<String> {
     let query_text = r#"
         (package_declaration
           (scoped_identifier) @package_name)
@@ -133,10 +179,7 @@ async fn find_enum_constant_in_project(
             }
         }) {
         let enum_type_node = field_access.child_by_field_name("object")?;
-        let enum_type_name = enum_type_node
-            .utf8_text(source.as_bytes())
-            .ok()?
-            .to_string();
+        let enum_type_name = resolve_nested_enum_type(source, &enum_type_node)?;
         (enum_type_name, Some(enum_type_node))
     } else {
         // Extract enum type from static import statements
@@ -179,7 +222,19 @@ async fn find_enum_constant_in_project(
         (project_root, enum_fqn)
     };
 
-    // Find the enum type definition
+    // Handle nested enum resolution - but this should be rare now since early detection handles most cases
+    if enum_type_name.contains('.') {
+        return find_nested_enum_using_regular_resolution(
+            source,
+            file_uri,
+            &enum_type_name,
+            &constant_name,
+            dependency_cache,
+            _language_support,
+        ).await;
+    }
+
+    // Find the enum type definition (for top-level enums)
     if let Some(target_file_path) = dependency_cache.find_symbol_sync(&project_root, &enum_fqn) {
         let target_file_uri = path_to_file_uri(&target_file_path)?;
         let target_tree = crate::core::utils::uri_to_tree(&target_file_uri)?;
@@ -197,9 +252,19 @@ async fn find_enum_constant_in_project(
     None
 }
 
-/// Find a specific enum constant within an enum definition
+/// Find a specific enum constant within an enum definition (handles nested enums)
 fn find_enum_constant_in_enum_definition(
     tree: &tree_sitter::Tree,
+    source: &str,
+    constant_name: &str,
+    file_uri: &str,
+) -> Option<Location> {
+    find_enum_constant_in_node(&tree.root_node(), source, constant_name, file_uri)
+}
+
+/// Recursively find enum constant in a node (supports nested structures)
+fn find_enum_constant_in_node(
+    node: &Node<'_>,
     source: &str,
     constant_name: &str,
     file_uri: &str,
@@ -208,10 +273,10 @@ fn find_enum_constant_in_enum_definition(
     use crate::core::utils::node_to_lsp_location;
 
     let query_text = r#"(enum_constant name: (identifier) @constant_name)"#;
-    let query = get_or_create_query(query_text, &tree.language())?;
+    let query = get_or_create_query(query_text, &node.language())?;
 
     let mut cursor = QueryCursor::new();
-    let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
+    let mut matches = cursor.matches(&query, *node, source.as_bytes());
 
     while let Some(query_match) = matches.next() {
         for capture in query_match.captures {
@@ -223,6 +288,178 @@ fn find_enum_constant_in_enum_definition(
         }
     }
 
+    None
+}
+
+/// Generic nested symbol resolution: Find outer class, then delegate to specific search
+async fn find_nested_symbol_generic<F>(
+    source: &str,
+    file_uri: &str,
+    nested_path: &str,
+    target_symbol: &str,
+    dependency_cache: Arc<DependencyCache>,
+    inner_search_fn: F,
+) -> Option<Location>
+where
+    F: FnOnce(&tree_sitter::Tree, &str, &str, &str, &str) -> Option<Location>,
+{
+    // Split nested path: "Foo.Status" -> ("Foo", "Status")
+    let parts: Vec<&str> = nested_path.split('.').collect();
+    if parts.len() < 2 {
+        return None;
+    }
+    
+    let outer_class = parts[0];
+    let inner_path = &parts[1..].join(".");
+    
+    // Step 1: Find the outer class (reusable for all nested access patterns)
+    let outer_class_location = find_outer_class_with_multi_level_search(
+        source,
+        file_uri,
+        outer_class,
+        dependency_cache.clone(),
+    ).await;
+    
+    if let Some(target_file_path) = outer_class_location {
+        let target_file_uri = path_to_file_uri(&target_file_path)?;
+        let target_tree = crate::core::utils::uri_to_tree(&target_file_uri)?;
+        let target_source = std::fs::read_to_string(&target_file_path).ok()?;
+        
+        // Step 2: Search within the outer class (specific to the symbol type)
+        return inner_search_fn(
+            &target_tree,
+            &target_source,
+            inner_path,
+            target_symbol,
+            &target_file_uri,
+        );
+    } else {
+    }
+    
+    None
+}
+
+/// Find nested enum using the generic nested symbol resolution
+pub async fn find_nested_enum_using_regular_resolution(
+    source: &str,
+    file_uri: &str,
+    nested_enum_type: &str,
+    constant_name: &str,
+    dependency_cache: Arc<DependencyCache>,
+    _language_support: &dyn LanguageSupport,
+) -> Option<Location> {
+    find_nested_symbol_generic(
+        source,
+        file_uri,
+        nested_enum_type,
+        constant_name,
+        dependency_cache,
+        find_inner_enum_constant,
+    ).await
+}
+
+// Future extensions for other nested patterns:
+// 
+// /// Find nested class (e.g., Outer.Inner.CONSTANT)
+// async fn find_nested_class(...) -> Option<Location> {
+//     find_nested_symbol_generic(..., find_inner_class).await
+// }
+//
+// /// Find nested method (e.g., Outer.Inner.method())
+// async fn find_nested_method(...) -> Option<Location> {
+//     find_nested_symbol_generic(..., find_inner_method).await
+// }
+//
+// /// Find nested property (e.g., Outer.Inner.property)
+// async fn find_nested_property(...) -> Option<Location> {
+//     find_nested_symbol_generic(..., find_inner_property).await
+// }
+
+/// Use multi-level search like regular go-to-definition (project -> workspace -> external)
+async fn find_outer_class_with_multi_level_search(
+    source: &str,
+    file_uri: &str,
+    outer_class: &str,
+    dependency_cache: Arc<DependencyCache>,
+) -> Option<std::path::PathBuf> {
+    // Resolve the outer class FQN first
+    let outer_class_fqn = if let Some(resolved_fqn) = 
+        super::utils::resolve_symbol_with_imports(outer_class, source, &dependency_cache) {
+        resolved_fqn
+    } else {
+        if let Some(package) = extract_package_from_source(source) {
+            if !package.is_empty() {
+                let fqn = format!("{}.{}", package, outer_class);
+                fqn
+            } else {
+                outer_class.to_string()
+            }
+        } else {
+            outer_class.to_string()
+        }
+    };
+
+    let project_root = crate::core::utils::uri_to_path(file_uri)
+        .and_then(|path| crate::core::utils::find_project_root(&path))?;
+
+    // Level 1: Try current project
+    if let Some(path) = dependency_cache.find_symbol(&project_root, &outer_class_fqn).await {
+        return Some(path);
+    }
+
+    // Level 2: Try workspace (other projects) - search all projects
+    for entry in dependency_cache.symbol_index.iter() {
+        let ((other_project_root, _), _) = (entry.key(), entry.value());
+        if other_project_root != &project_root {
+            if let Some(path) = dependency_cache.find_symbol(other_project_root, &outer_class_fqn).await {
+                return Some(path);
+            }
+        }
+    }
+
+    // Level 3: Try external dependencies 
+    if let Some(source_info) = dependency_cache
+        .find_external_symbol_with_lazy_parsing(&project_root, &outer_class_fqn)
+        .await
+    {
+        return Some(source_info.source_path.clone());
+    }
+
+    None
+}
+
+/// Find enum constant within inner enum of a class
+fn find_inner_enum_constant(
+    tree: &tree_sitter::Tree,
+    source: &str,
+    inner_enum_path: &str,
+    constant_name: &str,
+    file_uri: &str,
+) -> Option<Location> {
+    use super::utils::get_or_create_query;
+    
+    
+    // Find the inner enum declaration by name
+    let enum_query_text = r#"(enum_declaration name: (identifier) @enum_name)"#;
+    let enum_query = get_or_create_query(enum_query_text, &tree.language())?;
+    
+    let mut cursor = QueryCursor::new();
+    let mut matches = cursor.matches(&enum_query, tree.root_node(), source.as_bytes());
+    
+    let mut found_enums = Vec::new();
+    while let Some(query_match) = matches.next() {
+        for capture in query_match.captures {
+            if let Ok(enum_name) = capture.node.utf8_text(source.as_bytes()) {
+                found_enums.push(enum_name.to_string());
+                if enum_name == inner_enum_path {
+                    // Found the inner enum, now search for the constant within it
+                    let enum_node = capture.node.parent()?; // Get the full enum_declaration node
+                    return find_enum_constant_in_node(&enum_node, source, constant_name, file_uri);
+                }
+            }
+        }
+    }
+    
     None
 }
 
@@ -247,14 +484,14 @@ fn extract_enum_type_from_static_import(source: &str, _constant_name: &str) -> O
     let mut cursor = QueryCursor::new();
     let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
 
-    // Collect all static import paths
+    // Collect all static import paths with nested support
     let mut static_imports = Vec::new();
     while let Some(query_match) = matches.next() {
         for capture in query_match.captures {
             if let Ok(import_path) = capture.node.utf8_text(source.as_bytes()) {
-                if let Some(class_name) = import_path.split('.').last() {
-                    static_imports.push(class_name.to_string());
-                }
+                // For nested enums like "com.example.Foo.Status", extract "Foo.Status"
+                let nested_type = extract_nested_type_from_import_path(import_path);
+                static_imports.push(nested_type);
             }
         }
     }
@@ -268,6 +505,26 @@ fn extract_enum_type_from_static_import(source: &str, _constant_name: &str) -> O
 
     // If no enum-like class found, return the first static import
     static_imports.first().cloned()
+}
+
+/// Extract nested type from import path (e.g., "com.example.Foo.Status" -> "Foo.Status")
+pub fn extract_nested_type_from_import_path(import_path: &str) -> String {
+    let parts: Vec<&str> = import_path.split('.').collect();
+    
+    if parts.len() >= 2 {
+        // Check if last two parts look like Outer.Inner pattern
+        let second_last = parts[parts.len() - 2];
+        let last = parts[parts.len() - 1];
+        
+        // If second_last is capitalized (class name) and last is capitalized (enum name)
+        if second_last.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) 
+            && last.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+            return format!("{}.{}", second_last, last);
+        }
+    }
+    
+    // Fallback: return just the last part
+    parts.last().map_or("", |v| v).to_string()
 }
 
 /// Extract full FQN from static import statements for a given constant
@@ -515,4 +772,245 @@ async fn try_regular_symbol_search(
     }
 
     search_definition_in_project(file_uri, source, usage_node, &other_uri, _language_support)
+}
+
+/// Find nested class using regular go-to-definition chain (e.g., Outer.Inner)
+pub async fn find_nested_class_using_regular_resolution(
+    source: &str,
+    file_uri: &str,
+    nested_path: &str,
+    target_symbol: &str,
+    dependency_cache: Arc<DependencyCache>,
+    _language_support: &dyn LanguageSupport,
+) -> Option<Location> {
+    find_nested_symbol_generic(
+        source,
+        file_uri,
+        nested_path,
+        target_symbol,
+        dependency_cache,
+        |tree, source, inner_path, target_symbol, file_uri| {
+            find_inner_class(tree, source, inner_path, target_symbol, file_uri)
+        },
+    ).await
+}
+
+/// Find nested method using regular go-to-definition chain (e.g., Outer.Inner.method())
+pub async fn find_nested_method_using_regular_resolution(
+    source: &str,
+    file_uri: &str,
+    nested_path: &str,
+    target_symbol: &str,
+    dependency_cache: Arc<DependencyCache>,
+    _language_support: &dyn LanguageSupport,
+) -> Option<Location> {
+    find_nested_symbol_generic(
+        source,
+        file_uri,
+        nested_path,
+        target_symbol,
+        dependency_cache,
+        |tree, source, inner_path, target_symbol, file_uri| {
+            find_inner_method(tree, source, inner_path, target_symbol, file_uri)
+        },
+    ).await
+}
+
+/// Find nested property/field using regular go-to-definition chain (e.g., Outer.Inner.property)
+pub async fn find_nested_property_using_regular_resolution(
+    source: &str,
+    file_uri: &str,
+    nested_path: &str,
+    target_symbol: &str,
+    dependency_cache: Arc<DependencyCache>,
+    _language_support: &dyn LanguageSupport,
+) -> Option<Location> {
+    find_nested_symbol_generic(
+        source,
+        file_uri,
+        nested_path,
+        target_symbol,
+        dependency_cache,
+        |tree, source, inner_path, target_symbol, file_uri| {
+            find_inner_property(tree, source, inner_path, target_symbol, file_uri)
+        },
+    ).await
+}
+
+/// Find inner class within a class (Groovy-specific)
+fn find_inner_class(
+    tree: &tree_sitter::Tree,
+    source: &str,
+    inner_class_path: &str,
+    _target_symbol: &str,
+    file_uri: &str,
+) -> Option<Location> {
+    use super::utils::get_or_create_query;
+    use tree_sitter::{QueryCursor, StreamingIterator};
+    
+    // Find inner class declarations by name (Groovy-specific)
+    let class_query_text = r#"
+        (class_declaration name: (identifier) @class_name)
+        (interface_declaration name: (identifier) @class_name)
+        (enum_declaration name: (identifier) @class_name)
+        (annotation_type_declaration name: (identifier) @class_name)
+    "#;
+    let class_query = get_or_create_query(class_query_text, &tree_sitter_groovy::language())?;
+    
+    let mut cursor = QueryCursor::new();
+    let mut matches = cursor.matches(&class_query, tree.root_node(), source.as_bytes());
+    
+    while let Some(query_match) = matches.next() {
+        for capture in query_match.captures {
+            if let Ok(class_name) = capture.node.utf8_text(source.as_bytes()) {
+                if class_name == inner_class_path {
+                    return crate::core::utils::node_to_lsp_location(&capture.node, file_uri);
+                }
+            }
+        }
+    }
+    
+    None
+}
+
+/// Find inner method within a class (Groovy-specific)
+fn find_inner_method(
+    tree: &tree_sitter::Tree,
+    source: &str,
+    inner_class_path: &str,
+    target_method: &str,
+    file_uri: &str,
+) -> Option<Location> {
+    use super::utils::get_or_create_query;
+    use tree_sitter::{QueryCursor, StreamingIterator};
+    
+    // First find the inner class (Groovy-specific)
+    let class_query_text = r#"
+        (class_declaration name: (identifier) @class_name)
+        (interface_declaration name: (identifier) @class_name)
+        (enum_declaration name: (identifier) @class_name)
+        (annotation_type_declaration name: (identifier) @class_name)
+    "#;
+    let class_query = get_or_create_query(class_query_text, &tree_sitter_groovy::language())?;
+    
+    let mut cursor = QueryCursor::new();
+    let mut matches = cursor.matches(&class_query, tree.root_node(), source.as_bytes());
+    
+    while let Some(query_match) = matches.next() {
+        for capture in query_match.captures {
+            if let Ok(class_name) = capture.node.utf8_text(source.as_bytes()) {
+                if class_name == inner_class_path {
+                    // Found the inner class, now search for the method within it
+                    let class_node = capture.node.parent()?; // Get the full class declaration node
+                    return find_method_in_node(&class_node, source, target_method, file_uri);
+                }
+            }
+        }
+    }
+    
+    None
+}
+
+/// Find inner property/field within a class (Groovy-specific)
+fn find_inner_property(
+    tree: &tree_sitter::Tree,
+    source: &str,
+    inner_class_path: &str,
+    target_property: &str,
+    file_uri: &str,
+) -> Option<Location> {
+    use super::utils::get_or_create_query;
+    use tree_sitter::{QueryCursor, StreamingIterator};
+    
+    // First find the inner class (Groovy-specific)
+    let class_query_text = r#"
+        (class_declaration name: (identifier) @class_name)
+        (interface_declaration name: (identifier) @class_name)
+        (enum_declaration name: (identifier) @class_name)
+        (annotation_type_declaration name: (identifier) @class_name)
+    "#;
+    let class_query = get_or_create_query(class_query_text, &tree_sitter_groovy::language())?;
+    
+    let mut cursor = QueryCursor::new();
+    let mut matches = cursor.matches(&class_query, tree.root_node(), source.as_bytes());
+    
+    while let Some(query_match) = matches.next() {
+        for capture in query_match.captures {
+            if let Ok(class_name) = capture.node.utf8_text(source.as_bytes()) {
+                if class_name == inner_class_path {
+                    // Found the inner class, now search for the property within it
+                    let class_node = capture.node.parent()?; // Get the full class declaration node
+                    return find_property_in_node(&class_node, source, target_property, file_uri);
+                }
+            }
+        }
+    }
+    
+    None
+}
+
+/// Find method within a node (Groovy-specific)
+fn find_method_in_node(
+    node: &tree_sitter::Node<'_>,
+    source: &str,
+    method_name: &str,
+    file_uri: &str,
+) -> Option<Location> {
+    use super::utils::get_or_create_query;
+    use crate::core::utils::node_to_lsp_location;
+    use tree_sitter::{QueryCursor, StreamingIterator};
+
+    let query_text = r#"
+        (method_declaration name: (identifier) @method_name)
+        (constructor_declaration name: (identifier) @method_name)
+    "#;
+    let query = get_or_create_query(query_text, &tree_sitter_groovy::language())?;
+
+    let mut cursor = QueryCursor::new();
+    let mut matches = cursor.matches(&query, *node, source.as_bytes());
+
+    while let Some(query_match) = matches.next() {
+        for capture in query_match.captures {
+            if let Ok(capture_text) = capture.node.utf8_text(source.as_bytes()) {
+                if capture_text == method_name {
+                    return node_to_lsp_location(&capture.node, file_uri);
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Find property within a node (Groovy-specific)
+fn find_property_in_node(
+    node: &tree_sitter::Node<'_>,
+    source: &str,
+    property_name: &str,
+    file_uri: &str,
+) -> Option<Location> {
+    use super::utils::get_or_create_query;
+    use crate::core::utils::node_to_lsp_location;
+    use tree_sitter::{QueryCursor, StreamingIterator};
+
+    let query_text = r#"
+        (field_declaration declarator: (variable_declarator name: (identifier) @property_name))
+        (property_declaration name: (identifier) @property_name)
+    "#;
+    let query = get_or_create_query(query_text, &tree_sitter_groovy::language())?;
+
+    let mut cursor = QueryCursor::new();
+    let mut matches = cursor.matches(&query, *node, source.as_bytes());
+
+    while let Some(query_match) = matches.next() {
+        for capture in query_match.captures {
+            if let Ok(capture_text) = capture.node.utf8_text(source.as_bytes()) {
+                if capture_text == property_name {
+                    return node_to_lsp_location(&capture.node, file_uri);
+                }
+            }
+        }
+    }
+
+    None
 }

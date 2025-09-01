@@ -24,6 +24,29 @@ pub async fn find_external(
     usage_node: &Node<'_>,
     dependency_cache: Arc<DependencyCache>,
 ) -> Option<Location> {
+    let symbol_text = usage_node.utf8_text(source.as_bytes()).unwrap_or("");
+    
+    // FIRST: Check for nested enum access patterns (same as find_in_project)
+    if let Some(parent) = usage_node.parent() {
+        if parent.kind() == "navigation_expression" {
+            if let Some(enum_type_node) = parent.child(0) {
+                if let Some(enum_type_name) = super::project::resolve_nested_enum_type(source, &enum_type_node) {
+                    if enum_type_name.contains('.') {
+                        // Note: Using a dummy language_support for external dependencies
+                        return super::project::find_nested_enum_using_regular_resolution(
+                            source,
+                            file_uri,
+                            &enum_type_name,
+                            symbol_text,
+                            dependency_cache.clone(),
+                            &crate::languages::kotlin::KotlinSupport,
+                        ).await;
+                    }
+                }
+            }
+        }
+    }
+
     let current_project = uri_to_path(file_uri).and_then(|path| {
         find_project_root(&path).or_else(|| find_external_dependency_root(&path))
     })?;

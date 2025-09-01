@@ -1,2 +1,2 @@
 pub mod hover;
-pub mod method_resolution;
+pub mod definition_chain;

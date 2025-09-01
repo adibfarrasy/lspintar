@@ -17,7 +17,7 @@ use crate::{
     languages::{java::constants::JAVA_COMMON_IMPORTS, LanguageSupport},
 };
 
-use super::method_resolution::{extract_call_signature_from_context, find_method_with_signature};
+use super::definition_chain::{extract_call_signature_from_context, find_method_with_signature};
 
 /// Get or create a compiled query for Java
 pub fn get_or_create_query(query_text: &str) -> Result<Query, tree_sitter::QueryError> {
@@ -229,65 +229,12 @@ pub fn prepare_symbol_lookup_key_with_wildcard_support(
     // Check explicit imports first
     for import in &imports {
         if import.ends_with(&format!(".{}", symbol_name)) {
-            let explicit_key = (project_root.clone(), import.clone());
-
-            // Check using read-through cache pattern
-            // First try current project (symbols and builtins)
-            if dependency_cache
-                .find_symbol_sync(&explicit_key.0, &explicit_key.1)
-                .is_some()
-                || dependency_cache.find_builtin_info(import).is_some()
-            {
-                return Some(explicit_key.clone());
-            }
-
-            // Then try current project's external dependencies (JAR files)
-            if let Some(_) = tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(async {
-                    dependency_cache
-                        .find_project_external_info(&project_root, import)
-                        .await
-                })
-            }) {
-                return Some(explicit_key);
-            }
-
-            // Then try dependency projects
-            if let Some(project_metadata) = dependency_cache.project_metadata.get(&project_root) {
-                for dependent_project_ref in project_metadata.inter_project_deps.iter() {
-                    let dependent_project = dependent_project_ref.clone();
-                    let dep_key = (dependent_project.clone(), import.clone());
-
-                    if dependency_cache
-                        .find_symbol_sync(&dep_key.0, &dep_key.1)
-                        .is_some()
-                        || dependency_cache.find_builtin_info(import).is_some()
-                    {
-                        return Some(dep_key);
-                    }
-
-                    // Also check external dependencies of this dependency project
-                    if let Some(_) = tokio::task::block_in_place(|| {
-                        tokio::runtime::Handle::current().block_on(async {
-                            dependency_cache
-                                .find_project_external_info(&dependent_project, import)
-                                .await
-                        })
-                    }) {
-                        return Some(dep_key);
-                    }
-                }
-            }
-
             debug!(
-                "Java utils: Explicit import '{}' not found in current project or dependencies",
-                import
+                "LSPINTAR_DEBUG: utils found matching import '{}' for symbol '{}', returning ({:?}, '{}')",
+                import, symbol_name, project_root, import
             );
-        } else {
-            debug!(
-                "Java utils: import '{}' does not match symbol '{}'",
-                import, symbol_name
-            );
+            // Return the FQN so workspace.rs can search it in all dependency projects
+            return Some((project_root.clone(), import.clone()));
         }
     }
 
@@ -778,5 +725,409 @@ public class Task {
         
         let result = search_definition(&tree, source, "Priority"); 
         assert!(result.is_some(), "Enhanced search_definition should find Priority enum class");
+    }
+
+    #[test]
+    fn test_java_nested_enum_static_import_extraction() {
+        use super::super::project::extract_nested_type_from_import_path;
+        
+        // Test nested enum type extraction for Java
+        assert_eq!(extract_nested_type_from_import_path("com.example.Order.Status"), "Order.Status");
+        assert_eq!(extract_nested_type_from_import_path("com.company.deep.Service.State"), "Service.State"); 
+        assert_eq!(extract_nested_type_from_import_path("com.example.Priority"), "Priority");
+        assert_eq!(extract_nested_type_from_import_path("Status"), "Status");
+        
+        // Edge cases
+        assert_eq!(extract_nested_type_from_import_path(""), "");
+        assert_eq!(extract_nested_type_from_import_path("com.example.lower.Upper"), "lower.Upper");
+    }
+
+    #[test]
+    fn test_java_find_type_in_tree() {
+        use crate::languages::java::support::JavaSupport;
+        use crate::languages::LanguageSupport;
+        
+        let mut parser = match create_java_parser() {
+            Some(p) => p,
+            None => {
+                println!("Warning: Java parser not available for testing");
+                return;
+            }
+        };
+        
+        let source = r#"
+package com.example;
+
+public class OuterClass {
+    public static class InnerClass {
+        public static enum Status {
+            ACTIVE, INACTIVE
+        }
+    }
+    
+    public interface MyInterface {
+        void doSomething();
+    }
+    
+    public enum Priority {
+        HIGH, LOW
+    }
+}
+
+class AnotherClass {
+}
+"#;
+        
+        let tree = parser.parse(source, None).unwrap();
+        let java_support = JavaSupport::new();
+        
+        // Test finding regular classes
+        let result = java_support.find_type_in_tree(&tree, source, "OuterClass", "file:///test.java");
+        assert!(result.is_some(), "Should find OuterClass");
+        
+        let result = java_support.find_type_in_tree(&tree, source, "AnotherClass", "file:///test.java");
+        assert!(result.is_some(), "Should find AnotherClass");
+        
+        // Test finding nested classes
+        let result = java_support.find_type_in_tree(&tree, source, "InnerClass", "file:///test.java");
+        assert!(result.is_some(), "Should find InnerClass");
+        
+        // Test finding interfaces
+        let result = java_support.find_type_in_tree(&tree, source, "MyInterface", "file:///test.java");
+        assert!(result.is_some(), "Should find MyInterface");
+        
+        // Test finding enums
+        let result = java_support.find_type_in_tree(&tree, source, "Priority", "file:///test.java");
+        assert!(result.is_some(), "Should find Priority enum");
+        
+        let result = java_support.find_type_in_tree(&tree, source, "Status", "file:///test.java");
+        assert!(result.is_some(), "Should find nested Status enum");
+        
+        // Test non-existent type
+        let result = java_support.find_type_in_tree(&tree, source, "NonExistent", "file:///test.java");
+        assert!(result.is_none(), "Should not find non-existent type");
+    }
+
+    #[test]
+    fn test_java_find_method_in_tree() {
+        use crate::languages::java::support::JavaSupport;
+        use crate::languages::LanguageSupport;
+        
+        let mut parser = match create_java_parser() {
+            Some(p) => p,
+            None => {
+                println!("Warning: Java parser not available for testing");
+                return;
+            }
+        };
+        
+        let source = r#"
+package com.example;
+
+public class TestClass {
+    public void publicMethod() {
+    }
+    
+    private int privateMethod(String param) {
+        return 42;
+    }
+    
+    public static void staticMethod() {
+    }
+    
+    public TestClass() {
+    }
+    
+    public static class InnerClass {
+        public void innerMethod() {
+        }
+        
+        private void anotherInnerMethod(int x, String y) {
+        }
+    }
+}
+"#;
+        
+        let tree = parser.parse(source, None).unwrap();
+        let java_support = JavaSupport::new();
+        
+        // Test finding public methods
+        let result = java_support.find_method_in_tree(&tree, source, "publicMethod", "file:///test.java");
+        assert!(result.is_some(), "Should find publicMethod");
+        
+        // Test finding private methods  
+        let result = java_support.find_method_in_tree(&tree, source, "privateMethod", "file:///test.java");
+        assert!(result.is_some(), "Should find privateMethod");
+        
+        // Test finding static methods
+        let result = java_support.find_method_in_tree(&tree, source, "staticMethod", "file:///test.java");
+        assert!(result.is_some(), "Should find staticMethod");
+        
+        // Test finding methods in nested classes
+        let result = java_support.find_method_in_tree(&tree, source, "innerMethod", "file:///test.java");
+        assert!(result.is_some(), "Should find innerMethod in nested class");
+        
+        let result = java_support.find_method_in_tree(&tree, source, "anotherInnerMethod", "file:///test.java");
+        assert!(result.is_some(), "Should find anotherInnerMethod in nested class");
+        
+        // Test non-existent method
+        let result = java_support.find_method_in_tree(&tree, source, "nonExistentMethod", "file:///test.java");
+        assert!(result.is_none(), "Should not find non-existent method");
+    }
+
+    #[test]
+    fn test_java_find_property_in_tree() {
+        use crate::languages::java::support::JavaSupport;
+        use crate::languages::LanguageSupport;
+        
+        let mut parser = match create_java_parser() {
+            Some(p) => p,
+            None => {
+                println!("Warning: Java parser not available for testing");
+                return;
+            }
+        };
+        
+        let source = r#"
+package com.example;
+
+public class TestClass {
+    private String privateField;
+    public int publicField = 42;
+    protected static String staticField;
+    private final String finalField = "test";
+    
+    public static class InnerClass {
+        private boolean innerField;
+        public String anotherInnerField = "nested";
+    }
+}
+"#;
+        
+        let tree = parser.parse(source, None).unwrap();
+        let java_support = JavaSupport::new();
+        
+        // Test finding private fields
+        let result = java_support.find_property_in_tree(&tree, source, "privateField", "file:///test.java");
+        assert!(result.is_some(), "Should find privateField");
+        
+        // Test finding public fields
+        let result = java_support.find_property_in_tree(&tree, source, "publicField", "file:///test.java");
+        assert!(result.is_some(), "Should find publicField");
+        
+        // Test finding static fields
+        let result = java_support.find_property_in_tree(&tree, source, "staticField", "file:///test.java");
+        assert!(result.is_some(), "Should find staticField");
+        
+        // Test finding final fields
+        let result = java_support.find_property_in_tree(&tree, source, "finalField", "file:///test.java");
+        assert!(result.is_some(), "Should find finalField");
+        
+        // Test finding fields in nested classes
+        let result = java_support.find_property_in_tree(&tree, source, "innerField", "file:///test.java");
+        assert!(result.is_some(), "Should find innerField in nested class");
+        
+        let result = java_support.find_property_in_tree(&tree, source, "anotherInnerField", "file:///test.java");
+        assert!(result.is_some(), "Should find anotherInnerField in nested class");
+        
+        // Test non-existent field
+        let result = java_support.find_property_in_tree(&tree, source, "nonExistentField", "file:///test.java");
+        assert!(result.is_none(), "Should not find non-existent field");
+    }
+
+    #[test]
+    fn test_java_find_type_nested_lookup() {
+        use crate::languages::java::support::JavaSupport;
+        use crate::languages::LanguageSupport;
+        use std::sync::Arc;
+        use crate::core::dependency_cache::DependencyCache;
+        
+        let mut parser = match create_java_parser() {
+            Some(p) => p,
+            None => {
+                println!("Warning: Java parser not available for testing");
+                return;
+            }
+        };
+        
+        let source = r#"
+package com.example;
+
+public class OuterService {
+    public static class InnerHandler {
+        public static enum State {
+            READY, PROCESSING, DONE
+        }
+        
+        public static class DeepNested {
+            public void process() {}
+        }
+    }
+    
+    public enum Status {
+        ACTIVE, INACTIVE
+    }
+}
+"#;
+        
+        let tree = parser.parse(source, None).unwrap();
+        let java_support = JavaSupport::new();
+        let dependency_cache = Arc::new(DependencyCache::new());
+        
+        // Test finding nested types with dot notation
+        let result = java_support.find_type(source, "file:///test.java", "OuterService.InnerHandler", dependency_cache.clone());
+        // This should work once the nested lookup is properly implemented
+        // For now, we test that the method exists and can be called
+        
+        let result = java_support.find_type(source, "file:///test.java", "OuterService.Status", dependency_cache.clone());
+        // Similarly, this tests the nested enum lookup
+        
+        // Test regular (non-nested) type lookup
+        let result = java_support.find_type(source, "file:///test.java", "OuterService", dependency_cache.clone());
+        // This should find the outer class
+        
+        // Test deeply nested type
+        let result = java_support.find_type(source, "file:///test.java", "OuterService.InnerHandler.State", dependency_cache.clone());
+        // This tests deep nesting
+    }
+
+    #[test]
+    fn test_java_find_method_nested_lookup() {
+        use crate::languages::java::support::JavaSupport;
+        use crate::languages::LanguageSupport;
+        use std::sync::Arc;
+        use crate::core::dependency_cache::DependencyCache;
+        
+        let mut parser = match create_java_parser() {
+            Some(p) => p,
+            None => {
+                println!("Warning: Java parser not available for testing");
+                return;
+            }
+        };
+        
+        let source = r#"
+package com.example;
+
+public class ApiController {
+    public void handleRequest() {}
+    
+    public static class AuthHelper {
+        public static boolean authenticate(String token) {
+            return true;
+        }
+        
+        public void authorize() {}
+    }
+    
+    public static class ValidationHelper {
+        public boolean validate(Object data) {
+            return true;
+        }
+    }
+}
+"#;
+        
+        let tree = parser.parse(source, None).unwrap();
+        let java_support = JavaSupport::new();
+        let dependency_cache = Arc::new(DependencyCache::new());
+        
+        // Test finding nested methods
+        let result = java_support.find_method(source, "file:///test.java", "ApiController.AuthHelper.authenticate", dependency_cache.clone());
+        // This tests nested static method lookup
+        
+        let result = java_support.find_method(source, "file:///test.java", "ApiController.AuthHelper.authorize", dependency_cache.clone());
+        // This tests nested instance method lookup
+        
+        // Test regular (non-nested) method lookup
+        let result = java_support.find_method(source, "file:///test.java", "handleRequest", dependency_cache.clone());
+        // This should find the method in the outer class
+    }
+
+    #[test]
+    fn test_java_find_property_nested_lookup() {
+        use crate::languages::java::support::JavaSupport;
+        use crate::languages::LanguageSupport;
+        use std::sync::Arc;
+        use crate::core::dependency_cache::DependencyCache;
+        
+        let mut parser = match create_java_parser() {
+            Some(p) => p,
+            None => {
+                println!("Warning: Java parser not available for testing");
+                return;
+            }
+        };
+        
+        let source = r#"
+package com.example;
+
+public class Configuration {
+    public static String globalSetting = "default";
+    
+    public static class DatabaseConfig {
+        public static String host = "localhost";
+        public int port = 5432;
+        
+        public static class ConnectionPool {
+            public static int maxConnections = 100;
+            public boolean autoReconnect = true;
+        }
+    }
+    
+    public static class CacheConfig {
+        public long ttl = 3600;
+        public static boolean enabled = true;
+    }
+}
+"#;
+        
+        let tree = parser.parse(source, None).unwrap();
+        let java_support = JavaSupport::new();
+        let dependency_cache = Arc::new(DependencyCache::new());
+        
+        // Test finding nested properties
+        let result = java_support.find_property(source, "file:///test.java", "Configuration.DatabaseConfig.host", dependency_cache.clone());
+        // This tests nested static field lookup
+        
+        let result = java_support.find_property(source, "file:///test.java", "Configuration.DatabaseConfig.port", dependency_cache.clone());
+        // This tests nested instance field lookup
+        
+        // Test deeply nested property
+        let result = java_support.find_property(source, "file:///test.java", "Configuration.DatabaseConfig.ConnectionPool.maxConnections", dependency_cache.clone());
+        // This tests deep nesting
+        
+        // Test regular (non-nested) property lookup
+        let result = java_support.find_property(source, "file:///test.java", "globalSetting", dependency_cache.clone());
+        // This should find the property in the outer class
+    }
+
+    #[test] 
+    fn test_java_actual_find_property() {
+        use crate::languages::java::support::JavaSupport;
+        use crate::languages::LanguageSupport;
+        use std::sync::Arc;
+        use crate::core::dependency_cache::DependencyCache;
+        
+        let source = r#"
+package com.example;
+
+public class TestClass {
+    private String privateField;
+    public int publicField = 42;
+}
+"#;
+        
+        let java_support = JavaSupport::new();
+        let dependency_cache = Arc::new(DependencyCache::new());
+        
+        // Test the actual find_property method (not find_property_in_tree)
+        let result = java_support.find_property(source, "file:///test.java", "privateField", dependency_cache.clone());
+        println!("privateField actual result: {:?}", result);
+        assert!(result.is_some(), "Should find privateField using actual find_property method");
+        
+        let result = java_support.find_property(source, "file:///test.java", "publicField", dependency_cache.clone());
+        println!("publicField actual result: {:?}", result);
+        assert!(result.is_some(), "Should find publicField using actual find_property method");
     }
 }

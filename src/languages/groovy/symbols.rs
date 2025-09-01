@@ -224,12 +224,14 @@ fn build_nested_class_name(node: &Node, content: &str, class_name: &str) -> Stri
         if parent.kind() == "class_declaration" || 
            parent.kind() == "interface_declaration" || 
            parent.kind() == "enum_declaration" {
-            // Find the name of this parent class
-            for child in parent.children(&mut parent.walk()) {
-                if child.kind() == "identifier" {
-                    if let Ok(parent_name) = child.utf8_text(content.as_bytes()) {
+            
+            // Skip if this is the same class declaration we started from
+            // (avoid duplicating the class name for top-level classes)
+            if let Some(parent_name_node) = parent.child_by_field_name("name") {
+                if let Ok(parent_name) = parent_name_node.utf8_text(content.as_bytes()) {
+                    // Only add if it's different from our current class name
+                    if parent_name != class_name {
                         class_names.push(parent_name.to_string());
-                        break;
                     }
                 }
             }

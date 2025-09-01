@@ -88,7 +88,7 @@ pub trait LanguageSupport: Send + Sync + QueryProvider {
         tree: &'a Tree,
         _source: &str,
         _method_name: &str,
-        call_signature: &crate::languages::common::method_resolution::CallSignature,
+        call_signature: &crate::languages::common::definition_chain::CallSignature,
     ) -> Option<tree_sitter::Node<'a>>;
 
     /// Find field/property declaration and return its type
@@ -118,7 +118,7 @@ pub trait LanguageSupport: Send + Sync + QueryProvider {
         source: &str,
     ) -> Option<(String, String)> {
         // Default implementation using common JVM patterns
-        crate::languages::common::method_resolution::extract_static_method_context(usage_node, source)
+        crate::languages::common::definition_chain::extract_static_method_context(usage_node, source)
     }
 
     /// Extract instance method context (variable.methodName) from usage node  
@@ -129,9 +129,18 @@ pub trait LanguageSupport: Send + Sync + QueryProvider {
         source: &str,
     ) -> Option<(String, String)> {
         // Default implementation using common JVM patterns
-        crate::languages::common::method_resolution::extract_instance_method_context(usage_node, source)
+        crate::languages::common::definition_chain::extract_instance_method_context(usage_node, source)
     }
 
+    /// Returns (variable_name, field_name) if this is an instance field/property access
+    fn extract_instance_field_context(
+        &self,
+        usage_node: &Node,
+        source: &str,
+    ) -> Option<(String, String)> {
+        // Default implementation using common JVM patterns
+        crate::languages::common::definition_chain::extract_instance_field_context(usage_node, source)
+    }
 
     /// Resolve instance method definition by finding variable type and then method within it
     fn find_instance_method_definition(
@@ -150,10 +159,228 @@ pub trait LanguageSupport: Send + Sync + QueryProvider {
 
     /// Extract call signature from the usage context for method overload resolution
     /// Each language can provide its own implementation for better signature matching
-    fn extract_call_signature(&self, usage_node: &Node, source: &str) -> Option<crate::languages::common::method_resolution::CallSignature> {
+    fn extract_call_signature(&self, usage_node: &Node, source: &str) -> Option<crate::languages::common::definition_chain::CallSignature> {
         // Default implementation uses Groovy's signature extraction (for backward compatibility)
-        crate::languages::common::method_resolution::extract_call_signature_from_context(usage_node, source)
+        crate::languages::common::definition_chain::extract_call_signature_from_context(usage_node, source)
     }
+
+    // ===== Unified Symbol Finding Methods =====
+    // These methods handle both nested (Outer.Inner.symbol) and non-nested (symbol) lookups
+
+    /// Find a type (class, interface, or enum) - handles both nested and non-nested
+    /// e.g., "MyClass" or "Outer.Inner" or "Package.Class.InnerClass"
+    fn find_type(
+        &self,
+        source: &str,
+        file_uri: &str,
+        type_path: &str,
+        dependency_cache: Arc<DependencyCache>,
+    ) -> Option<Location> {
+        // Check if it's a nested path
+        if type_path.contains('.') {
+            // Split only at the first dot to handle multi-level nesting
+            if let Some(dot_pos) = type_path.find('.') {
+                let outer_type = &type_path[..dot_pos];
+                let inner_path = &type_path[dot_pos + 1..];
+                
+                // Find the outer type first (recursive call)
+                if let Some(outer_location) = self.find_type(source, file_uri, outer_type, dependency_cache.clone()) {
+                    // Load the outer type's file
+                    if let Some(outer_tree) = crate::core::utils::uri_to_tree(&outer_location.uri.to_string()) {
+                        if let Ok(outer_source) = std::fs::read_to_string(
+                            crate::core::utils::uri_to_path(&outer_location.uri.to_string())?
+                        ) {
+                            // Find the inner type within the outer type
+                            return self.find_type_in_tree(&outer_tree, &outer_source, inner_path, &outer_location.uri.to_string());
+                        }
+                    }
+                }
+            }
+        } else {
+            // Non-nested: use multi-level search (project -> workspace -> external)
+            return self.find_type_with_multi_level_search(source, file_uri, type_path, dependency_cache);
+        }
+        None
+    }
+
+    /// Find a method - handles both nested and non-nested
+    /// e.g., "myMethod" or "Outer.Inner.myMethod"
+    fn find_method(
+        &self,
+        source: &str,
+        file_uri: &str,
+        method_path: &str,
+        dependency_cache: Arc<DependencyCache>,
+    ) -> Option<Location> {
+        // Check if it contains a class path (nested case)
+        if let Some(last_dot) = method_path.rfind('.') {
+            let class_path = &method_path[..last_dot];
+            let method_name = &method_path[last_dot + 1..];
+            
+            // Find the containing type first
+            if let Some(type_location) = self.find_type(source, file_uri, class_path, dependency_cache) {
+                // Load the type's file
+                if let Some(type_tree) = crate::core::utils::uri_to_tree(&type_location.uri.to_string()) {
+                    if let Ok(type_source) = std::fs::read_to_string(
+                        crate::core::utils::uri_to_path(&type_location.uri.to_string())?
+                    ) {
+                        // Find the method within the type
+                        return self.find_method_in_tree(&type_tree, &type_source, method_name, &type_location.uri.to_string());
+                    }
+                }
+            }
+        } else {
+            // Non-nested: search in current file or through imports
+            if let Some(tree) = crate::core::utils::uri_to_tree(file_uri) {
+                return self.find_method_in_tree(&tree, source, method_path, file_uri);
+            }
+        }
+        None
+    }
+
+
+    /// Find a property/field - handles both nested and non-nested
+    /// e.g., "myField" or "Outer.Inner.myField"
+    fn find_property(
+        &self,
+        source: &str,
+        file_uri: &str,
+        property_path: &str,
+        dependency_cache: Arc<DependencyCache>,
+    ) -> Option<Location> {
+        // Check if it contains a class path (nested case)
+        if let Some(last_dot) = property_path.rfind('.') {
+            let class_path = &property_path[..last_dot];
+            let property_name = &property_path[last_dot + 1..];
+            
+            // Find the containing type first
+            if let Some(type_location) = self.find_type(source, file_uri, class_path, dependency_cache) {
+                // Load the type's file
+                if let Some(type_tree) = crate::core::utils::uri_to_tree(&type_location.uri.to_string()) {
+                    if let Ok(type_source) = std::fs::read_to_string(
+                        crate::core::utils::uri_to_path(&type_location.uri.to_string())?
+                    ) {
+                        // Find the property within the type
+                        return self.find_property_in_tree(&type_tree, &type_source, property_name, &type_location.uri.to_string());
+                    }
+                }
+            }
+        } else {
+            // Non-nested: search in current file or through imports
+            if let Some(tree) = crate::core::utils::uri_to_tree(file_uri) {
+                return self.find_property_in_tree(&tree, source, property_path, file_uri);
+            } else {
+                // Fallback: try parsing the source directly (useful for tests)
+                let mut parser = self.create_parser();
+                if let Some(tree) = parser.parse(source, None) {
+                    return self.find_property_in_tree(&tree, source, property_path, file_uri);
+                }
+            }
+        }
+        None
+    }
+
+    /// Helper: Multi-level search for types (project -> workspace -> external)
+    fn find_type_with_multi_level_search(
+        &self,
+        source: &str,
+        file_uri: &str,
+        type_name: &str,
+        dependency_cache: Arc<DependencyCache>,
+    ) -> Option<Location> {
+        let project_root = crate::core::utils::uri_to_path(file_uri)
+            .and_then(|path| crate::core::utils::find_project_root(&path))?;
+
+        // Try to resolve the type's fully qualified name first
+        if let Some(fqn) = self.resolve_type_fqn(type_name, source, &dependency_cache) {
+            // We have a resolved FQN, try exact lookup
+            if let Some(location) = self.find_type_by_fqn(&fqn, &project_root, dependency_cache.clone()) {
+                return Some(location);
+            }
+        }
+
+        // If FQN resolution failed or exact lookup failed, try fuzzy search
+        // This handles cases where imports don't resolve but the symbol exists in workspace
+        if let Some(location) = self.find_type_by_simple_name(type_name, &project_root, dependency_cache) {
+            return Some(location);
+        }
+
+        None
+    }
+
+    /// Helper: Find type by exact FQN
+    fn find_type_by_fqn(
+        &self,
+        fqn: &str,
+        project_root: &std::path::PathBuf,
+        dependency_cache: Arc<DependencyCache>,
+    ) -> Option<Location> {
+        // Level 1: Try current project
+        if let Some(path) = dependency_cache.find_symbol_sync(project_root, fqn) {
+            let target_uri = crate::core::utils::path_to_file_uri(&path)?;
+            if let Some(tree) = crate::core::utils::uri_to_tree(&target_uri) {
+                if let Ok(target_source) = std::fs::read_to_string(&path) {
+                    let simple_name = fqn.split('.').last().unwrap_or(fqn);
+                    return self.find_type_in_tree(&tree, &target_source, simple_name, &target_uri);
+                }
+            }
+        }
+
+        // Level 2: Try workspace (other projects)
+        for entry in dependency_cache.symbol_index.iter() {
+            let ((other_project_root, _), _) = (entry.key(), entry.value());
+            if other_project_root != project_root {
+                if let Some(path) = dependency_cache.find_symbol_sync(other_project_root, fqn) {
+                    let target_uri = crate::core::utils::path_to_file_uri(&path)?;
+                    if let Some(tree) = crate::core::utils::uri_to_tree(&target_uri) {
+                        if let Ok(target_source) = std::fs::read_to_string(&path) {
+                            let simple_name = fqn.split('.').last().unwrap_or(fqn);
+                            return self.find_type_in_tree(&tree, &target_source, simple_name, &target_uri);
+                        }
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Helper: Find type by simple name (fuzzy search)
+    fn find_type_by_simple_name(
+        &self,
+        type_name: &str,
+        project_root: &std::path::PathBuf,
+        dependency_cache: Arc<DependencyCache>,
+    ) -> Option<Location> {
+        // Search through all symbols in the workspace for ones ending with the type name
+        for entry in dependency_cache.symbol_index.iter() {
+            let ((_, fqn), path) = (entry.key(), entry.value());
+            
+            // Check if this FQN ends with our type name (e.g., "com.example.Constants" ends with "Constants")
+            if fqn.ends_with(&format!(".{}", type_name)) || fqn == type_name {
+                let target_uri = crate::core::utils::path_to_file_uri(path)?;
+                if let Some(tree) = crate::core::utils::uri_to_tree(&target_uri) {
+                    if let Ok(target_source) = std::fs::read_to_string(path) {
+                        return self.find_type_in_tree(&tree, &target_source, type_name, &target_uri);
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Language-specific: Resolve a type name to its fully qualified name
+    fn resolve_type_fqn(&self, type_name: &str, source: &str, dependency_cache: &Arc<DependencyCache>) -> Option<String>;
+
+    /// Language-specific: Find a type (class/interface/enum) within a tree
+    fn find_type_in_tree(&self, tree: &Tree, source: &str, type_name: &str, file_uri: &str) -> Option<Location>;
+
+    /// Language-specific: Find a method within a tree
+    fn find_method_in_tree(&self, tree: &Tree, source: &str, method_name: &str, file_uri: &str) -> Option<Location>;
+
+    /// Language-specific: Find a property/field within a tree
+    fn find_property_in_tree(&self, tree: &Tree, source: &str, property_name: &str, file_uri: &str) -> Option<Location>;
 
 }
 
@@ -288,7 +515,7 @@ mod tests {
             _tree: &'a Tree,
             _source: &str,
             _method_name: &str,
-            _call_signature: &crate::languages::common::method_resolution::CallSignature,
+            _call_signature: &crate::languages::common::definition_chain::CallSignature,
         ) -> Option<tree_sitter::Node<'a>> {
             None
         }
@@ -387,6 +614,22 @@ mod tests {
             _usage_node: &Node,
             file_uri: &str,
         ) -> Option<Location> {
+            Some(self.create_mock_location(file_uri))
+        }
+
+        fn resolve_type_fqn(&self, _type_name: &str, _source: &str, _dependency_cache: &Arc<DependencyCache>) -> Option<String> {
+            None
+        }
+
+        fn find_type_in_tree(&self, _tree: &Tree, _source: &str, _type_name: &str, file_uri: &str) -> Option<Location> {
+            Some(self.create_mock_location(file_uri))
+        }
+
+        fn find_method_in_tree(&self, _tree: &Tree, _source: &str, _method_name: &str, file_uri: &str) -> Option<Location> {
+            Some(self.create_mock_location(file_uri))
+        }
+
+        fn find_property_in_tree(&self, _tree: &Tree, _source: &str, _property_name: &str, file_uri: &str) -> Option<Location> {
             Some(self.create_mock_location(file_uri))
         }
     }

@@ -161,7 +161,7 @@ pub fn search_definition_in_project_cross_language(
     let target_language_support = get_language_support_for_file(&target_file_path)?;
 
     // Dispatch to the appropriate language's search function
-    match target_language {
+    let result = match target_language {
         "groovy" => groovy_search_definition_in_project(
             current_file_uri,
             current_source,
@@ -203,7 +203,9 @@ pub fn search_definition_in_project_cross_language(
                 _ => None,
             }
         }
-    }
+    };
+    
+    result
 }
 
 #[tracing::instrument(skip_all)]

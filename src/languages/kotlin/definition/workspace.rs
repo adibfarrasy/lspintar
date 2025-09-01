@@ -10,13 +10,35 @@ use crate::{
 
 use super::utils::{resolve_symbol_with_imports, search_definition, extract_imports_from_source};
 
-pub fn find_in_workspace(
+pub async fn find_in_workspace(
     source: &str,
     file_uri: &str,
     usage_node: &Node<'_>,
     dependency_cache: Arc<DependencyCache>,
-    _language_support: &dyn LanguageSupport,
+    language_support: &dyn LanguageSupport,
 ) -> Option<Location> {
+    let symbol_text = usage_node.utf8_text(source.as_bytes()).unwrap_or("");
+    
+    // FIRST: Check for nested enum access patterns (same as find_in_project)
+    if let Some(parent) = usage_node.parent() {
+        if parent.kind() == "navigation_expression" {
+            if let Some(enum_type_node) = parent.child(0) {
+                if let Some(enum_type_name) = super::project::resolve_nested_enum_type(source, &enum_type_node) {
+                    if enum_type_name.contains('.') {
+                        return super::project::find_nested_enum_using_regular_resolution(
+                            source,
+                            file_uri,
+                            &enum_type_name,
+                            symbol_text,
+                            dependency_cache.clone(),
+                            language_support,
+                        ).await;
+                    }
+                }
+            }
+        }
+    }
+
     let symbol_name = usage_node.utf8_text(source.as_bytes()).ok()?.to_string();
     let _current_project = uri_to_path(file_uri).and_then(|path| find_project_root(&path))?;
     

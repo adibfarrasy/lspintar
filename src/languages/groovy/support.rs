@@ -8,10 +8,7 @@ use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator, Tree};
 
 use crate::constants::LSP_NAME;
 use crate::core::queries::QueryProvider;
-use crate::core::{
-    dependency_cache::DependencyCache,
-    symbols::SymbolType,
-};
+use crate::core::{dependency_cache::DependencyCache, symbols::SymbolType};
 use crate::languages::groovy::definition::utils::get_wildcard_imports_from_source;
 use crate::languages::traits::LanguageSupport;
 
@@ -36,9 +33,14 @@ impl GroovySupport {
     /// This is a heuristic approach that checks common enum naming patterns
     fn is_enum_constant_access(&self, field_node: &Node, source: &str, tree: &Tree) -> bool {
         // Find the parent field_access node
-        let field_access = field_node.parent()
-            .and_then(|p| if p.kind() == "field_access" { Some(p) } else { None });
-        
+        let field_access = field_node.parent().and_then(|p| {
+            if p.kind() == "field_access" {
+                Some(p)
+            } else {
+                None
+            }
+        });
+
         if let Some(field_access_node) = field_access {
             // Get the object part of the field access (e.g., "ResponseEnum" in "ResponseEnum.ILLEGAL_PRODUCTS")
             if let Some(object_node) = field_access_node.child_by_field_name("object") {
@@ -47,18 +49,20 @@ impl GroovySupport {
                     if self.is_enum_type_in_tree(object_name, tree, source) {
                         return true;
                     }
-                    
+
                     // Heuristic: if the object name ends with "Enum" or contains "Enum",
                     // and the field name is ALL_CAPS, it's likely an enum constant
                     if let Ok(field_name) = field_node.utf8_text(source.as_bytes()) {
-                        let looks_like_enum_type = object_name.contains("Enum") || 
-                                                 object_name.ends_with("Status") ||
-                                                 object_name.ends_with("Type") ||
-                                                 object_name.ends_with("Mode") ||
-                                                 object_name.ends_with("State");
-                        
-                        let looks_like_enum_constant = field_name.chars().all(|c| c.is_uppercase() || c == '_' || c.is_ascii_digit());
-                        
+                        let looks_like_enum_type = object_name.contains("Enum")
+                            || object_name.ends_with("Status")
+                            || object_name.ends_with("Type")
+                            || object_name.ends_with("Mode")
+                            || object_name.ends_with("State");
+
+                        let looks_like_enum_constant = field_name
+                            .chars()
+                            .all(|c| c.is_uppercase() || c == '_' || c.is_ascii_digit());
+
                         if looks_like_enum_type && looks_like_enum_constant {
                             return true;
                         }
@@ -72,11 +76,11 @@ impl GroovySupport {
     /// Check if a given type name is an enum declaration in the current tree
     fn is_enum_type_in_tree(&self, type_name: &str, tree: &Tree, source: &str) -> bool {
         let query_text = r#"(enum_declaration name: (identifier) @enum_name)"#;
-        
+
         if let Ok(query) = Query::new(&tree_sitter_groovy::language(), query_text) {
             let mut cursor = QueryCursor::new();
             let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
-            
+
             while let Some(query_match) = matches.next() {
                 for capture in query_match.captures {
                     if let Ok(enum_name) = capture.node.utf8_text(source.as_bytes()) {
@@ -89,23 +93,15 @@ impl GroovySupport {
         }
         false
     }
-
-
-
 }
 
 impl QueryProvider for GroovySupport {
-
     fn method_declaration_queries(&self) -> &[&'static str] {
         &[
             r#"(method_declaration) @method"#,
             r#"(constructor_declaration) @constructor"#,
         ]
     }
-
-
-
-
 
     fn symbol_type_detection_query(&self) -> &'static str {
         r#"
@@ -143,7 +139,6 @@ impl QueryProvider for GroovySupport {
     fn import_queries(&self) -> &[&'static str] {
         &[r#"(import_declaration) @import"#]
     }
-
 }
 
 impl LanguageSupport for GroovySupport {
@@ -360,7 +355,7 @@ impl LanguageSupport for GroovySupport {
                                 } else {
                                     SymbolType::FieldUsage
                                 }
-                            },
+                            }
                             "var_usage" => SymbolType::VariableUsage,
                             "potential_field_usage" => {
                                 if capture_text
@@ -425,7 +420,15 @@ impl LanguageSupport for GroovySupport {
         usage_node: &Node,
         dependency_cache: Arc<DependencyCache>,
     ) -> Option<Location> {
-        find_in_workspace(source, file_uri, usage_node, dependency_cache, self)
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(find_in_workspace(
+                source,
+                file_uri,
+                usage_node,
+                dependency_cache,
+                self,
+            ))
+        })
     }
 
     fn find_external(
@@ -462,8 +465,7 @@ impl LanguageSupport for GroovySupport {
         file_uri: &str,
         usage_node: &Node,
     ) -> Result<Location> {
-        // Use the common method resolution logic that handles static/instance method calls
-        crate::languages::common::method_resolution::find_definition_chain_with_method_resolution(
+        crate::languages::common::definition_chain::find_definition_chain(
             self,
             tree,
             source,
@@ -472,7 +474,6 @@ impl LanguageSupport for GroovySupport {
             usage_node,
         )
     }
-
 
     fn find_instance_method_definition(
         &self,
@@ -495,7 +496,7 @@ impl LanguageSupport for GroovySupport {
         if let Some(_var_type) = variable_type {
             // Use the common method resolution to find the method in the type's class
             if let Some(location) =
-                crate::languages::common::method_resolution::find_instance_method_definition(
+                crate::languages::common::definition_chain::find_instance_method_definition(
                     self,
                     tree,
                     source,
@@ -518,10 +519,10 @@ impl LanguageSupport for GroovySupport {
         tree: &'a Tree,
         source: &str,
         _method_name: &str,
-        call_signature: &crate::languages::common::method_resolution::CallSignature,
+        call_signature: &crate::languages::common::definition_chain::CallSignature,
     ) -> Option<tree_sitter::Node<'a>> {
         let result =
-            crate::languages::groovy::definition::method_resolution::find_method_with_signature(
+            crate::languages::groovy::definition::definition_chain::find_method_with_signature(
                 tree,
                 source,
                 _method_name,
@@ -578,7 +579,6 @@ impl LanguageSupport for GroovySupport {
         let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
 
         while let Some(query_match) = matches.next() {
-
             let mut found_field_name = false;
             let mut field_type = None;
 
@@ -702,10 +702,135 @@ impl LanguageSupport for GroovySupport {
 
         None
     }
+
+    fn resolve_type_fqn(
+        &self,
+        type_name: &str,
+        source: &str,
+        dependency_cache: &Arc<DependencyCache>,
+    ) -> Option<String> {
+        // Try to resolve through imports first
+        if let Some(resolved_fqn) = super::definition::utils::resolve_symbol_with_imports(
+            type_name,
+            source,
+            dependency_cache,
+        ) {
+            return Some(resolved_fqn);
+        }
+
+        // Fallback to current package + type name
+        if let Some(package) = super::definition::project::extract_package_from_source(source) {
+            if !package.is_empty() {
+                Some(format!("{}.{}", package, type_name))
+            } else {
+                Some(type_name.to_string())
+            }
+        } else {
+            Some(type_name.to_string())
+        }
+    }
+
+    fn find_type_in_tree(
+        &self,
+        tree: &Tree,
+        source: &str,
+        type_name: &str,
+        file_uri: &str,
+    ) -> Option<Location> {
+        use super::definition::utils::get_or_create_query;
+        use tree_sitter::{QueryCursor, StreamingIterator};
+
+        // Groovy type queries covering classes, interfaces, enums, and annotation types
+        let type_query_text = r#"
+            (class_declaration name: (identifier) @type_name)
+            (interface_declaration name: (identifier) @type_name)
+            (enum_declaration name: (identifier) @type_name)
+            (annotation_type_declaration name: (identifier) @type_name)
+        "#;
+        let type_query = get_or_create_query(type_query_text, &tree_sitter_groovy::language())?;
+
+        let mut cursor = QueryCursor::new();
+        let mut matches = cursor.matches(&type_query, tree.root_node(), source.as_bytes());
+
+        while let Some(query_match) = matches.next() {
+            for capture in query_match.captures {
+                if let Ok(captured_name) = capture.node.utf8_text(source.as_bytes()) {
+                    if captured_name == type_name {
+                        return crate::core::utils::node_to_lsp_location(&capture.node, file_uri);
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    fn find_method_in_tree(
+        &self,
+        tree: &Tree,
+        source: &str,
+        method_name: &str,
+        file_uri: &str,
+    ) -> Option<Location> {
+        use super::definition::utils::get_or_create_query;
+        use tree_sitter::{QueryCursor, StreamingIterator};
+
+        let method_query_text = r#"
+            (method_declaration name: (identifier) @method_name)
+            (constructor_declaration name: (identifier) @method_name)
+        "#;
+        let method_query = get_or_create_query(method_query_text, &tree_sitter_groovy::language())?;
+
+        let mut cursor = QueryCursor::new();
+        let mut matches = cursor.matches(&method_query, tree.root_node(), source.as_bytes());
+
+        while let Some(query_match) = matches.next() {
+            for capture in query_match.captures {
+                if let Ok(captured_name) = capture.node.utf8_text(source.as_bytes()) {
+                    if captured_name == method_name {
+                        return crate::core::utils::node_to_lsp_location(&capture.node, file_uri);
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    fn find_property_in_tree(
+        &self,
+        tree: &Tree,
+        source: &str,
+        property_name: &str,
+        file_uri: &str,
+    ) -> Option<Location> {
+        use super::definition::utils::get_or_create_query;
+        use tree_sitter::{QueryCursor, StreamingIterator};
+
+        let property_query_text = r#"
+            (field_declaration declarator: (variable_declarator name: (identifier) @property_name))
+        "#;
+        let property_query =
+            get_or_create_query(property_query_text, &tree_sitter_groovy::language())?;
+
+        let mut cursor = QueryCursor::new();
+        let mut matches = cursor.matches(&property_query, tree.root_node(), source.as_bytes());
+
+        while let Some(query_match) = matches.next() {
+            for capture in query_match.captures {
+                if let Ok(captured_name) = capture.node.utf8_text(source.as_bytes()) {
+                    if captured_name == property_name {
+                        return crate::core::utils::node_to_lsp_location(&capture.node, file_uri);
+                    }
+                }
+            }
+        }
+
+        None
+    }
 }
 
 impl GroovySupport {
-
     /// Check if an identifier is an imported class name
     fn is_imported_class(&self, class_name: &str, source: &str) -> bool {
         if self.has_specific_import(class_name, source) {
@@ -783,12 +908,6 @@ impl GroovySupport {
         }
         false
     }
-
-
-
-
-
-
 }
 
 impl Default for GroovySupport {

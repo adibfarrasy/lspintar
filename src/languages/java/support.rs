@@ -318,7 +318,12 @@ impl LanguageSupport for JavaSupport {
         (method_invocation 
           name: (identifier) @simple_method_name)
 
-        ; Field access
+        ; Static field access (Type.FIELD) - object is a type
+        (field_access 
+          object: (identifier) @type_usage_in_field_access
+          field: (identifier) @field_usage)
+        
+        ; Regular field access (object.field)  
         (field_access field: (identifier) @field_usage)
 
         ; Method usage in various contexts
@@ -396,6 +401,7 @@ impl LanguageSupport for JavaSupport {
             "simple_method_name",
             "method_usage",
             "method_reference",
+            "type_usage_in_field_access", // High priority for Type.FIELD patterns
             "type_name",
             "super_interface",
             "super_class",
@@ -432,6 +438,7 @@ impl LanguageSupport for JavaSupport {
                 "simple_method_name" => SymbolType::MethodCall,
                 "method_usage" => SymbolType::MethodCall,
                 "method_reference" => SymbolType::MethodCall,
+                "type_usage_in_field_access" => SymbolType::Type,
                 "type_name" => SymbolType::Type,
                 "super_interface" => SymbolType::SuperInterface,
                 "super_class" => SymbolType::SuperClass,
@@ -499,7 +506,11 @@ impl LanguageSupport for JavaSupport {
         usage_node: &Node,
         dependency_cache: Arc<DependencyCache>,
     ) -> Option<Location> {
-        workspace::find_in_workspace(source, file_uri, usage_node, dependency_cache, self)
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(workspace::find_in_workspace(
+                source, file_uri, usage_node, dependency_cache, self,
+            ))
+        })
     }
 
     fn find_external(
@@ -534,15 +545,15 @@ impl LanguageSupport for JavaSupport {
         tree: &'a Tree,
         source: &str,
         method_name: &str,
-        call_signature: &crate::languages::common::method_resolution::CallSignature,
+        call_signature: &crate::languages::common::definition_chain::CallSignature,
     ) -> Option<tree_sitter::Node<'a>> {
         // Convert the common CallSignature to Java's CallSignature
-        let java_call_sig = crate::languages::java::definition::method_resolution::CallSignature {
+        let java_call_sig = crate::languages::java::definition::definition_chain::CallSignature {
             arg_count: call_signature.arg_count,
             arg_types: call_signature.arg_types.clone(),
         };
 
-        crate::languages::java::definition::method_resolution::find_method_with_signature(
+        crate::languages::java::definition::definition_chain::find_method_with_signature(
             tree,
             source,
             method_name,
@@ -742,7 +753,7 @@ impl LanguageSupport for JavaSupport {
         if let Some(_var_type) = variable_type {
             // Use the common method resolution to find the method in the type's class
             if let Some(location) =
-                crate::languages::common::method_resolution::find_instance_method_definition(
+                crate::languages::common::definition_chain::find_instance_method_definition(
                     self,
                     tree,
                     source,
@@ -769,7 +780,7 @@ impl LanguageSupport for JavaSupport {
         usage_node: &Node,
     ) -> Result<Location> {
         // Use the common method resolution logic that handles static/instance method calls with cross-language support
-        crate::languages::common::method_resolution::find_definition_chain_with_method_resolution(
+        crate::languages::common::definition_chain::find_definition_chain(
             self,
             tree,
             source,
@@ -777,6 +788,102 @@ impl LanguageSupport for JavaSupport {
             file_uri,
             usage_node,
         )
+    }
+
+    fn resolve_type_fqn(&self, type_name: &str, source: &str, dependency_cache: &Arc<DependencyCache>) -> Option<String> {
+        // Try to resolve through imports first
+        if let Some(resolved_fqn) = super::definition::utils::resolve_symbol_with_imports(type_name, source, dependency_cache) {
+            return Some(resolved_fqn);
+        }
+        
+        // Fallback to current package + type name
+        if let Some(package) = super::definition::project::extract_package_from_source(source) {
+            if !package.is_empty() {
+                Some(format!("{}.{}", package, type_name))
+            } else {
+                Some(type_name.to_string())
+            }
+        } else {
+            Some(type_name.to_string())
+        }
+    }
+
+    fn find_type_in_tree(&self, tree: &Tree, source: &str, type_name: &str, file_uri: &str) -> Option<Location> {
+        use super::definition::utils::get_or_create_query;
+        use tree_sitter::{QueryCursor, StreamingIterator};
+        
+        // Java type queries covering classes, interfaces, enums, and annotation types
+        let type_query_text = r#"
+            (class_declaration name: (identifier) @type_name)
+            (interface_declaration name: (identifier) @type_name)
+            (enum_declaration name: (identifier) @type_name)
+            (annotation_type_declaration name: (identifier) @type_name)
+        "#;
+        let type_query = get_or_create_query(type_query_text).ok()?;
+        
+        let mut cursor = QueryCursor::new();
+        let mut matches = cursor.matches(&type_query, tree.root_node(), source.as_bytes());
+        
+        while let Some(query_match) = matches.next() {
+            for capture in query_match.captures {
+                if let Ok(captured_name) = capture.node.utf8_text(source.as_bytes()) {
+                    if captured_name == type_name {
+                        return crate::core::utils::node_to_lsp_location(&capture.node, file_uri);
+                    }
+                }
+            }
+        }
+        
+        None
+    }
+
+    fn find_method_in_tree(&self, tree: &Tree, source: &str, method_name: &str, file_uri: &str) -> Option<Location> {
+        use super::definition::utils::get_or_create_query;
+        use tree_sitter::{QueryCursor, StreamingIterator};
+        
+        let method_query_text = r#"
+            (method_declaration name: (identifier) @method_name)
+            (constructor_declaration name: (identifier) @method_name)
+        "#;
+        let method_query = get_or_create_query(method_query_text).ok()?;
+
+        let mut cursor = QueryCursor::new();
+        let mut matches = cursor.matches(&method_query, tree.root_node(), source.as_bytes());
+
+        while let Some(query_match) = matches.next() {
+            for capture in query_match.captures {
+                if let Ok(captured_name) = capture.node.utf8_text(source.as_bytes()) {
+                    if captured_name == method_name {
+                        return crate::core::utils::node_to_lsp_location(&capture.node, file_uri);
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    fn find_property_in_tree(&self, tree: &Tree, source: &str, property_name: &str, file_uri: &str) -> Option<Location> {
+        use super::definition::utils::get_or_create_query;
+        use tree_sitter::{QueryCursor, StreamingIterator};
+
+        let property_query_text = r#"(field_declaration declarator: (variable_declarator name: (identifier) @property_name))"#;
+        let property_query = get_or_create_query(property_query_text).ok()?;
+
+        let mut cursor = QueryCursor::new();
+        let mut matches = cursor.matches(&property_query, tree.root_node(), source.as_bytes());
+
+        while let Some(query_match) = matches.next() {
+            for capture in query_match.captures {
+                if let Ok(captured_name) = capture.node.utf8_text(source.as_bytes()) {
+                    if captured_name == property_name {
+                        return crate::core::utils::node_to_lsp_location(&capture.node, file_uri);
+                    }
+                }
+            }
+        }
+
+        None
     }
 }
 

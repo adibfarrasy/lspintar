@@ -6,7 +6,7 @@ use crate::{
     languages::LanguageSupport,
 };
 
-use super::method_resolution::{
+use super::definition_chain::{
     calculate_signature_match_score, extract_call_signature_from_context, extract_method_signature,
     find_method_with_signature, CallSignature,
 };

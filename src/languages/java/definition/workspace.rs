@@ -2,6 +2,7 @@ use std::{collections::HashSet, path::PathBuf, sync::Arc};
 
 use tower_lsp::lsp_types::Location;
 use tree_sitter::Node;
+use tracing::debug;
 
 use crate::{
     core::{
@@ -20,13 +21,35 @@ use super::utils::{
 };
 
 #[tracing::instrument(skip_all)]
-pub fn find_in_workspace(
+pub async fn find_in_workspace(
     source: &str,
     file_uri: &str,
-    usage_node: &Node,
+    usage_node: &Node<'_>,
     dependency_cache: Arc<DependencyCache>,
     language_support: &dyn LanguageSupport,
 ) -> Option<Location> {
+    let symbol_text = usage_node.utf8_text(source.as_bytes()).unwrap_or("");
+    
+    // FIRST: Check for nested enum access patterns (same as find_in_project)
+    if let Some(parent) = usage_node.parent() {
+        if parent.kind() == "field_access" {
+            if let Some(enum_type_node) = parent.child_by_field_name("object") {
+                if let Some(enum_type_name) = super::project::resolve_nested_type(source, &enum_type_node) {
+                    if enum_type_name.contains('.') {
+                        return super::project::find_nested_enum_using_regular_resolution(
+                            source,
+                            file_uri,
+                            &enum_type_name,
+                            symbol_text,
+                            dependency_cache.clone(),
+                            language_support,
+                        ).await;
+                    }
+                }
+            }
+        }
+    }
+
     let current_project = uri_to_path(file_uri).and_then(|path| find_project_root(&path))?;
 
     find_in_project_dependencies(
@@ -64,6 +87,7 @@ fn find_in_project_dependencies(
         None,
         &dependency_cache,
     )?;
+    
 
 
     // Extract imports to look for fully qualified names
@@ -77,22 +101,24 @@ fn find_in_project_dependencies(
             search_keys.push(import.clone());
         }
     }
-
-
+    
     // Get all projects in the workspace except the current one
     let mut checked_projects = HashSet::new();
     checked_projects.insert(current_project.clone());
 
-    // Search in other projects in the workspace
-    for entry in dependency_cache.symbol_index.iter() {
-        let ((project_root, _), _file_path) = (entry.key(), entry.value());
-
-        if !checked_projects.contains(project_root) {
-            checked_projects.insert(project_root.clone());
+    // Search using project metadata dependencies
+    if let Some(project_metadata) = dependency_cache.project_metadata.get(current_project) {
+        for dependent_project_ref in project_metadata.inter_project_deps.iter() {
+            let dependent_project = dependent_project_ref.clone();
 
             // Try each search key (simple name + fully qualified imports)
             for search_key in &search_keys {
-                let project_symbol_key = (project_root.clone(), search_key.clone());
+                let project_symbol_key = (dependent_project.clone(), search_key.clone());
+                
+                debug!(
+                    "LSPINTAR_DEBUG: searching for ({:?}, '{}') in dependency_cache", 
+                    project_symbol_key.0, project_symbol_key.1
+                );
 
                 let target_file_opt = tokio::task::block_in_place(|| {
                     tokio::runtime::Handle::current().block_on(
@@ -101,6 +127,10 @@ fn find_in_project_dependencies(
                 });
 
                 if let Some(target_file) = target_file_opt {
+                    debug!(
+                        "LSPINTAR_DEBUG: FOUND! target_file = {:?}", 
+                        target_file
+                    );
 
                     let target_uri = match path_to_file_uri(&target_file) {
                         Some(uri) => {
@@ -111,7 +141,6 @@ fn find_in_project_dependencies(
                         }
                     };
 
-
                     // Use the centralized cross-language dispatcher
                     if let Some(location) = search_definition_in_project_cross_language(
                         file_uri,
@@ -120,13 +149,30 @@ fn find_in_project_dependencies(
                         &target_uri,
                         language_support,
                     ) {
+                        debug!(
+                            "LSPINTAR_DEBUG: SUCCESSFULLY found definition at {:?}",
+                            location
+                        );
                         return Some(location);
                     } else {
+                        debug!(
+                            "LSPINTAR_DEBUG: cross-language search FAILED for target_uri = {}",
+                            target_uri
+                        );
                     }
                 } else {
+                    debug!(
+                        "LSPINTAR_DEBUG: NOT FOUND - ({:?}, '{}')", 
+                        project_symbol_key.0, project_symbol_key.1
+                    );
                 }
             }
         }
+    } else {
+        debug!(
+            "LSPINTAR_DEBUG: no project_metadata found for {:?}", 
+            current_project
+        );
     }
 
     None

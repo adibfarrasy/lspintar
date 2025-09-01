@@ -181,7 +181,7 @@ mod tests {
             _tree: &'a tree_sitter::Tree,
             _source: &str,
             _method_name: &str,
-            _call_signature: &crate::languages::common::method_resolution::CallSignature,
+            _call_signature: &crate::languages::common::definition_chain::CallSignature,
         ) -> Option<tree_sitter::Node<'a>> {
             None
         }
@@ -204,6 +204,22 @@ mod tests {
             _usage_node: &tree_sitter::Node,
             _file_uri: &str,
         ) -> Option<tower_lsp::lsp_types::Location> {
+            None
+        }
+
+        fn resolve_type_fqn(&self, _type_name: &str, _source: &str, _dependency_cache: &std::sync::Arc<crate::core::dependency_cache::DependencyCache>) -> Option<String> {
+            None
+        }
+
+        fn find_type_in_tree(&self, _tree: &tree_sitter::Tree, _source: &str, _type_name: &str, _file_uri: &str) -> Option<tower_lsp::lsp_types::Location> {
+            None
+        }
+
+        fn find_method_in_tree(&self, _tree: &tree_sitter::Tree, _source: &str, _method_name: &str, _file_uri: &str) -> Option<tower_lsp::lsp_types::Location> {
+            None
+        }
+
+        fn find_property_in_tree(&self, _tree: &tree_sitter::Tree, _source: &str, _property_name: &str, _file_uri: &str) -> Option<tower_lsp::lsp_types::Location> {
             None
         }
     }

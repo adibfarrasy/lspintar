@@ -372,7 +372,11 @@ impl LanguageSupport for KotlinSupport {
         usage_node: &Node,
         dependency_cache: Arc<DependencyCache>,
     ) -> Option<Location> {
-        workspace::find_in_workspace(source, file_uri, usage_node, dependency_cache, self)
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(workspace::find_in_workspace(
+                source, file_uri, usage_node, dependency_cache, self,
+            ))
+        })
     }
 
     fn find_external(
@@ -406,14 +410,14 @@ impl LanguageSupport for KotlinSupport {
         tree: &'a Tree,
         source: &str,
         method_name: &str,
-        call_signature: &crate::languages::common::method_resolution::CallSignature,
+        call_signature: &crate::languages::common::definition_chain::CallSignature,
     ) -> Option<tree_sitter::Node<'a>> {
         // Convert the common CallSignature to Kotlin's CallSignature
-        let kotlin_call_sig = crate::languages::kotlin::definition::method_resolution::CallSignature {
+        let kotlin_call_sig = crate::languages::kotlin::definition::definition_chain::CallSignature {
             parameter_count: call_signature.arg_count,
         };
         
-        crate::languages::kotlin::definition::method_resolution::find_method_with_signature(
+        crate::languages::kotlin::definition::definition_chain::find_method_with_signature(
             tree, source, method_name, &kotlin_call_sig
         )
     }
@@ -427,7 +431,7 @@ impl LanguageSupport for KotlinSupport {
         usage_node: &Node,
     ) -> Result<Location> {
         // Use the common method resolution logic that handles static/instance method calls
-        crate::languages::common::method_resolution::find_definition_chain_with_method_resolution(
+        crate::languages::common::definition_chain::find_definition_chain(
             self, tree, source, dependency_cache, file_uri, usage_node
         )
     }
@@ -501,59 +505,122 @@ impl LanguageSupport for KotlinSupport {
         usage_node: &Node,
         source: &str,
     ) -> Option<(String, String)> {
-        // Kotlin-specific: handle companion object calls and static imports
-        
-        // Find parent navigation_expression
-        let mut current = Some(*usage_node);
-        let mut nav_expr = None;
+        // Find parent call_expression with navigation_expression
+        let mut current = usage_node.parent();
         
         while let Some(node) = current {
-            if node.kind() == "navigation_expression" {
-                nav_expr = Some(node);
-                break;
-            }
             if node.kind() == "call_expression" {
-                // Check if it has a navigation_expression child
+                // Check if this call has a navigation_expression child
                 for i in 0..node.child_count() {
-                    if let Some(child) = node.child(i) {
-                        if child.kind() == "navigation_expression" {
-                            nav_expr = Some(child);
-                            break;
-                        }
-                    }
-                }
-                break;
-            }
-            current = node.parent();
-        }
-        
-        if let Some(nav_node) = nav_expr {
-            if let (Some(object_node), Some(nav_suffix)) = (nav_node.child(0), nav_node.child(1)) {
-                if nav_suffix.kind() == "navigation_suffix" {
-                    // Find the simple_identifier child (not the '.' token)
-                    let method_node = (0..nav_suffix.child_count())
-                        .filter_map(|i| nav_suffix.child(i))
-                        .find(|child| child.kind() == "simple_identifier");
-                    
-                    if let Some(method_node) = method_node {
-                        let class_name = object_node.utf8_text(source.as_bytes()).ok()?.to_string();
-                        let method_name = method_node.utf8_text(source.as_bytes()).ok()?.to_string();
-                        let usage_text = usage_node.utf8_text(source.as_bytes()).ok()?.to_string();
-                        
-                        // Only handle static calls (class names start with uppercase)
-                        if class_name.chars().next().map_or(false, |c| c.is_uppercase()) {
-                            if usage_text == method_name {
-                                // Go-to-definition on method name - return method context
-                                return Some((class_name, method_name));
-                            } else if usage_text == class_name {
-                                // Go-to-definition on class name - return None so it goes to class definition
-                                return None;
+                    if let Some(nav_expr) = node.child(i) {
+                        if nav_expr.kind() == "navigation_expression" {
+                            // Extract class and method from navigation_expression
+                            if let (Some(object_node), Some(nav_suffix)) = (nav_expr.child(0), nav_expr.child(1)) {
+                                if nav_suffix.kind() == "navigation_suffix" {
+                                    // Find the simple_identifier in nav_suffix
+                                    let method_node = (0..nav_suffix.child_count())
+                                        .filter_map(|i| nav_suffix.child(i))
+                                        .find(|child| child.kind() == "simple_identifier");
+                                    
+                                    if let Some(method_node) = method_node {
+                                        let class_name = object_node.utf8_text(source.as_bytes()).ok()?.to_string();
+                                        let method_name = method_node.utf8_text(source.as_bytes()).ok()?.to_string();
+                                        let usage_text = usage_node.utf8_text(source.as_bytes()).ok()?.to_string();
+                                        
+                                        // Only handle static calls (class names start with uppercase)
+                                        if class_name.chars().next().map_or(false, |c| c.is_uppercase()) {
+                                            if usage_text == method_name {
+                                                return Some((class_name, method_name));
+                                            } else if usage_text == class_name {
+                                                return None; // Go to class definition instead
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
                 }
+                break; // Found call_expression, stop looking
             }
+            current = node.parent();
         }
+        None
+    }
+
+    fn extract_instance_field_context(
+        &self,
+        usage_node: &Node,
+        source: &str,
+    ) -> Option<(String, String)> {
+        let usage_text = usage_node.utf8_text(source.as_bytes()).unwrap_or("");
+        
+        // Find parent navigation_expression or directly_assignable_expression
+        let mut current = usage_node.parent();
+        
+        while let Some(node) = current {
+            if node.kind() == "navigation_expression" {
+                // Extract object and field from navigation_expression
+                if let (Some(object_node), Some(nav_suffix)) = (node.child(0), node.child(1)) {
+                    if nav_suffix.kind() == "navigation_suffix" {
+                        // Find the simple_identifier in nav_suffix
+                        let field_node = (0..nav_suffix.child_count())
+                            .filter_map(|i| nav_suffix.child(i))
+                            .find(|child| child.kind() == "simple_identifier");
+                        
+                        if let Some(field_node) = field_node {
+                            let variable_name = object_node.utf8_text(source.as_bytes()).ok()?.to_string();
+                            let field_name = field_node.utf8_text(source.as_bytes()).ok()?.to_string();
+                            
+                            // Check if this is an instance field access (variable starts with lowercase)
+                            if variable_name.chars().next().map_or(false, |c| c.is_lowercase()) {
+                                // Only return context if user clicked on the field name
+                                if usage_text == field_name {
+                                    return Some((variable_name, field_name));
+                                } else if usage_text == variable_name {
+                                    // User clicked on variable name - return None so go-to-definition goes to variable
+                                    return None;
+                                }
+                            }
+                        }
+                    }
+                }
+                break; // Found navigation_expression, stop looking
+            }
+            else if node.kind() == "directly_assignable_expression" {
+                // For assignments like sms.body = "test", the structure is:
+                // directly_assignable_expression -> simple_identifier (sms) + navigation_suffix -> simple_identifier (body)
+                if node.child_count() >= 2 {
+                    if let (Some(object_node), Some(nav_suffix)) = (node.child(0), node.child(1)) {
+                        if object_node.kind() == "simple_identifier" && nav_suffix.kind() == "navigation_suffix" {
+                            // Find the simple_identifier in nav_suffix
+                            let field_node = (0..nav_suffix.child_count())
+                                .filter_map(|i| nav_suffix.child(i))
+                                .find(|child| child.kind() == "simple_identifier");
+                            
+                            if let Some(field_node) = field_node {
+                                let variable_name = object_node.utf8_text(source.as_bytes()).ok()?.to_string();
+                                let field_name = field_node.utf8_text(source.as_bytes()).ok()?.to_string();
+                                
+                                // Check if this is an instance field access (variable starts with lowercase)
+                                if variable_name.chars().next().map_or(false, |c| c.is_lowercase()) {
+                                    // Only return context if user clicked on the field name
+                                    if usage_text == field_name {
+                                        return Some((variable_name, field_name));
+                                    } else if usage_text == variable_name {
+                                        // User clicked on variable name - return None so go-to-definition goes to variable
+                                        return None;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                break; // Found directly_assignable_expression, stop looking
+            }
+            current = node.parent();
+        }
+        
         None
     }
 
@@ -662,22 +729,117 @@ impl LanguageSupport for KotlinSupport {
         dependency_cache: Arc<DependencyCache>,
     ) -> Option<Location> {
         // Use the common method resolution logic that handles signature matching and overloads
-        crate::languages::common::method_resolution::find_instance_method_definition(
+        crate::languages::common::definition_chain::find_instance_method_definition(
             self, tree, source, file_uri, usage_node, variable_name, method_name, dependency_cache
         )
     }
 
-    fn extract_call_signature(&self, usage_node: &Node, source: &str) -> Option<crate::languages::common::method_resolution::CallSignature> {
+    fn extract_call_signature(&self, usage_node: &Node, source: &str) -> Option<crate::languages::common::definition_chain::CallSignature> {
         // Use Kotlin-specific signature extraction
-        if let Some(kotlin_signature) = crate::languages::kotlin::definition::method_resolution::extract_call_signature_from_context(usage_node, source) {
+        if let Some(kotlin_signature) = crate::languages::kotlin::definition::definition_chain::extract_call_signature_from_context(usage_node, source) {
             // Convert Kotlin's CallSignature to the common CallSignature format
-            Some(crate::languages::common::method_resolution::CallSignature {
+            Some(crate::languages::common::definition_chain::CallSignature {
                 arg_count: kotlin_signature.parameter_count,
                 arg_types: vec![None; kotlin_signature.parameter_count], // Kotlin signature doesn't track types yet
             })
         } else {
             None
         }
+    }
+
+    fn resolve_type_fqn(&self, type_name: &str, source: &str, dependency_cache: &Arc<DependencyCache>) -> Option<String> {
+        // Try to resolve through imports first
+        if let Some(resolved_fqn) = super::definition::utils::resolve_symbol_with_imports(type_name, source, dependency_cache) {
+            return Some(resolved_fqn);
+        }
+        
+        // Fallback to current package + type name  
+        if let Some(package) = super::definition::utils::extract_package_from_source(source) {
+            if !package.is_empty() {
+                Some(format!("{}.{}", package, type_name))
+            } else {
+                Some(type_name.to_string())
+            }
+        } else {
+            Some(type_name.to_string())
+        }
+    }
+
+    fn find_type_in_tree(&self, tree: &Tree, source: &str, type_name: &str, file_uri: &str) -> Option<Location> {
+        use super::definition::utils::get_or_create_query;
+        use tree_sitter::{QueryCursor, StreamingIterator};
+        
+        // Kotlin type queries covering classes, interfaces, objects, and enums
+        let type_query_text = r#"
+            (type_identifier) @type_name
+        "#;
+        let type_query = get_or_create_query(type_query_text).ok()?;
+        
+        let mut cursor = QueryCursor::new();
+        let mut matches = cursor.matches(&type_query, tree.root_node(), source.as_bytes());
+        
+        while let Some(query_match) = matches.next() {
+            for capture in query_match.captures {
+                if let Ok(captured_name) = capture.node.utf8_text(source.as_bytes()) {
+                    if captured_name == type_name {
+                        return crate::core::utils::node_to_lsp_location(&capture.node, file_uri);
+                    }
+                }
+            }
+        }
+        
+        None
+    }
+
+    fn find_method_in_tree(&self, tree: &Tree, source: &str, method_name: &str, file_uri: &str) -> Option<Location> {
+        use super::definition::utils::get_or_create_query;
+        use tree_sitter::{QueryCursor, StreamingIterator};
+        
+        let method_query_text = r#"
+            (simple_identifier) @method_name
+        "#;
+        let method_query = get_or_create_query(method_query_text).ok()?;
+
+        let mut cursor = QueryCursor::new();
+        let mut matches = cursor.matches(&method_query, tree.root_node(), source.as_bytes());
+
+        while let Some(query_match) = matches.next() {
+            for capture in query_match.captures {
+                if let Ok(captured_name) = capture.node.utf8_text(source.as_bytes()) {
+                    if captured_name == method_name {
+                        return crate::core::utils::node_to_lsp_location(&capture.node, file_uri);
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    fn find_property_in_tree(&self, tree: &Tree, source: &str, property_name: &str, file_uri: &str) -> Option<Location> {
+        use super::definition::utils::get_or_create_query;
+        use tree_sitter::{QueryCursor, StreamingIterator};
+
+        let property_query_text = r#"
+            (property_declaration (variable_declaration (simple_identifier) @property_name))
+            (class_parameter (simple_identifier) @property_name)
+        "#;
+        let property_query = get_or_create_query(property_query_text).ok()?;
+
+        let mut cursor = QueryCursor::new();
+        let mut matches = cursor.matches(&property_query, tree.root_node(), source.as_bytes());
+
+        while let Some(query_match) = matches.next() {
+            for capture in query_match.captures {
+                if let Ok(captured_name) = capture.node.utf8_text(source.as_bytes()) {
+                    if captured_name == property_name {
+                        return crate::core::utils::node_to_lsp_location(&capture.node, file_uri);
+                    }
+                }
+            }
+        }
+
+        None
     }
 }
 

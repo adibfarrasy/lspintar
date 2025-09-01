@@ -20,13 +20,36 @@ use super::utils::{
 };
 
 #[tracing::instrument(skip_all)]
-pub fn find_in_workspace(
+pub async fn find_in_workspace(
     source: &str,
     file_uri: &str,
-    usage_node: &Node,
+    usage_node: &Node<'_>,
     dependency_cache: Arc<DependencyCache>,
     language_support: &dyn LanguageSupport,
 ) -> Option<Location> {
+    let symbol_text = usage_node.utf8_text(source.as_bytes()).unwrap_or("");
+    
+    // FIRST: Check for nested enum access patterns (same as find_in_project)
+    
+    if let Some(parent) = usage_node.parent() {
+        if parent.kind() == "field_access" {
+            if let Some(enum_type_node) = parent.child_by_field_name("object") {
+                if let Some(enum_type_name) = super::project::resolve_nested_enum_type(source, &enum_type_node) {
+                    if enum_type_name.contains('.') {
+                        return super::project::find_nested_enum_using_regular_resolution(
+                            source,
+                            file_uri,
+                            &enum_type_name,
+                            symbol_text,
+                            dependency_cache.clone(),
+                            language_support,
+                        ).await;
+                    }
+                }
+            }
+        }
+    }
+
     let current_project = uri_to_path(file_uri).and_then(|path| find_project_root(&path))?;
 
     find_in_project_dependencies(
@@ -52,7 +75,7 @@ pub fn find_in_workspace(
 fn find_in_project_dependencies(
     source: &str,
     file_uri: &str,
-    usage_node: &Node,
+    usage_node: &Node<'_>,
     current_project: &PathBuf,
     dependency_cache: Arc<DependencyCache>,
     language_support: &dyn LanguageSupport,
@@ -100,7 +123,7 @@ fn find_in_project_dependencies(
 fn fallback_impl(
     source: &str,
     file_uri: &str,
-    usage_node: &Node,
+    usage_node: &Node<'_>,
     dependency_cache: Arc<DependencyCache>,
     language_support: &dyn LanguageSupport,
 ) -> Option<Location> {

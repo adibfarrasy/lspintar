@@ -8,6 +8,29 @@ use crate::{
     languages::LanguageSupport,
 };
 
+/// Resolve nested path from field access chain (e.g., Foo.Status -> "Foo.Status")
+/// This works across all JVM languages with similar syntax
+pub fn resolve_nested_path(source: &str, node: &Node<'_>) -> Option<String> {
+    // For simple identifier, return as-is
+    if node.kind() == "identifier" {
+        return node.utf8_text(source.as_bytes()).ok().map(|s| s.to_string());
+    }
+    
+    // For nested field access (Foo.Status), extract the full path
+    if node.kind() == "field_access" {
+        let object = node.child_by_field_name("object")?;
+        let field = node.child_by_field_name("field")?;
+        
+        let object_text = object.utf8_text(source.as_bytes()).ok()?;
+        let field_text = field.utf8_text(source.as_bytes()).ok()?;
+        
+        return Some(format!("{}.{}", object_text, field_text));
+    }
+    
+    // Fallback: extract the full text
+    node.utf8_text(source.as_bytes()).ok().map(|s| s.to_string())
+}
+
 /// Common method resolution logic shared across JVM languages (Java, Groovy, Kotlin)
 
 /// Detect if a method call is static and extract the class name
@@ -143,6 +166,152 @@ pub fn find_parent_method_invocation_node<'a>(node: &Node<'a>) -> Option<Node<'a
     None
 }
 
+/// Find parent field access node - common pattern across JVM languages
+pub fn find_parent_field_access_node<'a>(node: &Node<'a>) -> Option<Node<'a>> {
+    let mut current = Some(*node);
+    
+    while let Some(curr_node) = current {
+        if curr_node.kind() == "field_access" {
+            return Some(curr_node);
+        }
+        current = curr_node.parent();
+    }
+    
+    None
+}
+
+/// Extract context for static field access (e.g., ClassName.FIELD_NAME)
+pub fn extract_static_field_context(usage_node: &Node, source: &str) -> Option<(String, String)> {
+    let usage_text = usage_node.utf8_text(source.as_bytes()).unwrap_or("");
+
+    // Try to find parent field_access node (Java/Groovy)
+    if let Some(field_access) = find_parent_field_access_node(usage_node) {
+        // Check if this field access has an object and field
+        let object_node = field_access.child_by_field_name("object");
+        let field_node = field_access.child_by_field_name("field");
+        
+        if let (Some(object_node), Some(field_node)) = (object_node, field_node) {
+            let class_name = object_node.utf8_text(source.as_bytes()).ok()?.to_string();
+            let field_name = field_node.utf8_text(source.as_bytes()).ok()?.to_string();
+            
+            return evaluate_static_field_context(class_name, field_name, usage_text);
+        }
+    }
+    
+    // Try to find parent navigation_expression (Kotlin)
+    if let Some(nav_expr) = find_parent_navigation_expression(usage_node) {
+        // Extract object and field from navigation_expression
+        if let (Some(object_node), Some(nav_suffix)) = (nav_expr.child(0), nav_expr.child(1)) {
+            if nav_suffix.kind() == "navigation_suffix" {
+                // Find the simple_identifier in nav_suffix
+                let field_node = (0..nav_suffix.child_count())
+                    .filter_map(|i| nav_suffix.child(i))
+                    .find(|child| child.kind() == "simple_identifier");
+                
+                if let Some(field_node) = field_node {
+                    let class_name = object_node.utf8_text(source.as_bytes()).ok()?.to_string();
+                    let field_name = field_node.utf8_text(source.as_bytes()).ok()?.to_string();
+                    
+                    return evaluate_static_field_context(class_name, field_name, usage_text);
+                }
+            }
+        }
+    }
+    
+    None
+}
+
+/// Helper function to evaluate if a class/field combination represents a static field access
+fn evaluate_static_field_context(class_name: String, field_name: String, usage_text: &str) -> Option<(String, String)> {
+    // Only return Some for actual static field access (class name starts with uppercase)
+    if class_name.chars().next().map_or(false, |c| c.is_uppercase()) {
+        // This looks like a static field access (ClassName.FIELD)
+        if usage_text == field_name {
+            Some((class_name, field_name))
+        } else if usage_text == class_name {
+            None  // Return None so it goes to regular class resolution
+        } else {
+            None
+        }
+    } else {
+        // This looks like an instance field access (variable.field) - not a static field access
+        None
+    }
+}
+
+/// Find parent navigation_expression node (for Kotlin)
+fn find_parent_navigation_expression<'a>(node: &Node<'a>) -> Option<Node<'a>> {
+    let mut current = Some(*node);
+    
+    while let Some(curr_node) = current {
+        if curr_node.kind() == "navigation_expression" {
+            return Some(curr_node);
+        }
+        current = curr_node.parent();
+    }
+    
+    None
+}
+
+/// Extract context for instance field access (e.g., variable.field)
+pub fn extract_instance_field_context(usage_node: &Node, source: &str) -> Option<(String, String)> {
+    let usage_text = usage_node.utf8_text(source.as_bytes()).unwrap_or("");
+    debug!(
+        "extract_instance_field_context: analyzing node '{}' of kind '{}'",
+        usage_text,
+        usage_node.kind()
+    );
+
+    // Find parent field_access node
+    let field_access = find_parent_field_access_node(usage_node)?;
+
+    // Check if this field access has an object and field
+    let object_node = field_access.child_by_field_name("object");
+    let field_node = field_access.child_by_field_name("field");
+    
+    debug!("extract_instance_field_context: object_node present: {}, field_node present: {}", 
+           object_node.is_some(), field_node.is_some());
+    
+    let object_node = object_node?;
+    let field_node = field_node?;
+
+    let variable_name = object_node.utf8_text(source.as_bytes()).ok()?.to_string();
+    let field_name = field_node
+        .utf8_text(source.as_bytes())
+        .ok()?
+        .to_string();
+
+    debug!(
+        "extract_instance_field_context: found variable_name='{}', field_name='{}', usage_text='{}'",
+        variable_name, field_name, usage_text
+    );
+
+    // Only return Some for instance field access (variable name starts with lowercase)
+    if variable_name
+        .chars()
+        .next()
+        .map_or(false, |c| c.is_lowercase())
+    {
+        // This looks like an instance field access (variable.field)
+        if usage_text == field_name {
+            debug!("extract_instance_field_context: usage_node matches field name - instance field access detected");
+            Some((variable_name, field_name))
+        } else if usage_text == variable_name {
+            debug!("extract_instance_field_context: usage_node matches variable name - this should go to variable declaration, not field");
+            None  // Return None so it goes to regular resolution for variable declaration
+        } else {
+            debug!("extract_instance_field_context: usage_node '{}' matches neither variable '{}' nor field '{}'", 
+                   usage_text, variable_name, field_name);
+            None
+        }
+    } else {
+        // This looks like a static field access (ClassName.field) - not an instance field access
+        debug!("extract_instance_field_context: object '{}' looks like a class (uppercase) - not an instance field access", 
+               variable_name);
+        None
+    }
+}
+
 /// Common logic for finding static method definitions
 pub fn find_static_method_definition(
     language_support: &dyn LanguageSupport,
@@ -190,6 +359,37 @@ pub fn find_static_method_definition(
         "find_static_method_definition: could not find class {}",
         class_name
     );
+    None
+}
+
+/// Common logic for finding static field definitions
+pub fn find_static_field_definition(
+    language_support: &dyn LanguageSupport,
+    tree: &Tree,
+    source: &str,
+    file_uri: &str,
+    _usage_node: &Node,
+    class_name: &str,
+    field_name: &str,
+    dependency_cache: Arc<DependencyCache>,
+) -> Option<Location> {
+    // First resolve the class name to find the class file location
+    let class_location = try_resolve_class_name(
+        language_support, tree, source, file_uri, class_name, dependency_cache.clone()
+    );
+
+    if let Some(location) = class_location {
+        // Now search for the field within the resolved class file
+        if let Some(field_location) = search_field_in_class_file_cross_language(
+            &location, field_name
+        ) {
+            return Some(field_location);
+        }
+        
+        // Return class location as fallback
+        return Some(location);
+    }
+
     None
 }
 
@@ -460,6 +660,83 @@ pub fn search_method_in_class_file_cross_language(
     
     // Use the target language's method search logic
     search_method_in_class_file(class_location, method_name, target_language_support.as_ref())
+}
+
+/// Search for a field within a class file, detecting the target language automatically
+pub fn search_field_in_class_file_cross_language(
+    class_location: &Location,
+    field_name: &str,
+) -> Option<Location> {
+    
+    // Determine the language from the file extension
+    let target_language_support = detect_language_from_uri(class_location.uri.as_str())?;
+    
+    // Use the target language's field search logic
+    search_field_in_class_file(class_location, field_name, target_language_support.as_ref())
+}
+
+fn search_field_in_class_file(
+    class_location: &Location,
+    field_name: &str,
+    language_support: &dyn LanguageSupport,
+) -> Option<Location> {
+    // Extract file path from URI and read content
+    let file_path = class_location.uri.to_file_path().ok()?;
+    let content = std::fs::read_to_string(&file_path).ok()?;
+    
+    // Parse the target file with the appropriate language parser
+    let mut parser = language_support.create_parser();
+    let tree = parser.parse(&content, None)?;
+    
+    // Create language-specific queries that capture field names directly
+    let field_name_query = match language_support.language_id() {
+        "kotlin" => format!(
+            r#"(property_declaration (variable_declaration (simple_identifier) @field_name (#eq? @field_name "{}"))) @field_decl"#, 
+            field_name
+        ),
+        "java" => format!(
+            r#"(field_declaration declarator: (variable_declarator name: (identifier) @field_name (#eq? @field_name "{}"))) @field_decl"#, 
+            field_name
+        ),
+        "groovy" => format!(
+            r#"(field_declaration declarator: (variable_declarator name: (identifier) @field_name (#eq? @field_name "{}"))) @field_decl"#, 
+            field_name
+        ),
+        _ => {
+            return None;
+        }
+    };
+    
+    if let Ok(query) = tree_sitter::Query::new(&tree.language(), &field_name_query) {
+        let mut cursor = tree_sitter::QueryCursor::new();
+        let mut matches = cursor.matches(&query, tree.root_node(), content.as_bytes());
+        
+        while let Some(query_match) = matches.next() {
+            for capture in query_match.captures {
+                let capture_name = query.capture_names()[capture.index as usize];
+                if capture_name == "field_name" {
+                    let node = capture.node;
+                    let start_pos = node.start_position();
+                    let end_pos = node.end_position();
+                    
+                    let start_position = tower_lsp::lsp_types::Position::new(
+                        start_pos.row as u32, 
+                        start_pos.column as u32
+                    );
+                    let end_position = tower_lsp::lsp_types::Position::new(
+                        end_pos.row as u32, 
+                        end_pos.column as u32
+                    );
+                    
+                    let range = tower_lsp::lsp_types::Range::new(start_position, end_position);
+                    
+                    return Some(tower_lsp::lsp_types::Location::new(class_location.uri.clone(), range));
+                }
+            }
+        }
+    }
+    
+    None
 }
 
 /// Search for a method with signature matching across languages for overloaded methods
@@ -757,7 +1034,7 @@ fn find_method_name_in_declaration<'a>(
 }
 
 // Re-export the signature matching types and functions 
-pub use crate::languages::groovy::definition::method_resolution::{
+pub use crate::languages::groovy::definition::definition_chain::{
     CallSignature, 
     extract_call_signature_from_context
 };
@@ -820,6 +1097,60 @@ pub fn find_instance_method_definition(
     ) {
         return Some(method_location);
     }
+    
+    // Return class location as fallback
+    Some(class_location)
+}
+
+/// Common logic for finding instance field/property definitions
+pub fn find_instance_field_definition(
+    language_support: &dyn LanguageSupport,
+    tree: &Tree,
+    source: &str,
+    file_uri: &str,
+    usage_node: &Node,
+    variable_name: &str,
+    field_name: &str,
+    dependency_cache: Arc<DependencyCache>,
+) -> Option<Location> {
+    debug!(
+        "FIELDRES: find_instance_field_definition: looking for {}.{}",
+        variable_name, field_name
+    );
+
+    // Step 1: Extract the variable type using language-specific trait methods
+    let variable_type = match extract_variable_type_from_tree(language_support, variable_name, tree, source, usage_node) {
+        Some(t) => t,
+        None => {
+            debug!("FIELDRES: Could not determine type for variable {}", variable_name);
+            return None;
+        }
+    };
+    
+    debug!(
+        "FIELDRES: find_instance_field_definition: variable {} has type {}",
+        variable_name, variable_type
+    );
+    
+    // Step 2: Find the class definition for the variable type
+    let class_location = find_class_definition(
+        language_support, tree, source, file_uri, &variable_type, dependency_cache.clone()
+    )?;
+    
+    debug!(
+        "FIELDRES: find_instance_field_definition: found type class {} at {:?}",
+        variable_type, class_location.uri
+    );
+    
+    // Step 3: Search for the field/property within the class file
+    if let Some(field_location) = search_field_in_class_file_cross_language(
+        &class_location, field_name
+    ) {
+        debug!("FIELDRES: Found field {} in class file", field_name);
+        return Some(field_location);
+    }
+    
+    debug!("FIELDRES: Could not find field {} in class file, returning class location as fallback", field_name);
     
     // Return class location as fallback
     Some(class_location)
@@ -940,8 +1271,9 @@ fn extract_variable_type_from_tree(
 
 
 
-/// Common enhanced find_definition_chain that handles method resolution
-pub fn find_definition_chain_with_method_resolution(
+/// Unified definition chain resolver that handles all symbol types across languages
+/// Supports nested symbols (Outer.Inner.symbol), static/instance methods, and regular symbol lookup
+pub fn find_definition_chain(
     language_support: &dyn LanguageSupport,
     tree: &Tree,
     source: &str,
@@ -949,11 +1281,77 @@ pub fn find_definition_chain_with_method_resolution(
     file_uri: &str,
     usage_node: &Node,
 ) -> Result<Location, anyhow::Error> {
+    let symbol_text = usage_node.utf8_text(source.as_bytes()).unwrap_or("");
+    
+    // FIRST: Check for nested access patterns (e.g., Outer.Inner.symbol) using unified trait methods
+    if let Some(parent) = usage_node.parent() {
+        if parent.kind() == "field_access" {
+            if let Some(object_node) = parent.child_by_field_name("object") {
+                if let Some(nested_path) = resolve_nested_path(source, &object_node) {
+                    if nested_path.contains('.') {
+                        // Build the full symbol path: nested_path.symbol_text
+                        let full_symbol_path = format!("{}.{}", nested_path, symbol_text);
+                        
+                        // Determine what type of symbol we're dealing with and use unified methods
+                        if let Ok(symbol_type) = language_support.determine_symbol_type_from_context(
+                            tree,
+                            usage_node,
+                            source,
+                        ) {
+                            match symbol_type {
+                                crate::core::symbols::SymbolType::Type => {
+                                    if let Some(result) = language_support.find_type(source, file_uri, &full_symbol_path, dependency_cache.clone()) {
+                                        return Ok(result);
+                                    }
+                                }
+                                crate::core::symbols::SymbolType::MethodCall => {
+                                    if let Some(result) = language_support.find_method(source, file_uri, &full_symbol_path, dependency_cache.clone()) {
+                                        return Ok(result);
+                                    }
+                                }
+                                crate::core::symbols::SymbolType::FieldUsage => {
+                                    if let Some(result) = language_support.find_property(source, file_uri, &full_symbol_path, dependency_cache.clone()) {
+                                        return Ok(result);
+                                    }
+                                }
+                                _ => {
+                                    // Try as type first, most common case
+                                    if let Some(result) = language_support.find_type(source, file_uri, &full_symbol_path, dependency_cache.clone()) {
+                                        return Ok(result);
+                                    }
+                                }
+                            }
+                        } else {
+                            // If we can't determine symbol type, try all unified methods in priority order
+                            if let Some(result) = language_support.find_type(source, file_uri, &full_symbol_path, dependency_cache.clone()) {
+                                return Ok(result);
+                            }
+                            if let Some(result) = language_support.find_method(source, file_uri, &full_symbol_path, dependency_cache.clone()) {
+                                return Ok(result);
+                            }
+                            if let Some(result) = language_support.find_property(source, file_uri, &full_symbol_path, dependency_cache.clone()) {
+                                return Ok(result);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
-    // Try static method resolution first
+    // SECOND: Try static method resolution
     if let Some((class_name, method_name)) = language_support.extract_static_method_context(usage_node, source) {
         if let Some(location) = find_static_method_definition(
             language_support, tree, source, file_uri, usage_node, &class_name, &method_name, dependency_cache.clone()
+        ) {
+            return Ok(location);
+        }
+    }
+
+    // THIRD: Try static field resolution
+    if let Some((class_name, field_name)) = extract_static_field_context(usage_node, source) {
+        if let Some(location) = find_static_field_definition(
+            language_support, tree, source, file_uri, usage_node, &class_name, &field_name, dependency_cache.clone()
         ) {
             return Ok(location);
         }
@@ -963,6 +1361,15 @@ pub fn find_definition_chain_with_method_resolution(
     if let Some((variable_name, method_name)) = language_support.extract_instance_method_context(usage_node, source) {
         if let Some(location) = language_support.find_instance_method_definition(
             tree, source, file_uri, usage_node, &variable_name, &method_name, dependency_cache.clone()
+        ) {
+            return Ok(location);
+        }
+    }
+
+    // Try instance field/property resolution
+    if let Some((variable_name, field_name)) = language_support.extract_instance_field_context(usage_node, source) {
+        if let Some(location) = find_instance_field_definition(
+            language_support, tree, source, file_uri, usage_node, &variable_name, &field_name, dependency_cache.clone()
         ) {
             return Ok(location);
         }
@@ -1044,6 +1451,13 @@ mod tests {
     fn create_test_tree(source: &str) -> Tree {
         let mut parser = Parser::new();
         let language: tree_sitter::Language = tree_sitter_java::LANGUAGE.into();
+        parser.set_language(&language).unwrap();
+        parser.parse(source, None).unwrap()
+    }
+
+    fn create_kotlin_test_tree(source: &str) -> Tree {
+        let mut parser = Parser::new();
+        let language = tree_sitter_kotlin::language();
         parser.set_language(&language).unwrap();
         parser.parse(source, None).unwrap()
     }
@@ -1142,6 +1556,66 @@ mod tests {
         assert_eq!(symbol_type, crate::core::symbols::SymbolType::Type);
     }
 
+    #[test]
+    fn test_static_field_context_on_field_name() {
+        let source = "String value = Type.myField;";
+        let tree = create_test_tree(source);
+        
+        // Find the "myField" identifier
+        let field_node = find_identifier_node(&tree, source, "myField").unwrap();
+        
+        let result = extract_static_field_context(&field_node, source);
+        assert!(result.is_some());
+        let (class_name, field_name) = result.unwrap();
+        assert_eq!(class_name, "Type");
+        assert_eq!(field_name, "myField");
+    }
+    
+    #[test]  
+    fn test_static_field_context_on_class_name() {
+        let source = "String value = Type.myField;";
+        let tree = create_test_tree(source);
+        
+        // Find the "Type" identifier  
+        let type_node = find_identifier_node(&tree, source, "Type").unwrap();
+        
+        let result = extract_static_field_context(&type_node, source);
+        // Should return None so it goes to class definition instead
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_java_symbol_type_for_class_in_static_field_access() {
+        let source = "String value = Type.myField;";
+        let tree = create_test_tree(source);
+        
+        // Find the "Type" identifier
+        let type_node = find_identifier_node(&tree, source, "Type").unwrap();
+        
+        // Create Java support to test symbol type detection
+        let java_support = crate::languages::java::support::JavaSupport::new();
+        let symbol_type = java_support.determine_symbol_type_from_context(&tree, &type_node, source).unwrap();
+        
+        // It should be Type, not FieldUsage (this tests the type_usage_in_field_access pattern)
+        assert_eq!(symbol_type, crate::core::symbols::SymbolType::Type);
+    }
+
+    #[test]
+    fn test_java_symbol_type_for_field_in_static_field_access() {
+        let source = "String value = Type.myField;";
+        let tree = create_test_tree(source);
+        
+        // Find the "myField" identifier
+        let field_node = find_identifier_node(&tree, source, "myField").unwrap();
+        
+        // Create Java support to test symbol type detection
+        let java_support = crate::languages::java::support::JavaSupport::new();
+        let symbol_type = java_support.determine_symbol_type_from_context(&tree, &field_node, source).unwrap();
+        
+        // It should be FieldUsage
+        assert_eq!(symbol_type, crate::core::symbols::SymbolType::FieldUsage);
+    }
+
     fn find_node_at_position<'a>(tree: &'a Tree, position: tower_lsp::lsp_types::Position, _source: &str) -> Option<tree_sitter::Node<'a>> {
         fn find_node_at_position_recursive<'a>(node: tree_sitter::Node<'a>, row: usize, col: usize) -> Option<tree_sitter::Node<'a>> {
             let start_pos = node.start_position();
@@ -1169,13 +1643,6 @@ mod tests {
         }
         
         find_node_at_position_recursive(tree.root_node(), position.line as usize, position.character as usize)
-    }
-
-    fn create_kotlin_test_tree(source: &str) -> Tree {
-        let mut parser = Parser::new();
-        let language = tree_sitter_kotlin::language();
-        parser.set_language(&language).unwrap();
-        parser.parse(source, None).unwrap()
     }
 
     #[test]
@@ -1249,6 +1716,124 @@ mod tests {
         
         // Clean up
         let _ = std::fs::remove_file(&temp_file);
+    }
+
+    // === Kotlin Property Context Tests ===
+
+    #[test]
+    fn test_kotlin_static_field_context_on_field_name() {
+        let source = "val constant = RedisConstants.BACKUP_WA_TEMPLATES";
+        let tree = create_kotlin_test_tree(source);
+        
+        // Find the "BACKUP_WA_TEMPLATES" identifier
+        let field_node = find_identifier_node(&tree, source, "BACKUP_WA_TEMPLATES").unwrap();
+        
+        let result = extract_static_field_context(&field_node, source);
+        assert!(result.is_some());
+        let (class_name, field_name) = result.unwrap();
+        assert_eq!(class_name, "RedisConstants");
+        assert_eq!(field_name, "BACKUP_WA_TEMPLATES");
+    }
+    
+    #[test]  
+    fn test_kotlin_static_field_context_on_class_name() {
+        let source = "val constant = RedisConstants.BACKUP_WA_TEMPLATES";
+        let tree = create_kotlin_test_tree(source);
+        
+        // Find the "RedisConstants" identifier  
+        let class_node = find_identifier_node(&tree, source, "RedisConstants").unwrap();
+        
+        let result = extract_static_field_context(&class_node, source);
+        // Should return None so it goes to class definition instead
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_kotlin_static_field_context_in_annotation() {
+        let source = "@Cacheable(RedisConstants.BACKUP_WA_TEMPLATES)";
+        let tree = create_kotlin_test_tree(source);
+        
+        // Find the "BACKUP_WA_TEMPLATES" identifier
+        let field_node = find_identifier_node(&tree, source, "BACKUP_WA_TEMPLATES").unwrap();
+        
+        let result = extract_static_field_context(&field_node, source);
+        assert!(result.is_some());
+        let (class_name, field_name) = result.unwrap();
+        assert_eq!(class_name, "RedisConstants");
+        assert_eq!(field_name, "BACKUP_WA_TEMPLATES");
+    }
+
+    #[test]
+    fn test_kotlin_instance_field_context_on_field_name() {
+        let source = "val text = sms.body";
+        let tree = create_kotlin_test_tree(source);
+        
+        // Find the "body" identifier
+        let field_node = find_identifier_node(&tree, source, "body").unwrap();
+        
+        // Use KotlinSupport trait to test the Kotlin-specific implementation
+        let kotlin_support = crate::languages::kotlin::support::KotlinSupport::new();
+        let result = kotlin_support.extract_instance_field_context(&field_node, source);
+        assert!(result.is_some());
+        let (variable_name, field_name) = result.unwrap();
+        assert_eq!(variable_name, "sms");
+        assert_eq!(field_name, "body");
+    }
+    
+    #[test]
+    fn test_kotlin_instance_field_context_on_variable_name() {
+        let source = "val text = sms.body";
+        let tree = create_kotlin_test_tree(source);
+        
+        // Find the "sms" identifier in the property access (not the assignment)
+        let sms_node = find_identifier_node(&tree, source, "sms").unwrap();
+        
+        // Use KotlinSupport trait to test the Kotlin-specific implementation
+        let kotlin_support = crate::languages::kotlin::support::KotlinSupport::new();
+        let result = kotlin_support.extract_instance_field_context(&sms_node, source);
+        // Should return None so it goes to variable declaration instead
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_kotlin_instance_field_context_in_assignment() {
+        let source = "sms.body = \"test\"";
+        let tree = create_kotlin_test_tree(source);
+        
+        // Find the "body" identifier
+        let field_node = find_identifier_node(&tree, source, "body").unwrap();
+        
+        // Use KotlinSupport trait to test the Kotlin-specific implementation
+        let kotlin_support = crate::languages::kotlin::support::KotlinSupport::new();
+        let result = kotlin_support.extract_instance_field_context(&field_node, source);
+        assert!(result.is_some());
+        let (variable_name, field_name) = result.unwrap();
+        assert_eq!(variable_name, "sms");
+        assert_eq!(field_name, "body");
+    }
+
+    #[test]
+    fn test_kotlin_property_context_mixed_case() {
+        // Test that lowercase variable names are treated as instances, uppercase as static
+        let source = "val result = MyClass.CONSTANT + myInstance.property";
+        let tree = create_kotlin_test_tree(source);
+        
+        // Test static access (this uses common function which now supports Kotlin)
+        let static_field_node = find_identifier_node(&tree, source, "CONSTANT").unwrap();
+        let static_result = extract_static_field_context(&static_field_node, source);
+        assert!(static_result.is_some());
+        let (static_class, static_field) = static_result.unwrap();
+        assert_eq!(static_class, "MyClass");
+        assert_eq!(static_field, "CONSTANT");
+        
+        // Test instance access (this uses KotlinSupport trait)
+        let kotlin_support = crate::languages::kotlin::support::KotlinSupport::new();
+        let instance_field_node = find_identifier_node(&tree, source, "property").unwrap();
+        let instance_result = kotlin_support.extract_instance_field_context(&instance_field_node, source);
+        assert!(instance_result.is_some());
+        let (instance_var, instance_field) = instance_result.unwrap();
+        assert_eq!(instance_var, "myInstance");
+        assert_eq!(instance_field, "property");
     }
 
     #[test]
@@ -1735,7 +2320,7 @@ fun main() {
                 node_at_position.utf8_text(source.as_bytes()).unwrap_or(""), 
                 node_at_position.kind());
                 
-            match find_definition_chain_with_method_resolution(
+            match find_definition_chain(
                 &kotlin_support, &tree, source, dependency_cache, file_uri, &node_at_position
             ) {
                 Ok(location) => {
@@ -1818,7 +2403,7 @@ fun main() {
                         let file_uri = "file:///test.kt";
                         let dependency_cache = std::sync::Arc::new(crate::core::dependency_cache::DependencyCache::new());
                         
-                        match find_definition_chain_with_method_resolution(
+                        match find_definition_chain(
                             &kotlin_support, &tree, source, dependency_cache, file_uri, &var_node
                         ) {
                             Ok(location) => {
