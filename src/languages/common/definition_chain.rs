@@ -863,10 +863,6 @@ fn search_method_in_class_file(
     method_name: &str,
     language_support: &dyn LanguageSupport,
 ) -> Option<Location> {
-    debug!(
-        "METHODRES: search_method_in_class_file: searching for method {} in {} using {}",
-        method_name, class_location.uri, language_support.language_id()
-    );
     
     // Extract file path from URI and read content
     let file_path = class_location.uri.to_file_path().ok()?;
@@ -878,7 +874,6 @@ fn search_method_in_class_file(
     
     // First, try to find enum constants (they look like static method calls but aren't methods)
     if let Some(enum_location) = search_enum_constant_in_class_file(&tree, &content, method_name, &class_location.uri.to_string(), language_support.language_id()) {
-        debug!("METHODRES: Found enum constant {} instead of method", method_name);
         return Some(enum_location);
     }
     
@@ -931,8 +926,115 @@ fn search_method_in_class_file(
         }
     }
     
+    // If method not found, try getter/setter fallback logic
+    if let Some(field_location) = try_find_getter_setter_field(class_location, method_name, language_support) {
+        return Some(field_location);
+    }
+    
     // Fallback to old method if new query approach fails
     search_method_fallback(class_location, method_name, language_support)
+}
+
+/// Try to find the field associated with a getter/setter method
+fn try_find_getter_setter_field(
+    class_location: &Location,
+    method_name: &str,
+    language_support: &dyn LanguageSupport,
+) -> Option<Location> {
+    
+    // Extract potential field name from getter/setter method name
+    let field_name = if method_name.starts_with("get") && method_name.len() > 3 {
+        // getMyField -> myField
+        let field_base = &method_name[3..];
+        if field_base.chars().next()?.is_uppercase() {
+            let mut chars = field_base.chars();
+            let first_char = chars.next()?.to_lowercase().to_string();
+            let rest: String = chars.collect();
+            first_char + &rest
+        } else {
+            return None; // Not a valid getter pattern
+        }
+    } else if method_name.starts_with("set") && method_name.len() > 3 {
+        // setMyField -> myField
+        let field_base = &method_name[3..];
+        if field_base.chars().next()?.is_uppercase() {
+            let mut chars = field_base.chars();
+            let first_char = chars.next()?.to_lowercase().to_string();
+            let rest: String = chars.collect();
+            first_char + &rest
+        } else {
+            return None; // Not a valid setter pattern
+        }
+    } else if method_name.starts_with("is") && method_name.len() > 2 {
+        // isEnabled -> enabled
+        let field_base = &method_name[2..];
+        if field_base.chars().next()?.is_uppercase() {
+            let mut chars = field_base.chars();
+            let first_char = chars.next()?.to_lowercase().to_string();
+            let rest: String = chars.collect();
+            first_char + &rest
+        } else {
+            return None; // Not a valid boolean getter pattern
+        }
+    } else {
+        return None; // Not a getter/setter method
+    };
+    
+    
+    // Read the class file and search for the field
+    let file_path = class_location.uri.to_file_path().ok()?;
+    let content = std::fs::read_to_string(&file_path).ok()?;
+    
+    let mut parser = language_support.create_parser();
+    let tree = parser.parse(&content, None)?;
+    
+    // Create language-specific queries for field declarations
+    let field_query = match language_support.language_id() {
+        "kotlin" => format!(
+            r#"(property_declaration (variable_declaration (simple_identifier) @field_name (#eq? @field_name "{}"))) @field_decl"#,
+            field_name
+        ),
+        "java" => format!(
+            r#"(field_declaration (variable_declarator name: (identifier) @field_name (#eq? @field_name "{}"))) @field_decl"#,
+            field_name
+        ),
+        "groovy" => format!(
+            r#"(field_declaration (variable_declarator name: (identifier) @field_name (#eq? @field_name "{}"))) @field_decl"#,
+            field_name
+        ),
+        _ => return None, // Unsupported language
+    };
+    
+    if let Ok(query) = tree_sitter::Query::new(&tree.language(), &field_query) {
+        let mut cursor = tree_sitter::QueryCursor::new();
+        let mut matches = cursor.matches(&query, tree.root_node(), content.as_bytes());
+        
+        while let Some(query_match) = matches.next() {
+            for capture in query_match.captures {
+                let capture_name = query.capture_names()[capture.index as usize];
+                if capture_name == "field_name" {
+                    let node = capture.node;
+                    let start_pos = node.start_position();
+                    let end_pos = node.end_position();
+                    
+                    let start_position = tower_lsp::lsp_types::Position::new(
+                        start_pos.row as u32,
+                        start_pos.column as u32
+                    );
+                    let end_position = tower_lsp::lsp_types::Position::new(
+                        end_pos.row as u32,
+                        end_pos.column as u32
+                    );
+                    
+                    let range = tower_lsp::lsp_types::Range::new(start_position, end_position);
+                    
+                    return Some(tower_lsp::lsp_types::Location::new(class_location.uri.clone(), range));
+                }
+            }
+        }
+    }
+    
+    None
 }
 
 /// Fallback method search using the old contains-based approach
@@ -1061,10 +1163,6 @@ pub fn find_instance_method_definition(
     method_name: &str,
     dependency_cache: Arc<DependencyCache>,
 ) -> Option<Location> {
-    debug!(
-        "METHODRES: find_instance_method_definition: looking for {}.{}",
-        variable_name, method_name
-    );
 
     // Step 1: Extract the variable type using language-specific trait methods
     let variable_type = match extract_variable_type_from_tree(language_support, variable_name, tree, source, usage_node) {
@@ -1074,20 +1172,12 @@ pub fn find_instance_method_definition(
         }
     };
     
-    debug!(
-        "METHODRES: find_instance_method_definition: variable {} has type {}",
-        variable_name, variable_type
-    );
     
     // Step 2: Find the class definition for the variable type
     let class_location = find_class_definition(
         language_support, tree, source, file_uri, &variable_type, dependency_cache.clone()
     )?;
     
-    debug!(
-        "METHODRES: find_instance_method_definition: found type class {} at {:?}",
-        variable_type, class_location.uri
-    );
     
     // Step 3: Extract call signature for overload resolution using language-specific logic
     let call_signature = language_support.extract_call_signature(usage_node, source);
