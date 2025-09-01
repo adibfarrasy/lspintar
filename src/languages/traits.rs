@@ -299,12 +299,6 @@ pub trait LanguageSupport: Send + Sync + QueryProvider {
             }
         }
 
-        // If FQN resolution failed or exact lookup failed, try fuzzy search
-        // This handles cases where imports don't resolve but the symbol exists in workspace
-        if let Some(location) = self.find_type_by_simple_name(type_name, &project_root, dependency_cache) {
-            return Some(location);
-        }
-
         None
     }
 
@@ -345,30 +339,6 @@ pub trait LanguageSupport: Send + Sync + QueryProvider {
         None
     }
 
-    /// Helper: Find type by simple name (fuzzy search)
-    fn find_type_by_simple_name(
-        &self,
-        type_name: &str,
-        project_root: &std::path::PathBuf,
-        dependency_cache: Arc<DependencyCache>,
-    ) -> Option<Location> {
-        // Search through all symbols in the workspace for ones ending with the type name
-        for entry in dependency_cache.symbol_index.iter() {
-            let ((_, fqn), path) = (entry.key(), entry.value());
-            
-            // Check if this FQN ends with our type name (e.g., "com.example.Constants" ends with "Constants")
-            if fqn.ends_with(&format!(".{}", type_name)) || fqn == type_name {
-                let target_uri = crate::core::utils::path_to_file_uri(path)?;
-                if let Some(tree) = crate::core::utils::uri_to_tree(&target_uri) {
-                    if let Ok(target_source) = std::fs::read_to_string(path) {
-                        return self.find_type_in_tree(&tree, &target_source, type_name, &target_uri);
-                    }
-                }
-            }
-        }
-
-        None
-    }
 
     /// Language-specific: Resolve a type name to its fully qualified name
     fn resolve_type_fqn(&self, type_name: &str, source: &str, dependency_cache: &Arc<DependencyCache>) -> Option<String>;
