@@ -837,15 +837,22 @@ fn get_wildcard_imports(source: &str) -> Option<Vec<String>> {
         .for_each(|query_match| {
             for capture in query_match.captures {
                 if let Ok(full_import_text) = capture.node.utf8_text(source.as_bytes()) {
-                    // Extract just the import path from "import com.example.package.*"
+                    // Extract just the import path from "import com.example.package.*" or "import static com.example.package.*"
                     let import_text = full_import_text
                         .trim_start_matches("import")
                         .trim()
                         .trim_end_matches(';')
                         .trim();
+                    
+                    // Remove "static" keyword if present
+                    let clean_import = if import_text.starts_with("static ") {
+                        &import_text[7..]
+                    } else {
+                        import_text
+                    };
 
-                    if import_text.ends_with("*") {
-                        let package_name = import_text.strip_suffix("*").unwrap_or(import_text);
+                    if clean_import.ends_with("*") {
+                        let package_name = clean_import.strip_suffix("*").unwrap_or(clean_import);
                         let package_name = package_name.trim_end_matches('.');
                         wildcard_packages.push(package_name.to_string());
                     }

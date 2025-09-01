@@ -8,10 +8,13 @@ pub fn extract_field_signature(tree: &Tree, node: &Node, source: &str) -> Option
     (package_declaration
       (scoped_identifier) @package_name)
     (
-      (groovydoc_comment)? @groovydoc
+      (block_comment)? @groovydoc
       (field_declaration
         (modifiers 
-          (annotation)* @annotation
+          [
+            (annotation)
+            (marker_annotation)
+          ]* @annotation
           "public"? @modifier
           "private"? @modifier  
           "protected"? @modifier
@@ -61,6 +64,7 @@ pub fn extract_field_signature(tree: &Tree, node: &Node, source: &str) -> Option
                 match capture_name {
                     "package_name" => package_name = text.to_string(),
                     "annotation" => temp_annotations.push(text.to_string()),
+                    "marker_annotation" => temp_annotations.push(text.to_string()),
                     "modifier" => temp_modifiers.push(text.to_string()),
                     "field_type" => temp_field_type = text.to_string(),
                     "field_name" => current_field_name = text.to_string(),

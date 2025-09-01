@@ -8,11 +8,12 @@ pub fn extract_method_signature(tree: &Tree, node: &Node, source: &str) -> Optio
     (package_declaration
       (scoped_identifier) @package_name)
     (
-      (groovydoc_comment)? @groovydoc
+      (block_comment)? @groovydoc
       .
       (method_declaration
         (modifiers 
           (annotation)* @annotation
+          (marker_annotation)* @marker_annotation
           "public"? @modifier
           "private"? @modifier  
           "protected"? @modifier
@@ -66,6 +67,7 @@ pub fn extract_method_signature(tree: &Tree, node: &Node, source: &str) -> Optio
                 match capture_name {
                     "package_name" => package_name = text.to_string(),
                     "annotation" => temp_annotations.push(text.to_string()),
+                    "marker_annotation" => temp_annotations.push(text.to_string()),
                     "modifier" => temp_modifiers.push(text.to_string()),
                     "return_type" => temp_return_type = text.to_string(),
                     "method_name" => current_method_name = text.to_string(),

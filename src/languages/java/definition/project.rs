@@ -359,11 +359,16 @@ pub fn extract_nested_type_from_import_path(import_path: &str) -> String {
     let parts: Vec<&str> = import_path.split('.').collect();
     
     if parts.len() >= 2 {
-        // Check if last two parts look like Outer.Inner pattern
         let second_last = parts[parts.len() - 2];
         let last = parts[parts.len() - 1];
         
-        // If second_last is capitalized (class name) and last is capitalized (enum name)
+        // Special case for "lower.Upper" pattern in longer paths
+        if parts.len() >= 4 && second_last.chars().next().map(|c| c.is_lowercase()).unwrap_or(false) 
+            && last.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+            return format!("{}.{}", second_last, last);
+        }
+        
+        // If both second_last and last are capitalized, return both
         if second_last.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) 
             && last.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
             return format!("{}.{}", second_last, last);

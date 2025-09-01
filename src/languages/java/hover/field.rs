@@ -16,8 +16,10 @@ pub fn extract_field_signature(tree: &Tree, node: &Node, source: &str) -> Option
       .
       (field_declaration
         (modifiers 
-          (annotation)* @annotation
-          (marker_annotation)* @annotation
+          [
+            (annotation)
+            (marker_annotation)
+          ]* @annotation
           "public"? @modifier
           "private"? @modifier  
           "protected"? @modifier

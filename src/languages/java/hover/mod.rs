@@ -122,12 +122,12 @@ fn extract_enum_signature(tree: &Tree, source: &str) -> Option<String> {
                     }
                 }
                 "interface_line" => {
-                    if interface_line.is_empty() && !found_enum {
+                    if interface_line.is_empty() {
                         interface_line = text.to_string();
                     }
                 }
                 "javadoc" => {
-                    if javadoc.is_empty() && !found_enum {
+                    if javadoc.is_empty() {
                         javadoc = text.to_string();
                     }
                 }
@@ -153,8 +153,8 @@ fn format_enum_signature(
     let mut parts = Vec::new();
 
     if !package_name.is_empty() {
-        parts.push(package_name);
-        parts.push("\n".to_string());
+        parts.push(format!("package {}", package_name));
+        parts.push("".to_string()); // Empty line after package
     }
 
     parts.push("```java".to_string());
@@ -169,12 +169,13 @@ fn format_enum_signature(
     enum_line.push_str("enum ");
     enum_line.push_str(&enum_name);
 
-    parts.push(enum_line);
-
-    // Add implements clause on separate line
+    // Add implements clause on same line
     if !interface_line.is_empty() {
-        parts.push(format!("    {}", interface_line));
+        enum_line.push(' ');
+        enum_line.push_str(&interface_line);
     }
+
+    parts.push(enum_line);
 
     parts.push("```".to_string());
 
@@ -196,9 +197,10 @@ fn extract_type_usage_info(node: &Node, source: &str) -> Option<String> {
 }
 
 fn extract_variable_info(_tree: &Tree, node: &Node, source: &str) -> Option<String> {
-    // Try to find variable declaration
+    // Try to find variable declaration (local variables, fields, parameters)
     let var_node = find_parent_of_kind(node, "variable_declaration")
-        .or_else(|| find_parent_of_kind(node, "local_variable_declaration"));
+        .or_else(|| find_parent_of_kind(node, "local_variable_declaration"))
+        .or_else(|| find_parent_of_kind(node, "field_declaration"));
 
     if let Some(var_node) = var_node {
         if let Ok(var_text) = var_node.utf8_text(source.as_bytes()) {

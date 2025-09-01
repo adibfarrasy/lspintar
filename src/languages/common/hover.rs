@@ -177,6 +177,17 @@ pub fn parse_parameters(param_text: &str) -> Vec<String> {
         return Vec::new();
     }
 
+    // First try to split by commas (for single-line parameters)
+    if !content.contains('\n') {
+        return content
+            .split(',')
+            .map(|param| param.trim())
+            .filter(|param| !param.is_empty())
+            .map(|param| param.to_string())
+            .collect();
+    }
+    
+    // For multi-line parameters, split by lines and clean up
     content
         .lines()
         .map(|line| line.trim().trim_end_matches(','))

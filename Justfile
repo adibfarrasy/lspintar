@@ -25,7 +25,7 @@ cub:
 b:
     @echo "cargo build"
     @cargo build
-    @just test-quick
+    @just test
     @just note
 
 # Full build with all tests (slower)

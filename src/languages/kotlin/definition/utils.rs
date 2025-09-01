@@ -208,7 +208,12 @@ pub fn extract_imports_from_source(source: &str) -> Vec<String> {
                         if let Some(import_path) =
                             import_text.strip_prefix("import ").map(|s| s.trim())
                         {
-                            imports.push(import_path.to_string());
+                            // Only process wildcard imports
+                            if import_path.ends_with(".*") {
+                                if let Some(base_package) = import_path.strip_suffix(".*") {
+                                    imports.push(base_package.to_string());
+                                }
+                            }
                         }
                     }
                 }
@@ -218,7 +223,12 @@ pub fn extract_imports_from_source(source: &str) -> Vec<String> {
             if let Ok(import_text) = child.utf8_text(source.as_bytes()) {
                 // Extract the import path (remove "import " prefix)
                 if let Some(import_path) = import_text.strip_prefix("import ").map(|s| s.trim()) {
-                    imports.push(import_path.to_string());
+                    // Only process wildcard imports
+                    if import_path.ends_with(".*") {
+                        if let Some(base_package) = import_path.strip_suffix(".*") {
+                            imports.push(base_package.to_string());
+                        }
+                    }
                 }
             }
         }
