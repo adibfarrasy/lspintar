@@ -2527,4 +2527,220 @@ fun main() {
         }
     }
 
+    #[test]
+    fn test_getter_setter_field_fallback_java() {
+        use std::fs::File;
+        use std::io::Write;
+        use tempfile::TempDir;
+        
+        // Create a temporary Java file with a field
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("TestClass.java");
+        let java_content = r#"
+public class TestClass {
+    private String myField;
+    private boolean enabled;
+    private int count;
+    
+    // Note: no explicit getter/setter methods defined
+}
+"#;
+        let mut file = File::create(&file_path).unwrap();
+        file.write_all(java_content.as_bytes()).unwrap();
+        
+        // Create location for the class file
+        let uri = tower_lsp::lsp_types::Url::from_file_path(&file_path).unwrap();
+        let location = tower_lsp::lsp_types::Location::new(uri, tower_lsp::lsp_types::Range::default());
+        
+        let java_support = crate::languages::java::support::JavaSupport::new();
+        
+        // Test getter method -> field mapping
+        let result = try_find_getter_setter_field(&location, "getMyField", &java_support);
+        assert!(result.is_some(), "Should find myField for getMyField");
+        
+        // Test setter method -> field mapping
+        let result = try_find_getter_setter_field(&location, "setMyField", &java_support);
+        assert!(result.is_some(), "Should find myField for setMyField");
+        
+        // Test boolean getter -> field mapping
+        let result = try_find_getter_setter_field(&location, "isEnabled", &java_support);
+        assert!(result.is_some(), "Should find enabled for isEnabled");
+        
+        // Test setter for boolean field
+        let result = try_find_getter_setter_field(&location, "setEnabled", &java_support);
+        assert!(result.is_some(), "Should find enabled for setEnabled");
+        
+        // Test getter for int field
+        let result = try_find_getter_setter_field(&location, "getCount", &java_support);
+        assert!(result.is_some(), "Should find count for getCount");
+        
+        // Test non-existent field
+        let result = try_find_getter_setter_field(&location, "getNonExistent", &java_support);
+        assert!(result.is_none(), "Should not find field for non-existent getter");
+        
+        // Test invalid method names
+        let result = try_find_getter_setter_field(&location, "regularMethod", &java_support);
+        assert!(result.is_none(), "Should not match non-getter/setter methods");
+        
+        let result = try_find_getter_setter_field(&location, "get", &java_support);
+        assert!(result.is_none(), "Should not match bare 'get' prefix");
+        
+        let result = try_find_getter_setter_field(&location, "getfield", &java_support);
+        assert!(result.is_none(), "Should not match lowercase after prefix");
+    }
+
+    #[test]
+    fn test_getter_setter_field_fallback_kotlin() {
+        use std::fs::File;
+        use std::io::Write;
+        use tempfile::TempDir;
+        
+        // Create a temporary Kotlin file with properties
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("TestClass.kt");
+        let kotlin_content = r#"
+class TestClass {
+    private var userName: String = ""
+    private var isActive: Boolean = false
+    private var itemCount: Int = 0
+}
+"#;
+        let mut file = File::create(&file_path).unwrap();
+        file.write_all(kotlin_content.as_bytes()).unwrap();
+        
+        // Create location for the class file
+        let uri = tower_lsp::lsp_types::Url::from_file_path(&file_path).unwrap();
+        let location = tower_lsp::lsp_types::Location::new(uri, tower_lsp::lsp_types::Range::default());
+        
+        let kotlin_support = crate::languages::kotlin::support::KotlinSupport::new();
+        
+        // Test getter method -> property mapping
+        let result = try_find_getter_setter_field(&location, "getUserName", &kotlin_support);
+        assert!(result.is_some(), "Should find userName for getUserName");
+        
+        // Test setter method -> property mapping
+        let result = try_find_getter_setter_field(&location, "setUserName", &kotlin_support);
+        assert!(result.is_some(), "Should find userName for setUserName");
+        
+        // Test boolean getter -> property mapping
+        let result = try_find_getter_setter_field(&location, "isIsActive", &kotlin_support);
+        assert!(result.is_some(), "Should find isActive for isIsActive");
+        
+        // Test getter for int property
+        let result = try_find_getter_setter_field(&location, "getItemCount", &kotlin_support);
+        assert!(result.is_some(), "Should find itemCount for getItemCount");
+    }
+
+    #[test]
+    fn test_getter_setter_field_fallback_groovy() {
+        use std::fs::File;
+        use std::io::Write;
+        use tempfile::TempDir;
+        
+        // Create a temporary Groovy file with fields
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("TestClass.groovy");
+        let groovy_content = r#"
+class TestClass {
+    private String fullName
+    private boolean isReady
+    private int totalCount
+}
+"#;
+        let mut file = File::create(&file_path).unwrap();
+        file.write_all(groovy_content.as_bytes()).unwrap();
+        
+        // Create location for the class file
+        let uri = tower_lsp::lsp_types::Url::from_file_path(&file_path).unwrap();
+        let location = tower_lsp::lsp_types::Location::new(uri, tower_lsp::lsp_types::Range::default());
+        
+        let groovy_support = crate::languages::groovy::support::GroovySupport::new();
+        
+        // Test getter method -> field mapping
+        let result = try_find_getter_setter_field(&location, "getFullName", &groovy_support);
+        assert!(result.is_some(), "Should find fullName for getFullName");
+        
+        // Test setter method -> field mapping
+        let result = try_find_getter_setter_field(&location, "setFullName", &groovy_support);
+        assert!(result.is_some(), "Should find fullName for setFullName");
+        
+        // Test boolean getter -> field mapping
+        let result = try_find_getter_setter_field(&location, "isIsReady", &groovy_support);
+        assert!(result.is_some(), "Should find isReady for isIsReady");
+        
+        // Test getter for int field
+        let result = try_find_getter_setter_field(&location, "getTotalCount", &groovy_support);
+        assert!(result.is_some(), "Should find totalCount for getTotalCount");
+    }
+
+    #[test]
+    fn test_getter_setter_method_name_conversion() {
+        // Test method name to field name conversion logic
+        
+        // Getter patterns
+        assert_eq!(extract_field_name_from_method("getMyField"), Some("myField".to_string()));
+        assert_eq!(extract_field_name_from_method("getUserName"), Some("userName".to_string()));
+        assert_eq!(extract_field_name_from_method("getURL"), Some("uRL".to_string()));
+        assert_eq!(extract_field_name_from_method("getA"), Some("a".to_string()));
+        
+        // Setter patterns
+        assert_eq!(extract_field_name_from_method("setMyField"), Some("myField".to_string()));
+        assert_eq!(extract_field_name_from_method("setUserName"), Some("userName".to_string()));
+        assert_eq!(extract_field_name_from_method("setURL"), Some("uRL".to_string()));
+        assert_eq!(extract_field_name_from_method("setA"), Some("a".to_string()));
+        
+        // Boolean getter patterns
+        assert_eq!(extract_field_name_from_method("isEnabled"), Some("enabled".to_string()));
+        assert_eq!(extract_field_name_from_method("isActive"), Some("active".to_string()));
+        assert_eq!(extract_field_name_from_method("isReady"), Some("ready".to_string()));
+        assert_eq!(extract_field_name_from_method("isA"), Some("a".to_string()));
+        
+        // Invalid patterns should return None
+        assert_eq!(extract_field_name_from_method("get"), None);
+        assert_eq!(extract_field_name_from_method("set"), None);
+        assert_eq!(extract_field_name_from_method("is"), None);
+        assert_eq!(extract_field_name_from_method("getfield"), None); // lowercase after prefix
+        assert_eq!(extract_field_name_from_method("setfield"), None); // lowercase after prefix
+        assert_eq!(extract_field_name_from_method("isfield"), None);  // lowercase after prefix
+        assert_eq!(extract_field_name_from_method("regularMethod"), None);
+        assert_eq!(extract_field_name_from_method(""), None);
+    }
+
+    // Helper function to extract field name from method name (for testing)
+    fn extract_field_name_from_method(method_name: &str) -> Option<String> {
+        if method_name.starts_with("get") && method_name.len() > 3 {
+            let field_base = &method_name[3..];
+            if field_base.chars().next()?.is_uppercase() {
+                let mut chars = field_base.chars();
+                let first_char = chars.next()?.to_lowercase().to_string();
+                let rest: String = chars.collect();
+                Some(first_char + &rest)
+            } else {
+                None
+            }
+        } else if method_name.starts_with("set") && method_name.len() > 3 {
+            let field_base = &method_name[3..];
+            if field_base.chars().next()?.is_uppercase() {
+                let mut chars = field_base.chars();
+                let first_char = chars.next()?.to_lowercase().to_string();
+                let rest: String = chars.collect();
+                Some(first_char + &rest)
+            } else {
+                None
+            }
+        } else if method_name.starts_with("is") && method_name.len() > 2 {
+            let field_base = &method_name[2..];
+            if field_base.chars().next()?.is_uppercase() {
+                let mut chars = field_base.chars();
+                let first_char = chars.next()?.to_lowercase().to_string();
+                let rest: String = chars.collect();
+                Some(first_char + &rest)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+
 }
