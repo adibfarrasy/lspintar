@@ -13,6 +13,7 @@ pub struct MethodSignature {
 }
 
 /// Enhanced method resolution that finds the best matching method based on call signature
+#[tracing::instrument(skip_all)]
 pub fn find_method_with_signature<'a>(
     tree: &'a Tree,
     source: &str,
@@ -75,6 +76,7 @@ pub fn find_method_with_signature<'a>(
 }
 
 /// Extract call signature from method invocation context
+#[tracing::instrument(skip_all)]
 pub fn extract_call_signature_from_context(usage_node: &Node, source: &str) -> Option<CallSignature> {
     
     let method_invocation = find_parent_method_invocation(usage_node)?;
@@ -83,6 +85,7 @@ pub fn extract_call_signature_from_context(usage_node: &Node, source: &str) -> O
     result
 }
 
+#[tracing::instrument(skip_all)]
 fn extract_call_signature_from_invocation(method_invocation: &Node, source: &str) -> Option<CallSignature> {
     
     let arguments = method_invocation.child_by_field_name("arguments");
@@ -105,6 +108,7 @@ fn extract_call_signature_from_invocation(method_invocation: &Node, source: &str
     })
 }
 
+#[tracing::instrument(skip_all)]
 fn extract_method_signature(method_node: &Node, source: &str) -> Option<MethodSignature> {
     if method_node.kind() != "method_declaration" {
         return None;
@@ -146,6 +150,7 @@ fn extract_method_signature(method_node: &Node, source: &str) -> Option<MethodSi
     })
 }
 
+#[tracing::instrument(skip_all)]
 fn calculate_signature_match_score(call_sig: &CallSignature, method_sig: &MethodSignature) -> u32 {
     
     // If parameter counts don't match and method doesn't have varargs, no match
@@ -174,6 +179,7 @@ fn calculate_signature_match_score(call_sig: &CallSignature, method_sig: &Method
     score
 }
 
+#[tracing::instrument(skip_all)]
 fn find_parent_method_invocation<'a>(node: &Node<'a>) -> Option<Node<'a>> {
     let mut current = node.parent();
     while let Some(parent) = current {
@@ -186,6 +192,7 @@ fn find_parent_method_invocation<'a>(node: &Node<'a>) -> Option<Node<'a>> {
 }
 
 /// Find the method declaration ancestor by walking up the tree
+#[tracing::instrument(skip_all)]
 fn find_method_declaration_ancestor<'a>(node: &Node<'a>) -> Option<Node<'a>> {
     let mut current = Some(*node);
     while let Some(curr_node) = current {
@@ -197,6 +204,7 @@ fn find_method_declaration_ancestor<'a>(node: &Node<'a>) -> Option<Node<'a>> {
     None
 }
 
+#[tracing::instrument(skip_all)]
 fn infer_argument_type(arg_node: &Node, source: &str) -> Option<String> {
     match arg_node.kind() {
         // Integer literals
@@ -284,6 +292,7 @@ fn infer_argument_type(arg_node: &Node, source: &str) -> Option<String> {
     }
 }
 
+#[tracing::instrument(skip_all)]
 fn contains_floating_point_operand(binary_expr: &Node, _source: &str) -> bool {
     let mut cursor = binary_expr.walk();
     for child in binary_expr.children(&mut cursor) {
@@ -295,6 +304,7 @@ fn contains_floating_point_operand(binary_expr: &Node, _source: &str) -> bool {
     false
 }
 
+#[tracing::instrument(skip_all)]
 fn types_compatible(call_type: &str, param_type: &str) -> bool {
     match (call_type, param_type) {
         // Exact match
@@ -337,6 +347,7 @@ fn types_compatible(call_type: &str, param_type: &str) -> bool {
     }
 }
 
+#[tracing::instrument(skip_all)]
 fn is_primitive_type(type_name: &str) -> bool {
     matches!(
         type_name,

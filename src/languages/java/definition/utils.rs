@@ -20,6 +20,7 @@ use crate::{
 use super::definition_chain::{extract_call_signature_from_context, find_method_with_signature};
 
 /// Get or create a compiled query for Java
+#[tracing::instrument(skip_all)]
 pub fn get_or_create_query(query_text: &str) -> Result<Query, tree_sitter::QueryError> {
     let language = JAVA_PARSER.get_or_init(|| tree_sitter_java::LANGUAGE.into());
     Query::new(language, query_text)
@@ -98,6 +99,7 @@ pub fn find_definition_candidates<'a>(
 }
 
 /// Check if this is a query that should terminate early for local scope
+#[tracing::instrument(skip_all)]
 fn is_local_scope_query(query_text: &str) -> bool {
     query_text.contains("formal_parameter") || query_text.contains("local_variable_declaration")
 }
@@ -295,6 +297,7 @@ pub fn prepare_symbol_lookup_key_with_wildcard_support(
     result
 }
 
+#[tracing::instrument(skip_all)]
 pub fn extract_imports_from_source(source: &str) -> Vec<String> {
     let mut imports = Vec::new();
 
@@ -320,6 +323,7 @@ pub fn extract_imports_from_source(source: &str) -> Vec<String> {
     imports
 }
 
+#[tracing::instrument(skip_all)]
 pub fn get_wildcard_imports_from_source(source: &str) -> Vec<String> {
     let mut wildcard_imports = Vec::new();
 
@@ -341,6 +345,7 @@ pub fn get_wildcard_imports_from_source(source: &str) -> Vec<String> {
     wildcard_imports
 }
 
+#[tracing::instrument(skip_all)]
 pub fn extract_package_from_source(source: &str) -> Option<String> {
     if let Ok(query) = get_or_create_query(r#"(package_declaration (scoped_identifier) @package)"#)
     {
@@ -475,6 +480,7 @@ pub fn resolve_symbol_with_imports(
 }
 
 /// Verify that a given FQN exists in the dependency cache or workspace
+#[tracing::instrument(skip_all)]
 fn verify_fqn_exists(fqn: &str, dependency_cache: &Arc<DependencyCache>) -> bool {
     // Check builtin classes (like java.lang.* classes)
     if let Some(class_name) = fqn.split('.').last() {

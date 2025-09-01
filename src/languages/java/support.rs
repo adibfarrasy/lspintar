@@ -19,12 +19,14 @@ use super::utils::find_identifier_at_position;
 pub struct JavaSupport;
 
 impl JavaSupport {
+    #[tracing::instrument(skip_all)]
     pub fn new() -> Self {
         Self
     }
 
     /// Check if a field access node is actually accessing an enum constant
     /// This is a heuristic approach that checks common enum naming patterns
+    #[tracing::instrument(skip_all)]
     fn is_enum_constant_access(&self, field_node: &Node, source: &str, tree: &Tree) -> bool {
         // Find the parent field_access node
         let field_access = field_node.parent().and_then(|p| {
@@ -68,6 +70,7 @@ impl JavaSupport {
     }
 
     /// Check if a given type name is an enum declaration in the current tree
+    #[tracing::instrument(skip_all)]
     fn is_enum_type_in_tree(&self, type_name: &str, tree: &Tree, source: &str) -> bool {
         let query_text = r#"(enum_declaration name: (identifier) @enum_name)"#;
 
@@ -90,6 +93,7 @@ impl JavaSupport {
     }
 
     /// Check if an identifier could be from a static enum import
+    #[tracing::instrument(skip_all)]
     fn is_static_enum_import(&self, node: &Node, source: &str, tree: &Tree) -> bool {
         if let Ok(identifier_name) = node.utf8_text(source.as_bytes()) {
             // Check if identifier is ALL_CAPS (typical enum constant pattern)

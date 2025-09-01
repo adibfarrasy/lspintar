@@ -98,6 +98,7 @@ pub fn extract_field_signature(tree: &Tree, node: &Node, source: &str) -> Option
     )
 }
 
+#[tracing::instrument(skip_all)]
 fn format_field_signature(
     package_name: String,
     annotations: Vec<String>,

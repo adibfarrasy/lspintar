@@ -1,6 +1,7 @@
 use tree_sitter::{Node, Query, QueryCursor, StreamingIterator};
 use crate::core::constants::KOTLIN_PARSER;
 
+#[tracing::instrument(skip_all)]
 pub fn extract_call_signature_from_context(usage_node: &Node, source: &str) -> Option<CallSignature> {
     // Find the call expression that contains this usage
     let call_node = find_parent_call_expression(usage_node)?;
@@ -9,6 +10,7 @@ pub fn extract_call_signature_from_context(usage_node: &Node, source: &str) -> O
     extract_call_signature_from_call_node(&call_node, source)
 }
 
+#[tracing::instrument(skip_all)]
 fn find_parent_call_expression<'a>(node: &Node<'a>) -> Option<Node<'a>> {
     let mut current = *node;
     
@@ -22,6 +24,7 @@ fn find_parent_call_expression<'a>(node: &Node<'a>) -> Option<Node<'a>> {
     None
 }
 
+#[tracing::instrument(skip_all)]
 fn extract_call_signature_from_call_node(call_node: &Node, _source: &str) -> Option<CallSignature> {
     let mut parameter_count = 0;
     
@@ -44,6 +47,7 @@ fn extract_call_signature_from_call_node(call_node: &Node, _source: &str) -> Opt
 
 
 /// Find method declarations that match the given signature
+#[tracing::instrument(skip_all)]
 pub fn find_method_with_signature<'a>(
     tree: &'a tree_sitter::Tree,
     source: &str,
@@ -76,6 +80,7 @@ pub fn find_method_with_signature<'a>(
     None
 }
 
+#[tracing::instrument(skip_all)]
 fn method_signature_matches(function_node: &Node, _source: &str, call_signature: &CallSignature) -> bool {
     // Count parameters in the function declaration
     let mut param_count = 0;

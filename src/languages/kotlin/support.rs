@@ -19,12 +19,14 @@ use super::utils::find_identifier_at_position;
 pub struct KotlinSupport;
 
 impl KotlinSupport {
+    #[tracing::instrument(skip_all)]
     pub fn new() -> Self {
         Self
     }
 
     /// Check if a navigation expression node is actually accessing an enum constant
     /// This is a heuristic approach that checks common enum naming patterns
+    #[tracing::instrument(skip_all)]
     fn is_enum_constant_access(&self, field_node: &Node, source: &str, tree: &Tree) -> bool {
         // For Kotlin, enum access is through navigation_expression
         // Find the parent navigation_expression node
@@ -63,6 +65,7 @@ impl KotlinSupport {
     }
 
     /// Check if a given type name is an enum declaration in the current tree
+    #[tracing::instrument(skip_all)]
     fn is_enum_type_in_tree(&self, type_name: &str, tree: &Tree, source: &str) -> bool {
         // In Kotlin, enums are class declarations with enum_class_body
         let query_text = r#"(class_declaration (type_identifier) @enum_name (enum_class_body))"#;
@@ -87,6 +90,7 @@ impl KotlinSupport {
 
 impl QueryProvider for KotlinSupport {
 
+#[tracing::instrument(skip_all)]
     fn method_declaration_queries(&self) -> &[&'static str] {
         &[
             r#"(function_declaration) @function"#,
@@ -99,6 +103,7 @@ impl QueryProvider for KotlinSupport {
 
 
 
+#[tracing::instrument(skip_all)]
     fn symbol_type_detection_query(&self) -> &'static str {
         r#"
         ; DECLARATIONS
@@ -198,6 +203,7 @@ impl QueryProvider for KotlinSupport {
         "#
     }
 
+#[tracing::instrument(skip_all)]
     fn import_queries(&self) -> &[&'static str] {
         &[r#"(import_header) @import"#]
     }
@@ -205,14 +211,17 @@ impl QueryProvider for KotlinSupport {
 }
 
 impl LanguageSupport for KotlinSupport {
+#[tracing::instrument(skip_all)]
     fn language_id(&self) -> &'static str {
         "kotlin"
     }
 
+#[tracing::instrument(skip_all)]
     fn file_extensions(&self) -> &[&'static str] {
         &[".kt", ".kts"]
     }
 
+#[tracing::instrument(skip_all)]
     fn create_parser(&self) -> Parser {
         let mut parser = Parser::new();
         if let Err(e) = parser.set_language(&tree_sitter_kotlin::language()) {
@@ -222,10 +231,12 @@ impl LanguageSupport for KotlinSupport {
         parser
     }
 
+#[tracing::instrument(skip_all)]
     fn collect_diagnostics(&self, tree: &Tree, source: &str) -> Vec<Diagnostic> {
         collect_syntax_errors(tree, source, "kotlin-lsp")
     }
 
+#[tracing::instrument(skip_all)]
     fn find_definition(
         &self,
         tree: &Tree,
@@ -256,6 +267,7 @@ impl LanguageSupport for KotlinSupport {
         }
     }
 
+#[tracing::instrument(skip_all)]
     fn find_implementation(
         &self,
         tree: &Tree,
@@ -266,10 +278,12 @@ impl LanguageSupport for KotlinSupport {
         implementation::handle(tree, source, position, dependency_cache, self)
     }
 
+#[tracing::instrument(skip_all)]
     fn provide_hover(&self, tree: &Tree, source: &str, location: Location) -> Option<Hover> {
         hover::handle(tree, source, location, self)
     }
 
+#[tracing::instrument(skip_all)]
     fn determine_symbol_type_from_context(
         &self,
         tree: &Tree,
@@ -337,6 +351,7 @@ impl LanguageSupport for KotlinSupport {
     }
 
     // Use shared generic algorithms for definition resolution
+    #[tracing::instrument(skip_all)]
     fn find_local(
         &self,
         tree: &Tree,
@@ -845,6 +860,7 @@ impl LanguageSupport for KotlinSupport {
 
 impl KotlinSupport {
     /// Extract variable type using Kotlin-specific AST patterns
+    #[tracing::instrument(skip_all)]
     fn extract_kotlin_variable_type(&self, variable_name: &str, tree: &Tree, source: &str, _usage_node: &Node) -> Option<String> {
         
         let query_text = r#"

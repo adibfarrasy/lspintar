@@ -22,6 +22,7 @@ use super::utils::find_identifier_at_position;
 static IMPLEMENTATION_WITH_METHOD_QUERY: OnceLock<Option<Query>> = OnceLock::new();
 
 
+#[tracing::instrument(skip_all)]
 pub fn handle(
     tree: &Tree,
     source: &str,
@@ -236,6 +237,7 @@ fn get_implementation_with_method_query() -> &'static Option<Query> {
 
 
 /// Handle go-to-implementation for method calls like someService.method()
+#[tracing::instrument(skip_all)]
 fn handle_method_call_implementation(
     tree: &Tree,
     source: &str,
@@ -269,6 +271,7 @@ fn handle_method_call_implementation(
 
 
 /// Find implementations of a specific interface method
+#[tracing::instrument(skip_all)]
 async fn find_interface_method_implementations(
     interface_name: &str,
     method_name: &str,
@@ -379,6 +382,7 @@ class TestClass {
 }
 
 /// Find a specific method in a class file
+#[tracing::instrument(skip_all)]
 async fn find_method_in_class(
     class_location: &Location,
     method_name: &str,

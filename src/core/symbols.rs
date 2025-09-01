@@ -30,6 +30,7 @@ pub enum SymbolType {
 }
 
 impl SymbolType {
+    #[tracing::instrument(skip_all)]
     pub fn is_declaration(&self) -> bool {
         matches!(
             self,

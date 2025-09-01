@@ -15,6 +15,7 @@ mod field;
 mod interface;
 mod method;
 
+#[tracing::instrument(skip_all)]
 pub fn handle(
     tree: &Tree,
     source: &str,
@@ -74,6 +75,7 @@ pub fn handle(
 }
 
 /// Find method declaration for a method call within the same file
+#[tracing::instrument(skip_all)]
 fn find_method_declaration_for_call<'a>(
     tree: &'a Tree,
     node: &Node,
@@ -106,6 +108,7 @@ fn find_method_declaration_for_call<'a>(
 }
 
 /// Provide basic method call information when declaration can't be found
+#[tracing::instrument(skip_all)]
 fn extract_method_call_info(node: &Node, source: &str) -> Option<String> {
     let method_name = node.utf8_text(source.as_bytes()).ok()?;
 

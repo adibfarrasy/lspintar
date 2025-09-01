@@ -114,6 +114,7 @@ pub fn extract_field_signature(tree: &Tree, node: &Node, source: &str) -> Option
     )
 }
 
+#[tracing::instrument(skip_all)]
 fn find_field_node<'a>(node: &'a Node<'a>) -> Option<Node<'a>> {
     let mut current = Some(*node);
     
@@ -127,6 +128,7 @@ fn find_field_node<'a>(node: &'a Node<'a>) -> Option<Node<'a>> {
     None
 }
 
+#[tracing::instrument(skip_all)]
 fn format_field_signature(
     package_name: String,
     annotations: Vec<String>,

@@ -3,6 +3,7 @@ use tree_sitter::{Query, QueryCursor, StreamingIterator, Tree};
 use crate::languages::common::hover::HoverSignature;
 
 /// Find the interface declaration node that contains or corresponds to the given node
+#[tracing::instrument(skip_all)]
 fn find_target_interface_node<'a>(node: &'a tree_sitter::Node<'a>) -> Option<tree_sitter::Node<'a>> {
     let mut current = Some(*node);
     
@@ -123,6 +124,7 @@ pub fn extract_interface_signature(tree: &Tree, node: &tree_sitter::Node, source
     )
 }
 
+#[tracing::instrument(skip_all)]
 fn format_interface_signature(
     package_name: String,
     modifiers: String,

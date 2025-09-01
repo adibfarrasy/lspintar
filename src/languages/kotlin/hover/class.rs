@@ -5,6 +5,7 @@ use crate::languages::common::hover::{
 };
 
 /// Find the class declaration node that contains or corresponds to the given node
+#[tracing::instrument(skip_all)]
 fn find_target_class_node<'a>(node: &'a tree_sitter::Node<'a>) -> Option<tree_sitter::Node<'a>> {
     let mut current = Some(*node);
     
@@ -187,6 +188,7 @@ pub fn extract_class_signature(tree: &Tree, node: &tree_sitter::Node, source: &s
 }
 
 /// Find a comment that immediately precedes the class declaration
+#[tracing::instrument(skip_all)]
 fn find_preceding_comment(tree: &Tree, source: &str, class_name: &str) -> String {
     let root = tree.root_node();
     
@@ -224,6 +226,7 @@ fn find_preceding_comment(tree: &Tree, source: &str, class_name: &str) -> String
 }
 
 /// Find the class declaration node by name
+#[tracing::instrument(skip_all)]
 fn find_class_node<'a>(node: &tree_sitter::Node<'a>, source: &str, class_name: &str) -> Option<tree_sitter::Node<'a>> {
     if node.kind() == "class_declaration" {
         // Check if this is the class we're looking for

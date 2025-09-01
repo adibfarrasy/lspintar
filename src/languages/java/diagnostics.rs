@@ -1,6 +1,7 @@
 use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range};
 use tree_sitter::{Query, QueryCursor, StreamingIterator, Tree};
 
+#[tracing::instrument(skip_all)]
 fn byte_to_position(source: &str, byte_offset: usize) -> Position {
     let mut line = 0;
     let mut character = 0;
@@ -20,6 +21,7 @@ fn byte_to_position(source: &str, byte_offset: usize) -> Position {
     Position { line, character }
 }
 
+#[tracing::instrument(skip_all)]
 pub fn collect_syntax_errors(tree: &Tree, source: &str, lsp_source: &str) -> Vec<Diagnostic> {
     let query_text = r#"(ERROR) @error"#;
     let language: tree_sitter::Language = tree_sitter_java::LANGUAGE.into();

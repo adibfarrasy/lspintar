@@ -196,6 +196,7 @@ fn search_external_definition_and_convert(
 
 /// Check if a class is a core Groovy or Java class that should prioritize builtin sources
 /// over JAR dependencies to avoid unnecessary decompilation
+#[tracing::instrument(skip_all)]
 fn is_core_groovy_or_java_class(fully_qualified_name: &str) -> bool {
     use crate::languages::groovy::constants::GROOVY_DEFAULT_IMPORTS;
     

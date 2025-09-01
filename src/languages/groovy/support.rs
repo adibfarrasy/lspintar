@@ -31,6 +31,7 @@ impl GroovySupport {
 
     /// Check if a field access node is actually accessing an enum constant
     /// This is a heuristic approach that checks common enum naming patterns
+    #[tracing::instrument(skip_all)]
     fn is_enum_constant_access(&self, field_node: &Node, source: &str, tree: &Tree) -> bool {
         // Find the parent field_access node
         let field_access = field_node.parent().and_then(|p| {
@@ -74,6 +75,7 @@ impl GroovySupport {
     }
 
     /// Check if a given type name is an enum declaration in the current tree
+    #[tracing::instrument(skip_all)]
     fn is_enum_type_in_tree(&self, type_name: &str, tree: &Tree, source: &str) -> bool {
         let query_text = r#"(enum_declaration name: (identifier) @enum_name)"#;
 
@@ -832,6 +834,7 @@ impl LanguageSupport for GroovySupport {
 
 impl GroovySupport {
     /// Check if an identifier is an imported class name
+    #[tracing::instrument(skip_all)]
     fn is_imported_class(&self, class_name: &str, source: &str) -> bool {
         if self.has_specific_import(class_name, source) {
             return true;
@@ -845,6 +848,7 @@ impl GroovySupport {
     }
 
     /// Check if there's a specific import for this class name
+    #[tracing::instrument(skip_all)]
     fn has_specific_import(&self, class_name: &str, source: &str) -> bool {
         let query_text = r#"
             (import_declaration) @import_decl
@@ -895,6 +899,7 @@ impl GroovySupport {
     }
 
     /// Check if there's a wildcard import that could include this class
+    #[tracing::instrument(skip_all)]
     fn has_wildcard_import_for_class(&self, class_name: &str, source: &str) -> bool {
         // For now, we'll be conservative and assume uppercase class names in wildcard imports are likely classes
         // This could be enhanced by checking against the symbol index

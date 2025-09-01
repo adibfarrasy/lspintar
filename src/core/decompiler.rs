@@ -20,6 +20,7 @@ pub struct JavaDecompiler {
 }
 
 impl JavaDecompiler {
+    #[tracing::instrument(skip_all)]
     pub fn new() -> Result<Self> {
         let temp_dir = tempfile::tempdir()
             .context("Failed to create temporary directory for decompilation")?;
@@ -31,6 +32,7 @@ impl JavaDecompiler {
     }
 
     /// Decompile a single .class file to .java source code
+    #[tracing::instrument(skip_all)]
     pub fn decompile_class(&self, class_name: &str, class_bytes: &[u8]) -> Result<String> {
         if self.decompiler_jar_path.is_none() {
             return Err(anyhow!(
@@ -105,6 +107,7 @@ impl JavaDecompiler {
 
 
     /// Execute a command with a timeout to prevent runaway decompilation processes
+    #[tracing::instrument(skip_all)]
     fn execute_with_timeout(&self, mut command: Command) -> Result<std::process::Output> {
         let mut child = command
             .stdout(Stdio::piped())
@@ -161,6 +164,7 @@ impl JavaDecompiler {
 }
 
 /// Find Java decompiler JAR in common locations
+#[tracing::instrument(skip_all)]
 fn find_decompiler_jar() -> Option<PathBuf> {
     let mut possible_paths = vec![
         // Common installation locations

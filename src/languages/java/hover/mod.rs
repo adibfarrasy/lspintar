@@ -16,6 +16,7 @@ mod interface;
 mod method;
 mod utils;
 
+#[tracing::instrument(skip_all)]
 pub fn handle(
     tree: &Tree,
     source: &str,
@@ -71,6 +72,7 @@ pub fn handle(
     })
 }
 
+#[tracing::instrument(skip_all)]
 fn extract_enum_signature(tree: &Tree, source: &str) -> Option<String> {
     let query_text = r#"
     (package_declaration
@@ -139,6 +141,7 @@ fn extract_enum_signature(tree: &Tree, source: &str) -> Option<String> {
     format_enum_signature(package_name, modifiers, enum_name, interface_line, javadoc)
 }
 
+#[tracing::instrument(skip_all)]
 fn format_enum_signature(
     package_name: String,
     modifiers: String,
@@ -188,6 +191,7 @@ fn format_enum_signature(
     Some(parts.join("\n"))
 }
 
+#[tracing::instrument(skip_all)]
 fn extract_type_usage_info(node: &Node, source: &str) -> Option<String> {
     if let Ok(type_text) = node.utf8_text(source.as_bytes()) {
         Some(format!("```java\n{}\n```\n\n*Type reference*", type_text))
@@ -196,6 +200,7 @@ fn extract_type_usage_info(node: &Node, source: &str) -> Option<String> {
     }
 }
 
+#[tracing::instrument(skip_all)]
 fn extract_variable_info(_tree: &Tree, node: &Node, source: &str) -> Option<String> {
     // Try to find variable declaration (local variables, fields, parameters)
     let var_node = find_parent_of_kind(node, "variable_declaration")
@@ -212,6 +217,7 @@ fn extract_variable_info(_tree: &Tree, node: &Node, source: &str) -> Option<Stri
 }
 
 /// Find method declaration for a method call within the same file
+#[tracing::instrument(skip_all)]
 fn find_method_declaration_for_call<'a>(
     tree: &'a Tree,
     node: &Node,
@@ -244,6 +250,7 @@ fn find_method_declaration_for_call<'a>(
 }
 
 /// Provide basic method call information when declaration can't be found
+#[tracing::instrument(skip_all)]
 fn extract_method_call_info(node: &Node, source: &str) -> Option<String> {
     let method_name = node.utf8_text(source.as_bytes()).ok()?;
 
@@ -286,6 +293,7 @@ fn extract_method_call_info(node: &Node, source: &str) -> Option<String> {
     ))
 }
 
+#[tracing::instrument(skip_all)]
 fn find_parent_of_kind<'a>(node: &'a Node<'a>, kind: &str) -> Option<Node<'a>> {
     if node.kind() == kind {
         return Some(*node);

@@ -27,6 +27,7 @@ pub enum BuildTool {
     Gradle,
 }
 
+#[tracing::instrument(skip_all)]
 pub fn detect_build_tool(project_root: &Path) -> Option<BuildTool> {
     if project_root.join("build.gradle").exists() || project_root.join("build.gradle.kts").exists()
     {
@@ -89,6 +90,7 @@ pub async fn parse_settings_gradle(project_root: &PathBuf) -> Result<HashMap<Str
     Ok(project_map)
 }
 
+#[tracing::instrument(skip_all)]
 fn parse_include_content(
     content: &str,
     project_root: &PathBuf,
@@ -210,6 +212,7 @@ pub async fn execute_gradle_dependencies(
 }
 
 /// Parse output that contains multiple configuration sections
+#[tracing::instrument(skip_all)]
 fn parse_multi_configuration_output(output: &str) -> HashMap<String, String> {
     let mut sections = HashMap::new();
     let mut current_config = None;
@@ -288,6 +291,7 @@ pub fn parse_gradle_dependencies_output(
     })
 }
 
+#[tracing::instrument(skip_all)]
 fn is_configuration_header(line: &str) -> bool {
     line.contains(" - ")
         && (line.contains("compileClasspath")
@@ -295,6 +299,7 @@ fn is_configuration_header(line: &str) -> bool {
             || line.contains("runtimeClasspath"))
 }
 
+#[tracing::instrument(skip_all)]
 fn extract_project_dependency(line: &str) -> Option<String> {
     // Match lines like: "+--- project :my-project" or "\\--- project :other-module"
     if line.contains("project :") {
@@ -307,6 +312,7 @@ fn extract_project_dependency(line: &str) -> Option<String> {
     None
 }
 
+#[tracing::instrument(skip_all)]
 fn extract_external_dependency(line: &str) -> Option<ExternalDependency> {
     let cleaned = remove_tree_characters(line);
 
@@ -344,6 +350,7 @@ fn extract_external_dependency(line: &str) -> Option<ExternalDependency> {
     }
 }
 
+#[tracing::instrument(skip_all)]
 fn remove_tree_characters(line: &str) -> String {
     line.chars()
         .skip_while(|&c| matches!(c, '+' | '-' | '\\' | '|' | ' '))
@@ -525,6 +532,7 @@ pub fn extract_class_names_from_jar(jar_path: &PathBuf) -> Result<HashMap<String
     Ok(class_name_to_path)
 }
 
+#[tracing::instrument(skip_all)]
 fn should_index_source_file(file_path: &str) -> bool {
     // Skip inner classes (contain $), test classes, and common build artifacts
     if file_path.contains('$') {
@@ -541,6 +549,7 @@ fn should_index_source_file(file_path: &str) -> bool {
     !SKIP_PACKAGES.iter().any(|skip| file_path.starts_with(skip))
 }
 
+#[tracing::instrument(skip_all)]
 fn should_index_class_file(file_path: &str) -> bool {
     // Similar filtering as source files, but for .class files
     if file_path.contains('$') {
@@ -557,6 +566,7 @@ fn should_index_class_file(file_path: &str) -> bool {
     !SKIP_PACKAGES.iter().any(|skip| file_path.starts_with(skip))
 }
 
+#[tracing::instrument(skip_all)]
 fn source_path_to_class_name(source_path: &str) -> Option<String> {
     // Convert "com/example/MyClass.java", "com/example/MyClass.groovy", or "com/example/MyClass.kt" to "com.example.MyClass"
     let without_extension = source_path
@@ -567,12 +577,14 @@ fn source_path_to_class_name(source_path: &str) -> Option<String> {
     Some(without_extension.replace('/', "."))
 }
 
+#[tracing::instrument(skip_all)]
 fn class_path_to_class_name(class_path: &str) -> Option<String> {
     // Convert "com/example/MyClass.class" to "com.example.MyClass"
     let without_extension = class_path.strip_suffix(".class")?;
     Some(without_extension.replace('/', "."))
 }
 
+#[tracing::instrument(skip_all)]
 fn extract_kotlin_definitions_from_content(content: &str) -> Option<Vec<String>> {
     let language = KOTLIN_PARSER.get_or_init(|| tree_sitter_kotlin::language());
     let mut parser = Parser::new();
@@ -624,6 +636,7 @@ fn extract_kotlin_definitions_from_content(content: &str) -> Option<Vec<String>>
     }
 }
 
+#[tracing::instrument(skip_all)]
 fn extract_kotlin_package_from_content(tree: &tree_sitter::Tree, content: &str) -> Option<String> {
     let language = KOTLIN_PARSER.get_or_init(|| tree_sitter_kotlin::language());
     let query_text = r#"(package_header (identifier) @package)"#;
@@ -644,6 +657,7 @@ fn extract_kotlin_package_from_content(tree: &tree_sitter::Tree, content: &str) 
     None
 }
 
+#[tracing::instrument(skip_all)]
 fn extract_java_definitions_from_content(content: &str) -> Option<Vec<String>> {
     let language = JAVA_PARSER.get_or_init(|| tree_sitter_java::LANGUAGE.into());
     let mut parser = Parser::new();
@@ -696,6 +710,7 @@ fn extract_java_definitions_from_content(content: &str) -> Option<Vec<String>> {
     }
 }
 
+#[tracing::instrument(skip_all)]
 fn extract_java_package_from_content(tree: &tree_sitter::Tree, content: &str) -> Option<String> {
     let language = JAVA_PARSER.get_or_init(|| tree_sitter_java::LANGUAGE.into());
     let query_text = r#"(package_declaration (scoped_identifier) @package)"#;
@@ -716,6 +731,7 @@ fn extract_java_package_from_content(tree: &tree_sitter::Tree, content: &str) ->
     None
 }
 
+#[tracing::instrument(skip_all)]
 fn extract_groovy_definitions_from_content(content: &str) -> Option<Vec<String>> {
     let language = GROOVY_PARSER.get_or_init(|| tree_sitter_groovy::language());
     let mut parser = Parser::new();
@@ -769,6 +785,7 @@ fn extract_groovy_definitions_from_content(content: &str) -> Option<Vec<String>>
     }
 }
 
+#[tracing::instrument(skip_all)]
 fn extract_groovy_package_from_content(tree: &tree_sitter::Tree, content: &str) -> Option<String> {
     let language = GROOVY_PARSER.get_or_init(|| tree_sitter_groovy::language());
     let query_text = r#"(package_declaration (dotted_identifier) @package)"#;
@@ -847,6 +864,7 @@ pub fn find_symbol_in_jar_content(
 
 /// Heuristics to determine if a file is likely to contain multiple symbols
 /// and worth parsing content for
+#[tracing::instrument(skip_all)]
 fn should_check_for_multiple_symbols(file_path: &str) -> bool {
     // Skip files unlikely to have multiple symbols
     if file_path.contains('$') || file_path.contains("/test/") {
@@ -882,6 +900,7 @@ fn should_check_for_multiple_symbols(file_path: &str) -> bool {
     false
 }
 
+#[tracing::instrument(skip_all)]
 pub fn get_gradle_cache_base() -> Option<PathBuf> {
     // 0. User-defined path
     if let Some(gradle_cache_value) = get_global(GRADLE_CACHE_DIR) {

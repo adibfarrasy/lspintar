@@ -159,6 +159,7 @@ async fn find_project_external(
     None
 }
 
+#[tracing::instrument(skip_all)]
 fn search_external_definition_and_convert(
     symbol_name: &str,
     source_info: SourceFileInfo,
@@ -188,6 +189,7 @@ fn search_external_definition_and_convert(
 
 /// Check if a class is a core Java class that should prioritize builtin sources
 /// over JAR dependencies to avoid unnecessary decompilation  
+#[tracing::instrument(skip_all)]
 fn is_core_java_class(fully_qualified_name: &str) -> bool {
     use crate::languages::java::constants::JAVA_COMMON_IMPORTS;
     

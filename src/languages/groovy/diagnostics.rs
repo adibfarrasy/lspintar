@@ -1,12 +1,14 @@
 use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range};
 use tree_sitter::Tree;
 
+#[tracing::instrument(skip_all)]
 pub fn collect_syntax_errors(tree: &Tree, source: &str, lsp_source: &str) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
     collect_syntax_errors_recursive(tree.root_node(), source, &mut diagnostics, lsp_source);
     diagnostics
 }
 
+#[tracing::instrument(skip_all)]
 fn collect_syntax_errors_recursive(
     node: tree_sitter::Node,
     source: &str,

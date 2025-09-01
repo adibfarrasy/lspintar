@@ -3,6 +3,7 @@ use tree_sitter::{Query, QueryCursor, StreamingIterator, Tree};
 use crate::languages::common::hover::HoverSignature;
 
 /// Find the class declaration node that contains or corresponds to the given node
+#[tracing::instrument(skip_all)]
 fn find_target_class_node<'a>(node: &'a tree_sitter::Node<'a>) -> Option<tree_sitter::Node<'a>> {
     let mut current = Some(*node);
     
@@ -155,6 +156,7 @@ pub fn extract_class_signature(tree: &Tree, node: &tree_sitter::Node, source: &s
     )
 }
 
+#[tracing::instrument(skip_all)]
 fn format_class_signature(
     package_name: String,
     annotations: Vec<String>,

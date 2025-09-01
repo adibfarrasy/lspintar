@@ -87,6 +87,7 @@ pub fn search_local_definitions<'a>(
 }
 
 /// Find variable declarations that are accessible from the usage point
+#[tracing::instrument(skip_all)]
 fn find_variable_declarations_in_scope<'a>(
     _tree: &'a Tree,
     source: &str,
@@ -126,6 +127,7 @@ fn find_variable_declarations_in_scope<'a>(
 }
 
 /// Find the closest declaration to the usage point
+#[tracing::instrument(skip_all)]
 fn find_closest_declaration<'a>(
     usage_node: &Node,
     candidates: &[Node<'a>],
@@ -144,6 +146,7 @@ fn find_closest_declaration<'a>(
 }
 
 /// Find variables as field declarations
+#[tracing::instrument(skip_all)]
 fn find_as_field<'a>(tree: &'a Tree, source: &str, symbol_name: &str) -> Option<Node<'a>> {
     let query_text = r#"(property_declaration (variable_declaration (simple_identifier) @name))"#;
     let candidates = find_definition_candidates(tree, source, symbol_name, query_text)?;
@@ -151,6 +154,7 @@ fn find_as_field<'a>(tree: &'a Tree, source: &str, symbol_name: &str) -> Option<
 }
 
 /// Find the best method match using signature matching
+#[tracing::instrument(skip_all)]
 fn find_best_method_match<'a>(
     tree: &'a Tree,
     source: &str,
@@ -180,6 +184,7 @@ fn find_best_method_match<'a>(
 }
 
 /// Find containing function for a node
+#[tracing::instrument(skip_all)]
 fn find_containing_function<'a>(node: &Node<'a>) -> Option<Node<'a>> {
     let mut current = node.parent();
     while let Some(parent) = current {
@@ -192,6 +197,7 @@ fn find_containing_function<'a>(node: &Node<'a>) -> Option<Node<'a>> {
 }
 
 /// Find function parameters that match the symbol name
+#[tracing::instrument(skip_all)]
 fn find_function_parameters<'a>(
     function_node: &Node<'a>,
     source: &str,
@@ -221,6 +227,7 @@ fn find_function_parameters<'a>(
 }
 
 /// Find lambda parameters that match the symbol name
+#[tracing::instrument(skip_all)]
 fn find_lambda_parameters<'a>(
     usage_node: &Node<'a>,
     source: &str,
@@ -257,6 +264,7 @@ fn find_lambda_parameters<'a>(
 }
 
 /// Find variable declarations in a block that come before the usage
+#[tracing::instrument(skip_all)]
 fn find_variables_in_block<'a>(
     block_node: &Node<'a>,
     source: &str,
@@ -318,6 +326,7 @@ fn find_variables_in_block<'a>(
 }
 
 
+#[tracing::instrument(skip_all)]
 fn get_declared_name(node: &Node, source: &str) -> Option<String> {
     match node.kind() {
         "function_declaration" => {
@@ -389,6 +398,7 @@ fn get_declared_name(node: &Node, source: &str) -> Option<String> {
 }
 
 /// Find constructor parameters that match the symbol name
+#[tracing::instrument(skip_all)]
 fn find_constructor_parameters<'a>(
     usage_node: &Node<'a>,
     source: &str,
@@ -413,6 +423,7 @@ fn find_constructor_parameters<'a>(
 }
 
 /// Find constructor parameters that match the given name
+#[tracing::instrument(skip_all)]
 fn find_matching_constructor_params<'a>(
     constructor_node: &Node<'a>,
     source: &str,

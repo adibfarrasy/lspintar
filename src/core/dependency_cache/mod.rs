@@ -50,6 +50,7 @@ pub struct DependencyCache {
 }
 
 impl DependencyCache {
+    #[tracing::instrument(skip_all)]
     pub fn new() -> Self {
         Self {
             symbol_index: Arc::new(DashMap::new()),
@@ -63,6 +64,7 @@ impl DependencyCache {
     }
 
     /// Initialize persistence layer for lazy loading
+    #[tracing::instrument(skip_all)]
     pub async fn initialize_persistence(&self, project_root: PathBuf) -> Result<()> {
         let persistence = PersistenceLayer::new(project_root)?;
         let mut guard = self.persistence.write().await;
@@ -71,6 +73,7 @@ impl DependencyCache {
     }
 
     /// Check if cache exists and is valid, initialize persistence layer for lazy loading
+    #[tracing::instrument(skip_all)]
     pub async fn check_and_initialize_cache(&self, project_root: &PathBuf) -> Result<bool> {
         let persistence = match PersistenceLayer::new(project_root.clone()) {
             Ok(p) => p,
@@ -111,6 +114,7 @@ impl DependencyCache {
     }
 
     /// Save cache to persistent storage
+    #[tracing::instrument(skip_all)]
     pub async fn save_to_disk(&self, project_root: &PathBuf) -> Result<()> {
         let persistence = PersistenceLayer::new(project_root.clone())
             .context("Failed to initialize persistence layer")?;
@@ -295,6 +299,7 @@ impl DependencyCache {
 
     /// Find all fully qualified names for a given class name in a project
     /// Used for wildcard import resolution
+    #[tracing::instrument(skip_all)]
     pub fn find_symbols_by_class_name(
         &self,
         project_root: &PathBuf,
@@ -445,6 +450,7 @@ impl DependencyCache {
     }
 
     /// Lazy lookup for project external info, checking in-memory cache first, then database
+    #[tracing::instrument(skip_all)]
     pub async fn find_project_external_info(
         &self,
         project_root: &PathBuf,
@@ -475,6 +481,7 @@ impl DependencyCache {
 
     /// Enhanced external symbol lookup with lazy content parsing fallback
     /// This is the main entry point for finding external symbols with smart fallbacks
+    #[tracing::instrument(skip_all)]
     pub async fn find_external_symbol_with_lazy_parsing(
         &self,
         project_root: &PathBuf,
@@ -516,6 +523,7 @@ impl DependencyCache {
     }
 
     /// Helper function to find which JAR contains a specific class
+    #[tracing::instrument(skip_all)]
     async fn find_jar_for_class(
         &self, 
         project_root: &PathBuf, 
@@ -589,6 +597,7 @@ impl DependencyCache {
         Ok(())
     }
 
+    #[tracing::instrument(skip_all)]
     fn convert_to_json_format(&self) -> serde_json::Value {
         let mut projects = HashMap::new();
 
@@ -662,6 +671,7 @@ impl DependencyCache {
         })
     }
 
+    #[tracing::instrument(skip_all)]
     fn index_inheritance(&self, project_root: &PathBuf, symbol: &SymbolDefinition) {
         if let Some(parent_class) = &symbol.extends {
             self.inheritance_index

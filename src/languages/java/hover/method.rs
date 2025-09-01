@@ -118,6 +118,7 @@ pub fn extract_method_signature(tree: &Tree, node: &Node, source: &str) -> Optio
     )
 }
 
+#[tracing::instrument(skip_all)]
 fn find_method_node<'a>(node: &'a Node<'a>) -> Option<Node<'a>> {
     let mut current = Some(*node);
     
@@ -131,6 +132,7 @@ fn find_method_node<'a>(node: &'a Node<'a>) -> Option<Node<'a>> {
     None
 }
 
+#[tracing::instrument(skip_all)]
 fn format_method_signature(
     package_name: String,
     annotations: Vec<String>,

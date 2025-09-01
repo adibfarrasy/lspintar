@@ -95,6 +95,7 @@ pub fn search_local_definitions<'a>(
 /// 1. Variable declarations in the same block that come before usage
 /// 2. Variable declarations in parent blocks
 /// 3. Method parameters
+#[tracing::instrument(skip_all)]
 fn find_variable_declarations_in_scope<'a>(
     tree: &'a Tree,
     source: &str,
@@ -189,6 +190,7 @@ fn find_variable_declarations_in_scope<'a>(
 }
 
 /// Find the identifier node within a variable declaration that matches the symbol name
+#[tracing::instrument(skip_all)]
 fn find_identifier_in_declaration<'a>(
     var_decl: &Node<'a>,
     source: &str,
@@ -247,6 +249,7 @@ fn calculate_scope_distance(usage_node: &Node, declaration_node: &Node) -> Optio
     Some(usage_depth.saturating_sub(decl_depth))
 }
 
+#[tracing::instrument(skip_all)]
 fn is_in_scope(usage_node: &Node, declaration_node: &Node) -> bool {
     let decl_method = find_containing_method(declaration_node);
     let usage_method = find_containing_method(usage_node);
@@ -296,6 +299,7 @@ fn is_in_scope(usage_node: &Node, declaration_node: &Node) -> bool {
     false
 }
 
+#[tracing::instrument(skip_all)]
 fn find_containing_method<'a>(node: &Node<'a>) -> Option<Node<'a>> {
     let mut current = node.parent();
     while let Some(parent) = current {
@@ -307,6 +311,7 @@ fn find_containing_method<'a>(node: &Node<'a>) -> Option<Node<'a>> {
     None
 }
 
+#[tracing::instrument(skip_all)]
 fn find_containing_block<'a>(node: &Node<'a>) -> Option<Node<'a>> {
     let mut current = node.parent();
     while let Some(parent) = current {
@@ -318,6 +323,7 @@ fn find_containing_block<'a>(node: &Node<'a>) -> Option<Node<'a>> {
     None
 }
 
+#[tracing::instrument(skip_all)]
 fn get_nesting_depth(node: &Node) -> usize {
     let mut depth = 0;
     let mut current = node.parent();
@@ -407,6 +413,7 @@ fn extract_method_signature(method_node: &Node, source: &str) -> Option<MethodSi
     })
 }
 
+#[tracing::instrument(skip_all)]
 fn signatures_match(call_sig: &CallSignature, method_sig: &MethodSignature) -> bool {
     for (i, call_arg_type) in call_sig.arg_types.iter().enumerate() {
         if let Some(method_param_type) = method_sig.param_types.get(i) {
@@ -426,6 +433,7 @@ fn signatures_match(call_sig: &CallSignature, method_sig: &MethodSignature) -> b
     true
 }
 
+#[tracing::instrument(skip_all)]
 fn find_parent_method_invocation<'a>(node: &Node<'a>) -> Option<Node<'a>> {
     let mut current = node.parent();
     while let Some(parent) = current {
@@ -437,6 +445,7 @@ fn find_parent_method_invocation<'a>(node: &Node<'a>) -> Option<Node<'a>> {
     None
 }
 
+#[tracing::instrument(skip_all)]
 fn infer_argument_type(arg_node: &Node, source: &str) -> Option<String> {
     match arg_node.kind() {
         // Integer literals
@@ -549,6 +558,7 @@ fn infer_argument_type(arg_node: &Node, source: &str) -> Option<String> {
     }
 }
 
+#[tracing::instrument(skip_all)]
 fn contains_floating_point_operand(binary_expr: &Node, _source: &str) -> bool {
     let mut cursor = binary_expr.walk();
     for child in binary_expr.children(&mut cursor) {
@@ -570,6 +580,7 @@ fn contains_floating_point_operand(binary_expr: &Node, _source: &str) -> bool {
 }
 
 /// Try to determine if a variable is of floating point type by looking at its declaration
+#[tracing::instrument(skip_all)]
 fn is_floating_point_variable(var_name: &str, current_node: &Node, source: &str) -> bool {
     // Look for variable declarations in the current scope and parent scopes
     let mut current = Some(*current_node);
@@ -585,6 +596,7 @@ fn is_floating_point_variable(var_name: &str, current_node: &Node, source: &str)
 }
 
 /// Find the type of a variable by looking at its declaration in the given node
+#[tracing::instrument(skip_all)]
 fn find_variable_type_in_node(var_name: &str, node: &Node, source: &str) -> Option<String> {
     // Look for local variable declarations with explicit types
     let var_decl_query = r#"
@@ -628,6 +640,7 @@ fn find_variable_type_in_node(var_name: &str, node: &Node, source: &str) -> Opti
 }
 
 /// Check if a type name represents a floating point type
+#[tracing::instrument(skip_all)]
 fn is_floating_point_type(type_name: &str) -> bool {
     matches!(
         type_name.trim(),
@@ -635,6 +648,7 @@ fn is_floating_point_type(type_name: &str) -> bool {
     )
 }
 
+#[tracing::instrument(skip_all)]
 fn types_compatible(call_type: &str, param_type: &str) -> bool {
     match (call_type, param_type) {
         // Exact match
@@ -677,6 +691,7 @@ fn types_compatible(call_type: &str, param_type: &str) -> bool {
     }
 }
 
+#[tracing::instrument(skip_all)]
 fn is_primitive_type(type_name: &str) -> bool {
     matches!(
         type_name,
@@ -729,6 +744,7 @@ fn find_best_method_match<'a>(
 }
 
 /// Try to find a symbol as a field declaration in the current class
+#[tracing::instrument(skip_all)]
 fn find_as_field<'a>(tree: &'a Tree, source: &str, symbol_name: &str) -> Option<Node<'a>> {
     let field_query_text =
         r#"(field_declaration declarator: (variable_declarator name: (identifier) @name))"#;

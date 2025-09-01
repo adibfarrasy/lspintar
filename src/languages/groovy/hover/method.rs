@@ -104,6 +104,7 @@ pub fn extract_method_signature(tree: &Tree, node: &Node, source: &str) -> Optio
     )
 }
 
+#[tracing::instrument(skip_all)]
 fn format_method_signature(
     package_name: String,
     annotations: Vec<String>,

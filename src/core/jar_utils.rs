@@ -12,6 +12,7 @@ use crate::{
 };
 
 /// Creates a temporary directory path for a dependency
+#[tracing::instrument(skip_all)]
 pub fn dependency_temp_dir(dependency: Option<ExternalDependency>) -> PathBuf {
     let base_dir = std::env::temp_dir().join(TEMP_DIR_PREFIX);
 
@@ -22,6 +23,7 @@ pub fn dependency_temp_dir(dependency: Option<ExternalDependency>) -> PathBuf {
 }
 
 /// Extracts a ZIP/JAR file to a temporary directory
+#[tracing::instrument(skip_all)]
 pub fn extract_zip_file_to_temp(source_info: &SourceFileInfo) -> Option<()> {
     let temp_dir = dependency_temp_dir(source_info.dependency.clone());
 
@@ -77,6 +79,7 @@ pub fn extract_zip_file_to_temp(source_info: &SourceFileInfo) -> Option<()> {
 }
 
 /// Gets the URI for a source file, handling both direct files and ZIP/JAR extraction
+#[tracing::instrument(skip_all)]
 pub fn get_uri(external_info: &SourceFileInfo) -> Option<String> {
     if let Some(zip_internal_path) = &external_info.zip_internal_path {
         let temp_dir = dependency_temp_dir(external_info.dependency.clone());

@@ -11,6 +11,7 @@ use crate::core::{
 static EXTRACT_SYMBOL_QUERIES: OnceLock<Vec<(Query, SymbolType)>> = OnceLock::new();
 
 // Enhanced to handle nested declarations with proper fully-qualified names
+#[tracing::instrument(skip_all)]
 fn get_extract_symbol_queries() -> &'static [(Query, SymbolType)] {
     EXTRACT_SYMBOL_QUERIES.get_or_init(|| {
         let language = tree_sitter_groovy::language();
@@ -83,6 +84,7 @@ fn get_extract_symbol_queries() -> &'static [(Query, SymbolType)] {
     })
 }
 
+#[tracing::instrument(skip_all)]
 pub fn extract_groovy_symbols(parsed_file: &ParsedSourceFile) -> Result<Vec<SymbolDefinition>> {
     let mut symbols = Vec::new();
 
@@ -146,6 +148,7 @@ pub fn extract_groovy_symbols(parsed_file: &ParsedSourceFile) -> Result<Vec<Symb
     Ok(symbols)
 }
 
+#[tracing::instrument(skip_all)]
 pub fn extract_groovy_package(tree: &Tree, content: &str) -> Option<String> {
     let query_text = r#"(package_declaration (scoped_identifier) @package)"#;
     let query = Query::new(&tree_sitter_groovy::language(), query_text).ok()?;
@@ -168,6 +171,7 @@ pub fn extract_groovy_package(tree: &Tree, content: &str) -> Option<String> {
     result
 }
 
+#[tracing::instrument(skip_all)]
 fn is_groovy_symbol_accessible(node: &Node, content: &str) -> bool {
     let mut declaration_node = node.parent();
     while let Some(parent) = declaration_node {
@@ -215,6 +219,7 @@ fn is_groovy_symbol_accessible(node: &Node, content: &str) -> bool {
 }
 
 /// Build proper nested class name (e.g., OuterClass$InnerClass)
+#[tracing::instrument(skip_all)]
 fn build_nested_class_name(node: &Node, content: &str, class_name: &str) -> String {
     let mut class_names = vec![class_name.to_string()];
     let mut current_node = node.parent();

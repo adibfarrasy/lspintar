@@ -10,6 +10,7 @@ use crate::{
 
 use super::utils::{resolve_symbol_with_imports, search_definition, extract_imports_from_source};
 
+#[tracing::instrument(skip_all)]
 pub async fn find_in_workspace(
     source: &str,
     file_uri: &str,

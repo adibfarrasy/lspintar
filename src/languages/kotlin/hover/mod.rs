@@ -16,6 +16,7 @@ pub mod interface;
 pub mod method;
 pub mod utils;
 
+#[tracing::instrument(skip_all)]
 pub fn handle(
     tree: &Tree,
     source: &str,
@@ -75,6 +76,7 @@ pub fn handle(
     })
 }
 
+#[tracing::instrument(skip_all)]
 fn extract_object_signature(tree: &Tree, source: &str) -> Option<String> {
     let query_text = r#"
     (package_header (identifier) @package_name)
@@ -165,6 +167,7 @@ fn extract_object_signature(tree: &Tree, source: &str) -> Option<String> {
     Some(parts.join("\n"))
 }
 
+#[tracing::instrument(skip_all)]
 fn extract_enum_signature(tree: &Tree, source: &str) -> Option<String> {
     let query_text = r#"
     (package_header (identifier) @package_name)
@@ -255,6 +258,7 @@ fn extract_enum_signature(tree: &Tree, source: &str) -> Option<String> {
     Some(parts.join("\n"))
 }
 
+#[tracing::instrument(skip_all)]
 fn extract_type_alias_signature(tree: &Tree, source: &str) -> Option<String> {
     let query_text = r#"
     (package_header (identifier) @package_name)
@@ -341,11 +345,13 @@ fn extract_type_alias_signature(tree: &Tree, source: &str) -> Option<String> {
     Some(parts.join("\n"))
 }
 
+#[tracing::instrument(skip_all)]
 fn extract_type_usage_info(node: &Node, source: &str) -> Option<String> {
     let type_text = node.utf8_text(source.as_bytes()).ok()?;
     Some(format!("```kotlin\n{}\n```", type_text))
 }
 
+#[tracing::instrument(skip_all)]
 fn find_method_declaration_for_call<'a>(tree: &'a Tree, node: &'a Node<'a>, source: &str) -> Option<Node<'a>> {
     let method_name = node.utf8_text(source.as_bytes()).ok()?;
     
@@ -380,6 +386,7 @@ fn find_method_declaration_for_call<'a>(tree: &'a Tree, node: &'a Node<'a>, sour
     None
 }
 
+#[tracing::instrument(skip_all)]
 fn extract_method_call_info(node: &Node, source: &str) -> Option<String> {
     let method_name = node.utf8_text(source.as_bytes()).ok()?;
 
@@ -448,6 +455,7 @@ fn extract_method_call_info(node: &Node, source: &str) -> Option<String> {
     ))
 }
 
+#[tracing::instrument(skip_all)]
 fn extract_variable_info(tree: &Tree, node: &Node, source: &str) -> Option<String> {
     // Look for the variable declaration
     let query_text = r#"
@@ -516,6 +524,7 @@ fn extract_variable_info(tree: &Tree, node: &Node, source: &str) -> Option<Strin
 }
 
 /// Check if a class_declaration node is actually an enum class
+#[tracing::instrument(skip_all)]
 fn is_enum_class(node: &Node, source: &str) -> bool {
     // Look for the "enum" keyword in modifiers or before "class"
     for child in node.children(&mut node.walk()) {

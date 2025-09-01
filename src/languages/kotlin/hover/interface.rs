@@ -3,6 +3,7 @@ use tree_sitter::{Query, QueryCursor, StreamingIterator, Tree};
 use crate::languages::common::hover::{format_inheritance, deduplicate_modifiers, HoverSignature};
 
 /// Find the interface declaration node that contains or corresponds to the given node
+#[tracing::instrument(skip_all)]
 fn find_target_interface_node<'a>(node: &'a tree_sitter::Node<'a>) -> Option<tree_sitter::Node<'a>> {
     let mut current = Some(*node);
     

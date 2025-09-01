@@ -15,6 +15,7 @@ use crate::{
 
 use super::utils::find_identifier_at_position;
 
+#[tracing::instrument(skip_all)]
 pub fn handle(
     tree: &Tree,
     source: &str,
@@ -48,6 +49,7 @@ pub fn handle(
     }
 }
 
+#[tracing::instrument(skip_all)]
 async fn find_implementations(
     interface_name: &str,
     dependency_cache: &Arc<DependencyCache>,
@@ -112,6 +114,7 @@ async fn find_implementations(
     Ok(all_locations)
 }
 
+#[tracing::instrument(skip_all)]
 fn handle_method_call_implementation(
     tree: &Tree,
     source: &str,
@@ -143,6 +146,7 @@ fn handle_method_call_implementation(
     }
 }
 
+#[tracing::instrument(skip_all)]
 async fn find_method_implementations(
     tree: &Tree,
     source: &str,
@@ -169,6 +173,7 @@ async fn find_method_implementations(
 }
 
 /// Find parent interface or class name for a method
+#[tracing::instrument(skip_all)]
 fn get_parent_name(tree: &Tree, source: &str, method_name: &str) -> Option<String> {
     let query_text = r#"
         ; Interface method
@@ -219,6 +224,7 @@ fn get_parent_name(tree: &Tree, source: &str, method_name: &str) -> Option<Strin
 }
 
 /// Find a specific method in a class file
+#[tracing::instrument(skip_all)]
 async fn find_method_in_class(
     class_location: &Location,
     method_name: &str,
@@ -264,6 +270,7 @@ async fn find_method_in_class(
 }
 
 /// Extract instance method context from an identifier node (e.g., obj.method() -> ("obj", "method"))
+#[tracing::instrument(skip_all)]
 fn extract_instance_method_context(identifier_node: &tree_sitter::Node, source: &str) -> Option<(String, String)> {
     let method_name = identifier_node.utf8_text(source.as_bytes()).ok()?.to_string();
     
@@ -300,6 +307,7 @@ fn extract_instance_method_context(identifier_node: &tree_sitter::Node, source: 
 }
 
 /// Resolve variable type by looking for variable declarations
+#[tracing::instrument(skip_all)]
 fn resolve_variable_type(variable_name: &str, tree: &Tree, source: &str, _context_node: &tree_sitter::Node) -> Option<String> {
     // Look for variable declarations with the given name
     let query_text = r#"
@@ -347,6 +355,7 @@ fn resolve_variable_type(variable_name: &str, tree: &Tree, source: &str, _contex
 }
 
 /// Find implementations of a specific interface method
+#[tracing::instrument(skip_all)]
 async fn find_interface_method_implementations(
     interface_name: &str,
     method_name: &str,

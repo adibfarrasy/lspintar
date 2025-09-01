@@ -24,6 +24,7 @@ pub fn path_to_file_uri(file_path: &PathBuf) -> Option<String> {
     Some(url.to_string())
 }
 
+#[tracing::instrument(skip_all)]
 pub fn uri_to_path(uri: &str) -> Option<PathBuf> {
     let url = Url::parse(uri)
         .inspect_err(|_| debug!("Cannot convert uri {uri} to Url"))
@@ -31,6 +32,7 @@ pub fn uri_to_path(uri: &str) -> Option<PathBuf> {
     url.to_file_path().ok()
 }
 
+#[tracing::instrument(skip_all)]
 pub fn find_project_root(file_path: &Path) -> Option<PathBuf> {
     // Start with the current path (for directory inputs) or parent (for file inputs)
     let mut current = if file_path.is_dir() {
@@ -51,6 +53,7 @@ pub fn find_project_root(file_path: &Path) -> Option<PathBuf> {
     }
 }
 
+#[tracing::instrument(skip_all)]
 pub fn find_external_dependency_root(nested_path: &PathBuf) -> Option<PathBuf> {
     let path_str = nested_path.to_string_lossy();
 
@@ -78,6 +81,7 @@ pub fn find_external_dependency_root(nested_path: &PathBuf) -> Option<PathBuf> {
     None
 }
 
+#[tracing::instrument(skip_all)]
 pub fn is_path_in_external_dependency(path: &PathBuf) -> bool {
     let path_str = path.to_string_lossy();
     path_str.contains(TEMP_DIR_PREFIX)
@@ -86,6 +90,7 @@ pub fn is_path_in_external_dependency(path: &PathBuf) -> bool {
         || has_meta_inf_in_parents(path)
 }
 
+#[tracing::instrument(skip_all)]
 fn has_meta_inf_in_parents(path: &PathBuf) -> bool {
     let mut current = path.clone();
     while let Some(parent) = current.parent() {
@@ -97,6 +102,7 @@ fn has_meta_inf_in_parents(path: &PathBuf) -> bool {
     false
 }
 
+#[tracing::instrument(skip_all)]
 pub fn create_parser_for_language(language: &str) -> Option<Parser> {
     let mut parser = Parser::new();
 
@@ -125,6 +131,7 @@ pub fn create_parser_for_language(language: &str) -> Option<Parser> {
     Some(parser)
 }
 
+#[tracing::instrument(skip_all)]
 pub fn detect_language_from_path(file_path: &PathBuf) -> Option<&'static str> {
     match file_path.extension()?.to_str()? {
         "java" => Some("java"),
@@ -135,6 +142,7 @@ pub fn detect_language_from_path(file_path: &PathBuf) -> Option<&'static str> {
 }
 
 /// Get the appropriate language support for a given file path
+#[tracing::instrument(skip_all)]
 pub fn get_language_support_for_file(file_path: &PathBuf) -> Option<Box<dyn LanguageSupport>> {
     match detect_language_from_path(file_path)? {
         "java" => Some(Box::new(JavaSupport::new())),
@@ -146,6 +154,7 @@ pub fn get_language_support_for_file(file_path: &PathBuf) -> Option<Box<dyn Lang
 
 /// Centralized cross-language search_definition_in_project dispatcher
 /// Automatically detects the target file's language and calls the appropriate language's search function
+#[tracing::instrument(skip_all)]
 pub fn search_definition_in_project_cross_language(
     current_file_uri: &str,
     current_source: &str,
@@ -223,6 +232,7 @@ pub fn uri_to_tree(uri: &str) -> Option<Tree> {
     parser.parse(&file_content, None)
 }
 
+#[tracing::instrument(skip_all)]
 pub fn node_contains_position(node: &Node, position: Position) -> bool {
     let start = node.start_position();
     let end = node.end_position();
@@ -256,6 +266,7 @@ pub fn node_to_lsp_location(node: &Node, file_uri: &str) -> Option<Location> {
     Some(Location { uri, range })
 }
 
+#[tracing::instrument(skip_all)]
 fn find_node_at_position<'a>(tree: &'a Tree, position: Position) -> Option<Node<'a>> {
     let mut current = tree.root_node();
 
@@ -295,6 +306,7 @@ pub fn location_to_node<'a>(location: &Location, tree: &'a Tree) -> Option<Node<
 }
 
 
+#[tracing::instrument(skip_all)]
 pub fn is_project_root(current: &PathBuf) -> bool {
     tracing::debug!("Checking if {:?} is project root", current);
 
@@ -309,6 +321,7 @@ pub fn is_project_root(current: &PathBuf) -> bool {
     false
 }
 
+#[tracing::instrument(skip_all)]
 pub fn is_external_dependency(dir: &PathBuf) -> bool {
     return dir.to_string_lossy().contains(TEMP_DIR_PREFIX);
 }
@@ -326,6 +339,7 @@ pub fn set_start_position_for_language(
 
     let symbol_name = usage_node.utf8_text(source.as_bytes()).ok()?;
     let other_source = read_to_string(uri_to_path(file_uri)?).ok()?;
+
 
     // Use broader query that captures identifiers, type_identifiers, and simple_identifiers (for enum constants)
     let query_text = match language {
@@ -348,12 +362,16 @@ pub fn set_start_position_for_language(
     let query = tree_sitter::Query::new(&language_obj, query_text).ok()?;
     let mut cursor = QueryCursor::new();
 
-    // Search for the symbol in the target file
+    // Search for the symbol in the target file, excluding import statements  
     let mut matches = cursor.matches(&query, tree.root_node(), other_source.as_bytes());
     while let Some(query_match) = matches.next() {
         for capture in query_match.captures {
             if let Ok(name) = capture.node.utf8_text(other_source.as_bytes()) {
                 if name == symbol_name {
+                    // Skip if this match is within an import statement
+                    if language == "kotlin" && is_in_import_statement(&capture.node) {
+                        continue;
+                    }
                     return node_to_lsp_location(&capture.node, file_uri);
                 }
             }
@@ -361,6 +379,24 @@ pub fn set_start_position_for_language(
     }
 
     None
+}
+
+/// Check if a node is within an import statement
+#[tracing::instrument(skip_all)]
+fn is_in_import_statement(node: &tree_sitter::Node) -> bool {
+    let mut current = Some(*node);
+    let mut depth = 0;
+    while let Some(n) = current {
+        if depth >= 10 {
+            break;
+        }
+        if n.kind() == "import_header" || n.kind() == "import_declaration" {
+            return true;
+        }
+        current = n.parent();
+        depth += 1;
+    }
+    false
 }
 
 #[cfg(test)]

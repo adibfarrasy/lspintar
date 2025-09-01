@@ -11,6 +11,7 @@ use crate::core::{
 
 static EXTRACT_SYMBOL_QUERIES: OnceLock<Vec<(Query, SymbolType)>> = OnceLock::new();
 
+#[tracing::instrument(skip_all)]
 fn get_extract_symbol_queries() -> &'static [(Query, SymbolType)] {
     EXTRACT_SYMBOL_QUERIES.get_or_init(|| {
         let language = KOTLIN_PARSER.get_or_init(|| tree_sitter_kotlin::language());
@@ -91,6 +92,7 @@ fn get_extract_symbol_queries() -> &'static [(Query, SymbolType)] {
     })
 }
 
+#[tracing::instrument(skip_all)]
 pub fn extract_kotlin_symbols(parsed_file: &ParsedSourceFile) -> Result<Vec<SymbolDefinition>> {
     let mut symbols = Vec::new();
 
@@ -172,6 +174,7 @@ pub fn extract_kotlin_symbols(parsed_file: &ParsedSourceFile) -> Result<Vec<Symb
 }
 
 
+#[tracing::instrument(skip_all)]
 fn extract_kotlin_package(tree: &Tree, source: &str) -> Option<String> {
     let query_text = r#"(package_header (identifier) @package)"#;
     
@@ -192,6 +195,7 @@ fn extract_kotlin_package(tree: &Tree, source: &str) -> Option<String> {
     None
 }
 
+#[tracing::instrument(skip_all)]
 fn is_kotlin_symbol_accessible(name_node: &Node, source: &str) -> bool {
     // Check if the symbol has public or internal visibility
     // Walk up the tree to find modifiers
@@ -241,6 +245,7 @@ struct InheritanceInfo {
 }
 
 /// Find the class_declaration or interface_declaration node that contains the name node
+#[tracing::instrument(skip_all)]
 fn find_declaration_node<'a>(name_node: &'a Node<'a>) -> Option<Node<'a>> {
     let mut current = Some(*name_node);
     
@@ -255,6 +260,7 @@ fn find_declaration_node<'a>(name_node: &'a Node<'a>) -> Option<Node<'a>> {
 }
 
 /// Extract inheritance information from a Kotlin class or interface declaration
+#[tracing::instrument(skip_all)]
 fn extract_kotlin_inheritance(declaration_node: &Node, source: &str) -> InheritanceInfo {
     let mut extends = None;
     let mut implements = Vec::new();
@@ -287,6 +293,7 @@ fn extract_kotlin_inheritance(declaration_node: &Node, source: &str) -> Inherita
 }
 
 /// Extract type name from constructor_invocation node
+#[tracing::instrument(skip_all)]
 fn extract_type_name_from_constructor_invocation(constructor_node: &Node, source: &str) -> Option<String> {
     for child in constructor_node.children(&mut constructor_node.walk()) {
         if child.kind() == "user_type" {
@@ -297,6 +304,7 @@ fn extract_type_name_from_constructor_invocation(constructor_node: &Node, source
 }
 
 /// Extract type name from user_type node
+#[tracing::instrument(skip_all)]
 fn extract_type_name_from_user_type(user_type_node: &Node, source: &str) -> Option<String> {
     for child in user_type_node.children(&mut user_type_node.walk()) {
         if child.kind() == "type_identifier" {

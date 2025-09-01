@@ -10,6 +10,7 @@ use crate::core::{
 
 static EXTRACT_SYMBOL_QUERIES: OnceLock<Vec<(Query, SymbolType)>> = OnceLock::new();
 
+#[tracing::instrument(skip_all)]
 fn get_extract_symbol_queries() -> &'static [(Query, SymbolType)] {
     EXTRACT_SYMBOL_QUERIES.get_or_init(|| {
         let language: tree_sitter::Language = tree_sitter_java::LANGUAGE.into();
@@ -51,6 +52,7 @@ fn get_extract_symbol_queries() -> &'static [(Query, SymbolType)] {
     })
 }
 
+#[tracing::instrument(skip_all)]
 pub fn extract_java_symbols(parsed_file: &ParsedSourceFile) -> Result<Vec<SymbolDefinition>> {
     let mut symbols = Vec::new();
 
@@ -110,6 +112,7 @@ pub fn extract_java_symbols(parsed_file: &ParsedSourceFile) -> Result<Vec<Symbol
     Ok(symbols)
 }
 
+#[tracing::instrument(skip_all)]
 pub fn extract_java_package(tree: &Tree, content: &str) -> Option<String> {
     let query_text = r#"(package_declaration (scoped_identifier) @package)"#;
     let language: tree_sitter::Language = tree_sitter_java::LANGUAGE.into();
@@ -133,6 +136,7 @@ pub fn extract_java_package(tree: &Tree, content: &str) -> Option<String> {
     result
 }
 
+#[tracing::instrument(skip_all)]
 fn is_java_symbol_accessible(node: &Node, content: &str) -> bool {
     let mut declaration_node = node.parent();
     while let Some(parent) = declaration_node {

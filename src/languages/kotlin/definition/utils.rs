@@ -21,17 +21,20 @@ use super::definition_chain::{
     extract_call_signature_from_context, find_method_with_signature, CallSignature,
 };
 
+#[tracing::instrument(skip_all)]
 pub fn set_start_position(source: &str, usage_node: &Node, file_uri: &str) -> Option<Location> {
     set_start_position_for_language(source, usage_node, file_uri, "kotlin")
 }
 
 /// Get or create a compiled query for Kotlin
+#[tracing::instrument(skip_all)]
 pub fn get_or_create_query(query_text: &str) -> Result<Query, tree_sitter::QueryError> {
     let language = KOTLIN_PARSER.get_or_init(|| tree_sitter_kotlin::language());
     Query::new(language, query_text)
 }
 
 /// Get the appropriate tree-sitter query for a given symbol type
+#[tracing::instrument(skip_all)]
 pub fn get_declaration_query_for_symbol_type(symbol_type: &SymbolType) -> Option<&'static str> {
     match symbol_type {
         SymbolType::Type => Some(
@@ -70,6 +73,7 @@ pub fn get_declaration_query_for_symbol_type(symbol_type: &SymbolType) -> Option
 }
 
 /// Search for definition candidates using tree-sitter queries
+#[tracing::instrument(skip_all)]
 pub fn find_definition_candidates<'a>(
     tree: &'a Tree,
     source: &str,
@@ -100,6 +104,7 @@ pub fn find_definition_candidates<'a>(
 }
 
 /// Search for a definition in a tree using multiple query strategies
+#[tracing::instrument(skip_all)]
 pub fn search_definition<'a>(tree: &'a Tree, source: &str, symbol_name: &str) -> Option<Node<'a>> {
     // Try different declaration types for Kotlin
     let queries = [
@@ -134,6 +139,7 @@ pub fn search_definition<'a>(tree: &'a Tree, source: &str, symbol_name: &str) ->
 }
 
 /// Find the declaration node that contains the identifier
+#[tracing::instrument(skip_all)]
 fn find_declaration_parent(identifier_node: Node) -> Option<Node> {
     let mut current = identifier_node;
 
@@ -144,6 +150,7 @@ fn find_declaration_parent(identifier_node: Node) -> Option<Node> {
             | "interface_declaration"
             | "object_declaration"
             | "enum_declaration"
+            | "enum_entry"        // Add enum_entry to stop at enum constants
             | "type_alias"
             | "property_declaration"
             | "parameter"
@@ -158,6 +165,7 @@ fn find_declaration_parent(identifier_node: Node) -> Option<Node> {
 }
 
 /// Extract package name from Kotlin source code
+#[tracing::instrument(skip_all)]
 pub fn extract_package_from_source(source: &str) -> Option<String> {
     let language = KOTLIN_PARSER.get_or_init(|| tree_sitter_kotlin::language());
     let mut parser = Parser::new();
@@ -183,6 +191,7 @@ pub fn extract_package_from_source(source: &str) -> Option<String> {
 }
 
 /// Extract import statements from Kotlin source
+#[tracing::instrument(skip_all)]
 pub fn extract_imports_from_source(source: &str) -> Vec<String> {
     let language = KOTLIN_PARSER.get_or_init(|| tree_sitter_kotlin::language());
     let mut parser = Parser::new();
@@ -375,6 +384,7 @@ pub fn resolve_symbol_with_imports(
 }
 
 /// Prepare symbol lookup key with wildcard and import support
+#[tracing::instrument(skip_all)]
 pub fn prepare_symbol_lookup_key_with_wildcard_support(
     usage_node: &Node,
     source: &str,
@@ -392,6 +402,7 @@ pub fn prepare_symbol_lookup_key_with_wildcard_support(
 }
 
 /// Search for definition in a specific project
+#[tracing::instrument(skip_all)]
 pub fn search_definition_in_project(
     origin_file_uri: &str,
     origin_source: &str,
@@ -1104,5 +1115,84 @@ object Configuration {
         // Test regular (non-nested) property lookup
         let result = kotlin_support.find_property(source, "file:///test.kt", "globalSetting", dependency_cache.clone());
         // This should find the property in the outer object
+    }
+
+    #[test]
+    fn test_enum_constant_definition_not_in_comments() {
+        let mut parser = match create_kotlin_parser() {
+            Some(p) => p,
+            None => {
+                println!("Warning: Kotlin parser not available for testing");
+                return;
+            }
+        };
+        
+        // Test source with comments containing enum constant names
+        let source = r#"
+// Status enum has ACTIVE state
+enum class Status {
+    // ACTIVE represents active state
+    ACTIVE,
+    INACTIVE  // not ACTIVE
+}
+
+fun example() {
+    // Use Status.ACTIVE
+    val s = Status.ACTIVE
+}
+"#;
+        
+        let tree = parser.parse(source, None).unwrap();
+        
+        // The enum constant query should only match the actual enum entry
+        let enum_constant_query = r#"(enum_entry (simple_identifier) @name)"#;
+        let candidates = find_definition_candidates(&tree, source, "ACTIVE", enum_constant_query);
+        
+        assert!(candidates.is_some(), "Should find ACTIVE enum constant");
+        let candidates = candidates.unwrap();
+        assert_eq!(candidates.len(), 1, "Should find exactly one ACTIVE enum entry");
+        
+        // Verify the position is correct (should be line 4, not in comments)
+        let node = candidates[0];
+        let start = node.start_position();
+        assert_eq!(start.row, 4, "ACTIVE enum entry should be on line 4 (0-indexed)");
+        assert_eq!(start.column, 4, "ACTIVE enum entry should start at column 4");
+    }
+
+    #[test]
+    fn test_search_definition_fallback_issue() {
+        let mut parser = match create_kotlin_parser() {
+            Some(p) => p,
+            None => {
+                println!("Warning: Kotlin parser not available for testing");
+                return;
+            }
+        };
+        
+        // Test source where search_definition might return wrong location  
+        let source = r#"// This comment mentions ACTIVE
+enum class Status {
+    ACTIVE,
+    INACTIVE
+}
+"#;
+        
+        let tree = parser.parse(source, None).unwrap();
+        
+        // Test the general search_definition function
+        let result = search_definition(&tree, source, "ACTIVE");
+        assert!(result.is_some(), "Should find ACTIVE");
+        
+        let node = result.unwrap();
+        let start = node.start_position();
+        
+        // The search_definition should return the enum entry, not the comment
+        // If it's returning the comment, that's the bug
+        println!("search_definition returned node kind: '{}' at row: {}, col: {}", node.kind(), start.row, start.column);
+        
+        // We expect to get the enum_entry node, not the simple_identifier
+        assert_eq!(node.kind(), "enum_entry", "Should return enum_entry node");
+        assert_eq!(start.row, 2, "enum_entry should be at row 2 (0-indexed)");
+        assert_eq!(start.column, 4, "enum_entry should start at column 4");
     }
 }

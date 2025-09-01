@@ -83,6 +83,7 @@ pub async fn find_in_project(
 }
 
 /// Handle enum constant lookup specially - extract enum type and find the constant within it
+#[tracing::instrument(skip_all)]
 async fn find_enum_constant_in_project(
     source: &str,
     file_uri: &str,
@@ -180,6 +181,7 @@ async fn find_enum_constant_in_project(
 
 /// Resolve nested type from field access chain (e.g., Foo.Status -> fully qualified path)
 /// This works for any nested type: classes, enums, interfaces, etc.
+#[tracing::instrument(skip_all)]
 pub fn resolve_nested_type(source: &str, type_node: &Node<'_>) -> Option<String> {
     // For simple identifier, return as-is
     if type_node.kind() == "identifier" {
@@ -202,6 +204,7 @@ pub fn resolve_nested_type(source: &str, type_node: &Node<'_>) -> Option<String>
 }
 
 /// Find nested enum constant (e.g., Foo.Status.ACTIVE)
+#[tracing::instrument(skip_all)]
 async fn find_nested_enum_constant(
     project_root: &std::path::PathBuf,
     nested_enum_type: &str,
@@ -237,6 +240,7 @@ async fn find_nested_enum_constant(
 }
 
 /// Find enum constant within inner enum of a class
+#[tracing::instrument(skip_all)]
 fn find_inner_enum_constant(
     tree: &tree_sitter::Tree,
     source: &str,
@@ -270,6 +274,7 @@ fn find_inner_enum_constant(
 }
 
 /// Recursively find enum constant in a node (supports nested structures)
+#[tracing::instrument(skip_all)]
 fn find_enum_constant_in_node(
     node: &Node<'_>,
     source: &str,
@@ -300,6 +305,7 @@ fn find_enum_constant_in_node(
 }
 
 /// Find a specific enum constant within an enum definition (handles nested enums)
+#[tracing::instrument(skip_all)]
 fn find_enum_constant_in_enum_definition(
     tree: &tree_sitter::Tree,
     source: &str,
@@ -310,6 +316,7 @@ fn find_enum_constant_in_enum_definition(
 }
 
 /// Extract enum type name from static import statements for a given constant
+#[tracing::instrument(skip_all)]
 fn extract_enum_type_from_static_import(source: &str, _constant_name: &str) -> Option<String> {
     use super::utils::get_or_create_query;
     use tree_sitter::{Parser, QueryCursor, StreamingIterator};
@@ -355,6 +362,7 @@ fn extract_enum_type_from_static_import(source: &str, _constant_name: &str) -> O
 }
 
 /// Extract nested type from import path (e.g., "com.example.Foo.Status" -> "Foo.Status")
+#[tracing::instrument(skip_all)]
 pub fn extract_nested_type_from_import_path(import_path: &str) -> String {
     let parts: Vec<&str> = import_path.split('.').collect();
     
@@ -380,6 +388,7 @@ pub fn extract_nested_type_from_import_path(import_path: &str) -> String {
 }
 
 /// Extract package name from Java source code
+#[tracing::instrument(skip_all)]
 pub fn extract_package_from_source(source: &str) -> Option<String> {
     use super::utils::get_or_create_query;
     use tree_sitter::{Parser, QueryCursor, StreamingIterator};
@@ -418,6 +427,7 @@ pub fn extract_package_from_source(source: &str) -> Option<String> {
 }
 
 /// Extract full FQN from static import statements for a given constant
+#[tracing::instrument(skip_all)]
 fn extract_full_fqn_from_static_import(source: &str, _constant_name: &str) -> Option<String> {
     use super::utils::get_or_create_query;
     use tree_sitter::{Parser, QueryCursor, StreamingIterator};
@@ -463,6 +473,7 @@ fn extract_full_fqn_from_static_import(source: &str, _constant_name: &str) -> Op
 }
 
 /// Handle enum constant lookup in workspace (different projects) 
+#[tracing::instrument(skip_all)]
 async fn find_enum_constant_in_workspace(
     source: &str,
     _file_uri: &str,
@@ -522,6 +533,7 @@ async fn find_enum_constant_in_workspace(
 }
 
 /// Handle enum constant lookup in external dependencies (JAR files, etc.)
+#[tracing::instrument(skip_all)]
 async fn find_enum_constant_in_external(
     source: &str,
     file_uri: &str,
@@ -570,6 +582,7 @@ async fn find_enum_constant_in_external(
 }
 
 /// Check if a symbol could potentially be a static enum import constant
+#[tracing::instrument(skip_all)]
 pub fn could_be_static_enum_import(symbol_text: &str, source: &str) -> bool {
     // Must be ALL_CAPS to be considered an enum constant
     if !symbol_text.chars().all(|c| c.is_uppercase() || c == '_' || c.is_ascii_digit()) {
@@ -581,6 +594,7 @@ pub fn could_be_static_enum_import(symbol_text: &str, source: &str) -> bool {
 }
 
 /// Check if the source has any static import statements
+#[tracing::instrument(skip_all)]
 fn has_static_imports_in_source(source: &str) -> bool {
     use super::utils::get_or_create_query;
     use tree_sitter::{Parser, QueryCursor, StreamingIterator};
@@ -612,6 +626,7 @@ fn has_static_imports_in_source(source: &str) -> bool {
 }
 
 /// Try regular symbol search (the original logic)
+#[tracing::instrument(skip_all)]
 async fn try_regular_symbol_search(
     source: &str,
     file_uri: &str,
@@ -688,6 +703,7 @@ async fn try_regular_symbol_search(
 }
 
 /// Find nested enum using regular go-to-definition chain
+#[tracing::instrument(skip_all)]
 pub async fn find_nested_enum_using_regular_resolution(
     source: &str,
     file_uri: &str,
@@ -709,6 +725,7 @@ pub async fn find_nested_enum_using_regular_resolution(
 }
 
 /// Generic nested symbol resolution: Find outer class, then delegate to specific search
+#[tracing::instrument(skip_all)]
 async fn find_nested_symbol_generic<F>(
     source: &str,
     file_uri: &str,
@@ -756,6 +773,7 @@ where
 }
 
 /// Use multi-level search like regular go-to-definition (project -> workspace -> external)
+#[tracing::instrument(skip_all)]
 async fn find_outer_class_with_multi_level_search(
     source: &str,
     file_uri: &str,

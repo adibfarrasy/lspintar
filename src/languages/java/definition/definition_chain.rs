@@ -13,6 +13,7 @@ pub struct MethodSignature {
 }
 
 /// Enhanced method resolution that finds the best matching method based on call signature
+#[tracing::instrument(skip_all)]
 pub fn find_method_with_signature<'a>(
     tree: &'a Tree,
     source: &str,
@@ -65,11 +66,13 @@ pub fn find_method_with_signature<'a>(
 }
 
 /// Extract call signature from method invocation context
+#[tracing::instrument(skip_all)]
 pub fn extract_call_signature_from_context(usage_node: &Node, source: &str) -> Option<CallSignature> {
     let method_invocation = find_parent_method_invocation(usage_node)?;
     extract_call_signature_from_invocation(&method_invocation, source)
 }
 
+#[tracing::instrument(skip_all)]
 fn extract_call_signature_from_invocation(method_invocation: &Node, source: &str) -> Option<CallSignature> {
     let arguments = method_invocation.child_by_field_name("arguments")?;
 
@@ -87,6 +90,7 @@ fn extract_call_signature_from_invocation(method_invocation: &Node, source: &str
     })
 }
 
+#[tracing::instrument(skip_all)]
 fn find_parent_method_invocation<'a>(node: &Node<'a>) -> Option<Node<'a>> {
     let mut current = Some(*node);
     while let Some(n) = current {
@@ -98,6 +102,7 @@ fn find_parent_method_invocation<'a>(node: &Node<'a>) -> Option<Node<'a>> {
     None
 }
 
+#[tracing::instrument(skip_all)]
 pub fn extract_method_signature(method_decl: &Node, source: &str) -> Option<MethodSignature> {
     let parameters = method_decl.child_by_field_name("parameters")?;
     
@@ -119,6 +124,7 @@ pub fn extract_method_signature(method_decl: &Node, source: &str) -> Option<Meth
     })
 }
 
+#[tracing::instrument(skip_all)]
 pub fn calculate_signature_match_score(call_sig: &CallSignature, method_sig: &MethodSignature) -> u32 {
     let mut score = 0;
 
@@ -149,6 +155,7 @@ pub fn calculate_signature_match_score(call_sig: &CallSignature, method_sig: &Me
     score
 }
 
+#[tracing::instrument(skip_all)]
 fn infer_argument_type(arg_node: &Node, source: &str) -> Option<String> {
     match arg_node.kind() {
         "string_literal" => Some("String".to_string()),
@@ -187,6 +194,7 @@ fn infer_argument_type(arg_node: &Node, source: &str) -> Option<String> {
     }
 }
 
+#[tracing::instrument(skip_all)]
 fn is_compatible_type(call_type: &str, param_type: &str) -> bool {
     // Simple type compatibility rules for Java
     match (call_type, param_type) {

@@ -18,6 +18,7 @@ use crate::{
 use super::definition_chain::{extract_call_signature_from_context, find_method_with_signature};
 
 /// Get or create a compiled query
+#[tracing::instrument(skip_all)]
 pub fn get_or_create_query(query_text: &str, language: &tree_sitter::Language) -> Option<Query> {
     Query::new(language, query_text).ok()
 }
@@ -99,6 +100,7 @@ pub fn find_definition_candidates<'a>(
 }
 
 /// Check if this is a query that should terminate early for local scope
+#[tracing::instrument(skip_all)]
 fn is_local_scope_query(query_text: &str) -> bool {
     query_text.contains("formal_parameter") || query_text.contains("variable_declaration")
 }
@@ -198,6 +200,7 @@ pub fn search_definition_in_project(
 }
 
 
+#[tracing::instrument(skip_all)]
 fn find_parent_method_invocation_node<'a>(node: &Node<'a>) -> Option<Node<'a>> {
     let mut current = node.parent();
     while let Some(parent) = current {
@@ -211,6 +214,7 @@ fn find_parent_method_invocation_node<'a>(node: &Node<'a>) -> Option<Node<'a>> {
 
 
 /// Detect if a method call is on an instance and extract the variable name
+#[tracing::instrument(skip_all)]
 pub fn extract_instance_method_context(
     usage_node: &Node,
     source: &str,
@@ -248,6 +252,7 @@ pub fn extract_instance_method_context(
 }
 
 /// Resolve a variable to find its type/class name
+#[tracing::instrument(skip_all)]
 pub fn resolve_variable_type(
     variable_name: &str,
     tree: &Tree,
@@ -281,6 +286,7 @@ pub fn resolve_variable_type(
     None
 }
 
+#[tracing::instrument(skip_all)]
 fn find_field_declaration_type(variable_name: &str, tree: &Tree, source: &str) -> Option<String> {
     // Enhanced query to handle annotated fields with explicit types
     let query_text = r#"
@@ -336,6 +342,7 @@ fn find_field_declaration_type(variable_name: &str, tree: &Tree, source: &str) -
 }
 
 /// Fast ancestor lookup with early termination
+#[tracing::instrument(skip_all)]
 fn find_ancestor_of_kind<'a>(node: &Node<'a>, kind: &str) -> Option<Node<'a>> {
     let mut current = Some(*node);
     let mut depth = 0;
@@ -355,6 +362,7 @@ fn find_ancestor_of_kind<'a>(node: &Node<'a>, kind: &str) -> Option<Node<'a>> {
     None
 }
 
+#[tracing::instrument(skip_all)]
 fn find_variable_declaration_type(
     variable_name: &str,
     tree: &Tree,
@@ -405,6 +413,7 @@ fn find_variable_declaration_type(
     None
 }
 
+#[tracing::instrument(skip_all)]
 fn find_parameter_type(
     variable_name: &str,
     tree: &Tree,
@@ -461,6 +470,7 @@ fn find_parameter_type(
     result
 }
 
+#[tracing::instrument(skip_all)]
 fn infer_from_assignment(
     variable_name: &str,
     tree: &Tree,
@@ -523,6 +533,7 @@ fn infer_from_assignment(
     result
 }
 
+#[tracing::instrument(skip_all)]
 fn infer_type_from_initializer(var_node: &Node, source: &str) -> Option<String> {
     // Look for variable declarator with initializer
     let var_declarator = var_node.parent()?;
@@ -549,11 +560,13 @@ fn infer_type_from_initializer(var_node: &Node, source: &str) -> Option<String> 
     }
 }
 
+#[tracing::instrument(skip_all)]
 fn is_variable_in_scope(var_node: &Node, current_position: &Node) -> bool {
     // Simple check: variable declaration should come before current position
     var_node.start_position() < current_position.start_position()
 }
 
+#[tracing::instrument(skip_all)]
 fn is_in_same_method(param_node: &Node, current_position: &Node) -> bool {
     let param_method = find_containing_method_node(param_node);
     let current_method = find_containing_method_node(current_position);
@@ -564,10 +577,12 @@ fn is_in_same_method(param_node: &Node, current_position: &Node) -> bool {
     }
 }
 
+#[tracing::instrument(skip_all)]
 fn is_assignment_before_position(assignment_node: &Node, current_position: &Node) -> bool {
     assignment_node.start_position() < current_position.start_position()
 }
 
+#[tracing::instrument(skip_all)]
 fn infer_type_from_field_name(field_name: &str) -> Option<String> {
     if field_name.is_empty() {
         return None;
@@ -589,6 +604,7 @@ fn infer_type_from_field_name(field_name: &str) -> Option<String> {
     Some(result)
 }
 
+#[tracing::instrument(skip_all)]
 fn find_containing_method_node<'a>(node: &Node<'a>) -> Option<Node<'a>> {
     let mut current = node.parent();
     while let Some(parent) = current {
@@ -602,6 +618,7 @@ fn find_containing_method_node<'a>(node: &Node<'a>) -> Option<Node<'a>> {
 
 
 /// Enhanced symbol lookup that supports wildcard imports using the class name index
+#[tracing::instrument(skip_all)]
 pub fn prepare_symbol_lookup_key_with_wildcard_support(
     usage_node: &Node,
     source: &str,
@@ -640,6 +657,7 @@ pub fn prepare_symbol_lookup_key_with_wildcard_support(
     None
 }
 
+#[tracing::instrument(skip_all)]
 fn resolve_through_imports(
     symbol_name: &str,
     source: &str,
@@ -730,6 +748,7 @@ fn resolve_through_imports(
     specific_import
 }
 
+#[tracing::instrument(skip_all)]
 fn resolve_through_wildcard_imports(
     symbol_name: &str,
     source: &str,
@@ -813,10 +832,12 @@ fn resolve_through_wildcard_imports(
     None
 }
 
+#[tracing::instrument(skip_all)]
 pub fn get_wildcard_imports_from_source(source: &str) -> Option<Vec<String>> {
     get_wildcard_imports(source)
 }
 
+#[tracing::instrument(skip_all)]
 fn get_wildcard_imports(source: &str) -> Option<Vec<String>> {
     let query_text = r#"
         (import_declaration) @import_decl
@@ -863,11 +884,13 @@ fn get_wildcard_imports(source: &str) -> Option<Vec<String>> {
     Some(wildcard_packages)
 }
 
+#[tracing::instrument(skip_all)]
 pub fn set_start_position(source: &str, usage_node: &Node, file_uri: &str) -> Option<Location> {
     use crate::core::utils::set_start_position_for_language;
     set_start_position_for_language(source, usage_node, file_uri, "groovy")
 }
 
+#[tracing::instrument(skip_all)]
 fn resolve_same_package(
     symbol_name: &str,
     source: &str,
@@ -988,6 +1011,7 @@ pub fn resolve_symbol_with_imports(
 }
 
 /// Verify that a given FQN exists across all sources: builtins, workspace projects, and external dependencies
+#[tracing::instrument(skip_all)]
 async fn verify_groovy_fqn_exists_async(fqn: &str, dependency_cache: &DependencyCache) -> bool {
     // Check builtin classes (like java.lang.* classes)
     if let Some(class_name) = fqn.split('.').last() {
@@ -1013,6 +1037,7 @@ async fn verify_groovy_fqn_exists_async(fqn: &str, dependency_cache: &Dependency
 }
 
 /// Synchronous wrapper for backward compatibility
+#[tracing::instrument(skip_all)]
 fn verify_groovy_fqn_exists(fqn: &str, dependency_cache: &DependencyCache) -> bool {
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(verify_groovy_fqn_exists_async(fqn, dependency_cache))
@@ -1020,6 +1045,7 @@ fn verify_groovy_fqn_exists(fqn: &str, dependency_cache: &DependencyCache) -> bo
 }
 
 /// Extract imports from Groovy source code
+#[tracing::instrument(skip_all)]
 fn extract_imports_from_source(source: &str) -> Vec<String> {
     let mut imports = Vec::new();
     

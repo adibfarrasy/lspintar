@@ -1,6 +1,7 @@
 use tower_lsp::lsp_types::Position;
 use tree_sitter::{Node, Tree};
 
+#[tracing::instrument(skip_all)]
 pub fn find_identifier_at_position<'a>(tree: &'a Tree, source: &str, position: Position) -> Option<Node<'a>> {
     let byte_offset = position_to_byte_offset(source, position)?;
     let root_node = tree.root_node();
@@ -20,6 +21,7 @@ pub fn find_identifier_at_position<'a>(tree: &'a Tree, source: &str, position: P
 
 
 
+#[tracing::instrument(skip_all)]
 fn position_to_byte_offset(source: &str, position: Position) -> Option<usize> {
     let mut byte_offset = 0;
     let mut current_line = 0;
@@ -47,6 +49,7 @@ fn position_to_byte_offset(source: &str, position: Position) -> Option<usize> {
     }
 }
 
+#[tracing::instrument(skip_all)]
 fn find_identifier_at_byte_offset<'a>(node: Node<'a>, byte_offset: usize) -> Option<Node<'a>> {
     let is_identifier = matches!(node.kind(), "simple_identifier" | "type_identifier");
     if is_identifier && node.start_byte() <= byte_offset && byte_offset < node.end_byte() {

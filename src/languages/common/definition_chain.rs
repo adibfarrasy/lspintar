@@ -10,6 +10,7 @@ use crate::{
 
 /// Resolve nested path from field access chain (e.g., Foo.Status -> "Foo.Status")
 /// This works across all JVM languages with similar syntax
+#[tracing::instrument(skip_all)]
 pub fn resolve_nested_path(source: &str, node: &Node<'_>) -> Option<String> {
     // For simple identifier, return as-is
     if node.kind() == "identifier" {
@@ -34,6 +35,7 @@ pub fn resolve_nested_path(source: &str, node: &Node<'_>) -> Option<String> {
 /// Common method resolution logic shared across JVM languages (Java, Groovy, Kotlin)
 
 /// Detect if a method call is static and extract the class name
+#[tracing::instrument(skip_all)]
 pub fn extract_static_method_context(usage_node: &Node, source: &str) -> Option<(String, String)> {
     let usage_text = usage_node.utf8_text(source.as_bytes()).unwrap_or("");
     debug!(
@@ -95,6 +97,7 @@ pub fn extract_static_method_context(usage_node: &Node, source: &str) -> Option<
 }
 
 /// Detect if a method call is on an instance and extract the variable name
+#[tracing::instrument(skip_all)]
 pub fn extract_instance_method_context(
     usage_node: &Node,
     source: &str,
@@ -153,6 +156,7 @@ pub fn extract_instance_method_context(
 }
 
 /// Find parent method invocation node - common pattern across JVM languages
+#[tracing::instrument(skip_all)]
 pub fn find_parent_method_invocation_node<'a>(node: &Node<'a>) -> Option<Node<'a>> {
     let mut current = Some(*node);
     
@@ -167,6 +171,7 @@ pub fn find_parent_method_invocation_node<'a>(node: &Node<'a>) -> Option<Node<'a
 }
 
 /// Find parent field access node - common pattern across JVM languages
+#[tracing::instrument(skip_all)]
 pub fn find_parent_field_access_node<'a>(node: &Node<'a>) -> Option<Node<'a>> {
     let mut current = Some(*node);
     
@@ -181,6 +186,7 @@ pub fn find_parent_field_access_node<'a>(node: &Node<'a>) -> Option<Node<'a>> {
 }
 
 /// Extract context for static field access (e.g., ClassName.FIELD_NAME)
+#[tracing::instrument(skip_all)]
 pub fn extract_static_field_context(usage_node: &Node, source: &str) -> Option<(String, String)> {
     let usage_text = usage_node.utf8_text(source.as_bytes()).unwrap_or("");
 
@@ -254,6 +260,7 @@ fn find_parent_navigation_expression<'a>(node: &Node<'a>) -> Option<Node<'a>> {
 }
 
 /// Extract context for instance field access (e.g., variable.field)
+#[tracing::instrument(skip_all)]
 pub fn extract_instance_field_context(usage_node: &Node, source: &str) -> Option<(String, String)> {
     let usage_text = usage_node.utf8_text(source.as_bytes()).unwrap_or("");
     debug!(
@@ -313,6 +320,7 @@ pub fn extract_instance_field_context(usage_node: &Node, source: &str) -> Option
 }
 
 /// Common logic for finding static method definitions
+#[tracing::instrument(skip_all)]
 pub fn find_static_method_definition(
     language_support: &dyn LanguageSupport,
     tree: &Tree,
@@ -363,6 +371,7 @@ pub fn find_static_method_definition(
 }
 
 /// Common logic for finding static field definitions
+#[tracing::instrument(skip_all)]
 pub fn find_static_field_definition(
     language_support: &dyn LanguageSupport,
     tree: &Tree,
@@ -402,10 +411,7 @@ fn try_resolve_class_name(
     class_name: &str,
     dependency_cache: Arc<DependencyCache>,
 ) -> Option<Location> {
-    // Strategy 1: Try to find class locally (same file) - rarely works for static methods
-    // but worth trying for inner classes
-    
-    // Strategy 2: Try project-level resolution using import resolution
+    // Strategy 1: Try project-level resolution using import resolution
     // This is where we need to create a proper symbol lookup key
     if let Some(location) = try_resolve_class_via_projects(
         language_support, source, file_uri, class_name, dependency_cache.clone()
@@ -413,14 +419,14 @@ fn try_resolve_class_name(
         return Some(location);
     }
     
-    // Strategy 3: Try workspace resolution
+    // Strategy 2: Try workspace resolution
     if let Some(location) = try_resolve_class_via_workspace(
         language_support, source, file_uri, class_name, dependency_cache.clone()
     ) {
         return Some(location);
     }
     
-    // Strategy 4: Try external dependencies
+    // Strategy 3: Try external dependencies
     if let Some(location) = try_resolve_class_via_external(
         language_support, source, file_uri, class_name, dependency_cache
     ) {
@@ -650,6 +656,7 @@ fn try_resolve_class_via_external(
 }
 
 /// Search for a method within a class file, detecting the target language automatically
+#[tracing::instrument(skip_all)]
 pub fn search_method_in_class_file_cross_language(
     class_location: &Location,
     method_name: &str,
@@ -663,6 +670,7 @@ pub fn search_method_in_class_file_cross_language(
 }
 
 /// Search for a field within a class file, detecting the target language automatically
+#[tracing::instrument(skip_all)]
 pub fn search_field_in_class_file_cross_language(
     class_location: &Location,
     field_name: &str,
@@ -675,6 +683,7 @@ pub fn search_field_in_class_file_cross_language(
     search_field_in_class_file(class_location, field_name, target_language_support.as_ref())
 }
 
+#[tracing::instrument(skip_all)]
 fn search_field_in_class_file(
     class_location: &Location,
     field_name: &str,
@@ -691,8 +700,8 @@ fn search_field_in_class_file(
     // Create language-specific queries that capture field names directly
     let field_name_query = match language_support.language_id() {
         "kotlin" => format!(
-            r#"(property_declaration (variable_declaration (simple_identifier) @field_name (#eq? @field_name "{}"))) @field_decl"#, 
-            field_name
+            r#"(property_declaration (variable_declaration (simple_identifier) @field_name (#eq? @field_name "{}"))) @field_decl (enum_entry (simple_identifier) @field_name (#eq? @field_name "{}")) @field_decl"#, 
+            field_name, field_name
         ),
         "java" => format!(
             r#"(field_declaration declarator: (variable_declarator name: (identifier) @field_name (#eq? @field_name "{}"))) @field_decl"#, 
@@ -1041,6 +1050,7 @@ pub use crate::languages::groovy::definition::definition_chain::{
 
 
 /// Common logic for finding instance method definitions  
+#[tracing::instrument(skip_all)]
 pub fn find_instance_method_definition(
     language_support: &dyn LanguageSupport,
     tree: &Tree,
@@ -1103,6 +1113,7 @@ pub fn find_instance_method_definition(
 }
 
 /// Common logic for finding instance field/property definitions
+#[tracing::instrument(skip_all)]
 pub fn find_instance_field_definition(
     language_support: &dyn LanguageSupport,
     tree: &Tree,
@@ -1273,6 +1284,7 @@ fn extract_variable_type_from_tree(
 
 /// Unified definition chain resolver that handles all symbol types across languages
 /// Supports nested symbols (Outer.Inner.symbol), static/instance methods, and regular symbol lookup
+#[tracing::instrument(skip_all)]
 pub fn find_definition_chain(
     language_support: &dyn LanguageSupport,
     tree: &Tree,
@@ -1407,9 +1419,12 @@ pub fn find_definition_chain(
                     if uri_string.contains("lspintar_builtin_sources") {
                         return Ok(project_location);
                     } else {
-                        if let Some(final_location) = language_support.set_start_position(source, usage_node, &uri_string) {
-                            return Ok(final_location);
-                        }
+                        tracing::debug!("DEBUG_LSP: Calling set_start_position for project location");
+                        // Try to get a more precise position, but fall back to original if that fails
+                        let final_location = language_support.set_start_position(source, usage_node, &uri_string)
+                            .unwrap_or(project_location);
+                        tracing::debug!("DEBUG_LSP: Final location after set_start_position: {:?}", final_location);
+                        return Ok(final_location);
                     }
                 }
             }
@@ -1436,7 +1451,10 @@ pub fn find_definition_chain(
                 if uri_string.contains("lspintar_builtin_sources") {
                     Some(location)
                 } else {
-                    language_support.set_start_position(source, usage_node, &uri_string)
+                    // Try to get a more precise position, but fall back to original if that fails  
+                    let result = language_support.set_start_position(source, usage_node, &uri_string)
+                        .or(Some(location));
+                    result
                 }
             }
         })

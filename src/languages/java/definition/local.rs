@@ -111,6 +111,7 @@ pub fn search_local_definitions<'a>(
 /// 1. Variable declarations in the same block that come before usage
 /// 2. Variable declarations in parent blocks
 /// 3. Method parameters
+#[tracing::instrument(skip_all)]
 fn find_variable_declarations_in_scope<'a>(
     _tree: &'a Tree,
     source: &str,
@@ -155,6 +156,7 @@ fn find_variable_declarations_in_scope<'a>(
 }
 
 /// Find local variable declarations within a specific block that are accessible from the usage point
+#[tracing::instrument(skip_all)]
 fn find_local_variables_in_block<'a>(
     block_node: &Node<'a>,
     source: &str,
@@ -185,6 +187,7 @@ fn find_local_variables_in_block<'a>(
 }
 
 /// Find the closest declaration based on scope distance
+#[tracing::instrument(skip_all)]
 fn find_closest_declaration<'a>(
     usage_node: &Node<'a>,
     candidates: &[Node<'a>],
@@ -210,6 +213,7 @@ fn find_closest_declaration<'a>(
 
 /// Calculate the scope distance between a usage node and a declaration node
 /// Returns the number of scope levels between them (lower is closer)
+#[tracing::instrument(skip_all)]
 fn calculate_scope_distance(usage_node: &Node, declaration_node: &Node) -> usize {
     // Find common ancestor
     let mut usage_ancestors = Vec::new();
@@ -241,6 +245,7 @@ fn calculate_scope_distance(usage_node: &Node, declaration_node: &Node) -> usize
 }
 
 /// Try to find symbol as a field declaration
+#[tracing::instrument(skip_all)]
 fn find_as_field<'a>(tree: &'a Tree, source: &str, symbol_name: &str) -> Option<Node<'a>> {
     let field_query = r#"(field_declaration 
                           declarator: (variable_declarator 
@@ -269,6 +274,7 @@ fn find_as_field<'a>(tree: &'a Tree, source: &str, symbol_name: &str) -> Option<
 }
 
 /// Find the containing method for a given node
+#[tracing::instrument(skip_all)]
 fn find_containing_method<'a>(node: &Node<'a>) -> Option<Node<'a>> {
     let mut current = node.parent();
     while let Some(parent) = current {
@@ -323,6 +329,7 @@ fn find_best_method_match<'a>(
 }
 
 /// Find a method declaration within the same class using signature matching
+#[tracing::instrument(skip_all)]
 fn find_method_in_same_class_with_signature<'a>(
     usage_node: &Node<'a>,
     source: &str,
@@ -388,6 +395,7 @@ fn find_method_in_same_class_with_signature<'a>(
 }
 
 /// Find a method declaration within the same class as the usage node (name-only matching)
+#[tracing::instrument(skip_all)]
 fn find_method_in_same_class<'a>(
     usage_node: &Node<'a>,
     source: &str,
@@ -429,6 +437,7 @@ fn find_method_in_same_class<'a>(
 }
 
 /// Find a method declaration globally across the entire tree
+#[tracing::instrument(skip_all)]
 fn find_method_globally<'a>(tree: &'a Tree, source: &str, method_name: &str) -> Option<Node<'a>> {
     let method_query = r#"(method_declaration name: (identifier) @name)"#;
 
@@ -462,6 +471,7 @@ fn find_method_globally<'a>(tree: &'a Tree, source: &str, method_name: &str) -> 
 }
 
 /// Find the containing class for a given node
+#[tracing::instrument(skip_all)]
 fn find_containing_class<'a>(node: &Node<'a>) -> Option<Node<'a>> {
     let mut current = node.parent();
     while let Some(parent) = current {

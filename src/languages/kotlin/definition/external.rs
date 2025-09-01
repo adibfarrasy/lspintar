@@ -218,6 +218,7 @@ async fn find_project_external(
     None
 }
 
+#[tracing::instrument(skip_all)]
 fn search_external_definition_and_convert(
     symbol_name: &str,
     source_info: SourceFileInfo,
@@ -242,6 +243,7 @@ fn search_external_definition_and_convert(
 
 /// Check if a type is a core Kotlin type that should prioritize builtin sources
 /// over JAR dependencies to avoid unnecessary decompilation
+#[tracing::instrument(skip_all)]
 fn is_core_kotlin_type(type_name: &str) -> bool {
     const CORE_KOTLIN_TYPES: &[&str] = &[
         "String", "Int", "Long", "Double", "Float", "Boolean", "Char", "Byte", "Short",

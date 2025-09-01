@@ -154,6 +154,7 @@ impl HoverSignature {
 
 /// Common function to partition modifiers into annotations and other modifiers
 /// Works for Java, Kotlin, Groovy - annotations start with '@'
+#[tracing::instrument(skip_all)]
 pub fn partition_modifiers(modifiers: &str) -> (Vec<String>, Vec<String>) {
     modifiers
         .split_whitespace()
@@ -164,6 +165,7 @@ pub fn partition_modifiers(modifiers: &str) -> (Vec<String>, Vec<String>) {
 
 /// Common function to parse parameters from raw text into individual parameter lines
 /// This handles both constructor parameters and method parameters consistently
+#[tracing::instrument(skip_all)]
 pub fn parse_parameters(param_text: &str) -> Vec<String> {
     if param_text.is_empty() {
         return Vec::new();
@@ -202,6 +204,7 @@ pub fn parse_parameters(param_text: &str) -> Vec<String> {
 /// Format parameters according to the ≤3 vs >3 rule
 /// - If ≤3 parameters: format inline as (param1, param2, param3)
 /// - If >3 parameters: format multi-line with each parameter on separate line
+#[tracing::instrument(skip_all)]
 pub fn format_parameters(params: &[String]) -> String {
     if params.is_empty() {
         return "()".to_string();
@@ -223,6 +226,7 @@ pub fn format_parameters(params: &[String]) -> String {
 
 /// Deduplicate modifiers to prevent repetition like "data data data"
 /// This can happen when tree-sitter queries capture the same modifier multiple times
+#[tracing::instrument(skip_all)]
 pub fn deduplicate_modifiers(modifiers: Vec<String>) -> Vec<String> {
     let mut unique_modifiers = Vec::new();
     let mut seen_modifiers = std::collections::HashSet::new();
@@ -235,6 +239,7 @@ pub fn deduplicate_modifiers(modifiers: Vec<String>) -> Vec<String> {
 }
 
 /// Clean up inheritance/supertype text
+#[tracing::instrument(skip_all)]
 pub fn format_inheritance(supertypes: &str) -> Option<String> {
     if supertypes.is_empty() {
         return None;
@@ -246,6 +251,7 @@ pub fn format_inheritance(supertypes: &str) -> Option<String> {
 
 /// Strip comment signifiers from documentation text
 /// Removes /*, *, */, // while preserving multi-line format
+#[tracing::instrument(skip_all)]
 pub fn strip_comment_signifiers(docs: &str) -> String {
     let mut lines: Vec<String> = docs.lines()
         .map(|line| {
