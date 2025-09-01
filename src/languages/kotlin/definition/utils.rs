@@ -423,6 +423,7 @@ pub fn search_definition_in_project(
 }
 
 #[cfg(test)]
+#[allow(unused_variables)]
 mod tests {
     use super::*;
     use tree_sitter::Parser;

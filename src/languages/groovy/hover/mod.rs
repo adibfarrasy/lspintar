@@ -34,19 +34,19 @@ pub fn handle(
     let symbol_type = symbol_type.ok()?;
 
     let content = match symbol_type {
-        SymbolType::ClassDeclaration => extract_class_signature(tree, source),
-        SymbolType::InterfaceDeclaration => extract_interface_signature(tree, source),
+        SymbolType::ClassDeclaration => extract_class_signature(tree, &node, source),
+        SymbolType::InterfaceDeclaration => extract_interface_signature(tree, &node, source),
         SymbolType::MethodDeclaration => extract_method_signature(tree, &node, source),
         SymbolType::FieldDeclaration => extract_field_signature(tree, &node, source),
         SymbolType::Type => {
             match node.kind() {
-                "class_declaration" => extract_class_signature(tree, source),
-                "interface_declaration" => extract_interface_signature(tree, source),
+                "class_declaration" => extract_class_signature(tree, &node, source),
+                "interface_declaration" => extract_interface_signature(tree, &node, source),
                 "enum_declaration" => {
                     // We don't have enum extraction yet, fall back to class
-                    extract_class_signature(tree, source)
+                    extract_class_signature(tree, &node, source)
                 }
-                _ => extract_class_signature(tree, source)
+                _ => extract_class_signature(tree, &node, source)
             }
         }
         SymbolType::MethodCall => {

@@ -27,22 +27,22 @@ pub fn handle(
     let symbol_type = language_support.determine_symbol_type_from_context(tree, &node, source).ok()?;
 
     let content = match symbol_type {
-        SymbolType::ClassDeclaration => extract_class_signature(tree, source),
-        SymbolType::InterfaceDeclaration => extract_interface_signature(tree, source),
+        SymbolType::ClassDeclaration => extract_class_signature(tree, &node, source),
+        SymbolType::InterfaceDeclaration => extract_interface_signature(tree, &node, source),
         SymbolType::MethodDeclaration => extract_method_signature(tree, &node, source),
         SymbolType::FieldDeclaration => extract_field_signature(tree, &node, source),
         SymbolType::Type => {
             // Type could be class, interface, enum, object, etc. - need to check the actual node
             match node.kind() {
                 "class_declaration" if is_enum_class(&node, source) => extract_enum_signature(tree, source),
-                "class_declaration" => extract_class_signature(tree, source),
-                "interface_declaration" => extract_interface_signature(tree, source),
+                "class_declaration" => extract_class_signature(tree, &node, source),
+                "interface_declaration" => extract_interface_signature(tree, &node, source),
                 "object_declaration" => extract_object_signature(tree, source),
                 "type_alias" => extract_type_alias_signature(tree, source),
                 _ => {
                     // Try interface extraction first, then fall back to generic type info
-                    extract_interface_signature(tree, source)
-                        .or_else(|| extract_class_signature(tree, source))
+                    extract_interface_signature(tree, &node, source)
+                        .or_else(|| extract_class_signature(tree, &node, source))
                         .or_else(|| extract_type_usage_info(&node, source))
                 }
             }
@@ -62,7 +62,6 @@ pub fn handle(
         SymbolType::FieldUsage => extract_field_signature(tree, &node, source),
         _ => {
             // Debug unknown symbol types but return None
-            tracing::debug!("Kotlin hover: unsupported symbol type: {:?}", symbol_type);
             return None;
         }
     }?;

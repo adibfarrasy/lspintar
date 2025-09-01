@@ -495,6 +495,7 @@ fn verify_fqn_exists(fqn: &str, dependency_cache: &Arc<DependencyCache>) -> bool
 }
 
 #[cfg(test)]
+#[allow(unused_variables)]
 mod tests {
     use super::*;
     use tree_sitter::Parser;

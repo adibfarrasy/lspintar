@@ -1,6 +1,6 @@
 use tree_sitter::{Node, Query, QueryCursor, StreamingIterator, Tree};
 
-use crate::languages::common::hover::partition_modifiers;
+use crate::languages::common::hover::HoverSignature;
 
 #[tracing::instrument(skip_all)]
 pub fn extract_field_signature(tree: &Tree, node: &Node, source: &str) -> Option<String> {
@@ -12,7 +12,12 @@ pub fn extract_field_signature(tree: &Tree, node: &Node, source: &str) -> Option
     (
         (multiline_comment)? @kdoc
         (property_declaration
-            (modifiers)? @modifiers
+            (modifiers 
+                (annotation)* @annotation
+                (visibility_modifier)* @modifier
+                (member_modifier)* @modifier
+                (property_modifier)* @modifier
+            )?
             (variable_declaration
                 (simple_identifier) @field_name
                 (user_type)? @field_type
@@ -29,7 +34,8 @@ pub fn extract_field_signature(tree: &Tree, node: &Node, source: &str) -> Option
 
     while let Some(query_match) = matches.next() {
         let mut found_field = false;
-        let mut modifiers = String::new();
+        let mut annotations = Vec::new();
+        let mut modifiers = Vec::new();
         let mut field_type = String::new();
         let mut has_initializer = false;
         let mut kdoc = String::new();
@@ -44,8 +50,11 @@ pub fn extract_field_signature(tree: &Tree, node: &Node, source: &str) -> Option
                         found_field = true;
                     }
                 }
-                "modifiers" => {
-                    modifiers.push_str(text);
+                "annotation" => {
+                    annotations.push(text.to_string());
+                }
+                "modifier" => {
+                    modifiers.push(text.to_string());
                 }
                 "field_type" => {
                     field_type.push_str(text);
@@ -63,24 +72,11 @@ pub fn extract_field_signature(tree: &Tree, node: &Node, source: &str) -> Option
         }
 
         if found_field {
-            let (annotations, modifier_vec) = partition_modifiers(&modifiers);
-
-            let mut parts = Vec::new();
-            parts.push("```kotlin".to_string());
-
-            // Add annotations (each on separate lines)
-            annotations.into_iter().for_each(|a| parts.push(a));
-
             // Build the field declaration line
             let mut field_line = String::new();
 
-            if !modifier_vec.is_empty() {
-                field_line.push_str(&modifier_vec.join(" "));
-                field_line.push(' ');
-            }
-
             // Determine if it's val or var based on modifiers
-            if modifiers.contains("var") {
+            if modifiers.iter().any(|m| m == "var") {
                 field_line.push_str("var ");
             } else {
                 field_line.push_str("val ");
@@ -97,22 +93,13 @@ pub fn extract_field_signature(tree: &Tree, node: &Node, source: &str) -> Option
                 field_line.push_str(" = ...");
             }
 
-            parts.push(field_line);
-            parts.push("```".to_string());
+            let hover = HoverSignature::new("kotlin")
+                .with_annotations(annotations)
+                .with_modifiers(modifiers)
+                .with_signature_line(field_line)
+                .with_documentation(if kdoc.is_empty() { None } else { Some(kdoc) });
 
-            // Try to find the containing class for additional context
-            if let Some(class_info) = find_containing_class(tree, node, source) {
-                parts.push(format!("\n**Declared in:** `{}`", class_info));
-            }
-
-            // Add KDoc documentation if present
-            if !kdoc.is_empty() {
-                parts.push("\n".to_string());
-                parts.push("---".to_string());
-                parts.push(kdoc);
-            }
-
-            return Some(parts.join("\n"));
+            return Some(hover.format());
         }
     }
 
@@ -121,7 +108,12 @@ pub fn extract_field_signature(tree: &Tree, node: &Node, source: &str) -> Option
     (primary_constructor
         (class_parameters
             (class_parameter
-                (modifiers)? @modifiers
+                (modifiers 
+                    (annotation)* @annotation
+                    (visibility_modifier)* @modifier
+                    (member_modifier)* @modifier
+                    (property_modifier)* @modifier
+                )?
                 (simple_identifier) @param_name
                 (user_type) @param_type
             )
@@ -136,7 +128,8 @@ pub fn extract_field_signature(tree: &Tree, node: &Node, source: &str) -> Option
 
     while let Some(query_match) = param_matches.next() {
         let mut found_param = false;
-        let mut modifiers = String::new();
+        let mut annotations = Vec::new();
+        let mut modifiers = Vec::new();
         let mut param_type = String::new();
 
         for capture in query_match.captures.iter() {
@@ -149,8 +142,11 @@ pub fn extract_field_signature(tree: &Tree, node: &Node, source: &str) -> Option
                         found_param = true;
                     }
                 }
-                "modifiers" => {
-                    modifiers.push_str(text);
+                "annotation" => {
+                    annotations.push(text.to_string());
+                }
+                "modifier" => {
+                    modifiers.push(text.to_string());
                 }
                 "param_type" => {
                     param_type.push_str(text);
@@ -160,24 +156,11 @@ pub fn extract_field_signature(tree: &Tree, node: &Node, source: &str) -> Option
         }
 
         if found_param {
-            let (annotations, modifier_vec) = partition_modifiers(&modifiers);
-
-            let mut parts = Vec::new();
-            parts.push("```kotlin".to_string());
-
-            // Add annotations (each on separate lines)
-            annotations.into_iter().for_each(|a| parts.push(a));
-
             // Build the parameter property line
             let mut param_line = String::new();
 
-            if !modifier_vec.is_empty() {
-                param_line.push_str(&modifier_vec.join(" "));
-                param_line.push(' ');
-            }
-
             // Check if it's val or var in modifiers, default to val for constructor parameters
-            if modifiers.contains("var") {
+            if modifiers.iter().any(|m| m == "var") {
                 param_line.push_str("var ");
             } else {
                 param_line.push_str("val ");
@@ -187,36 +170,16 @@ pub fn extract_field_signature(tree: &Tree, node: &Node, source: &str) -> Option
             param_line.push_str(": ");
             param_line.push_str(&param_type);
 
-            parts.push(param_line);
-            parts.push("```".to_string());
-            parts.push("\n*Constructor parameter property*".to_string());
+            let hover = HoverSignature::new("kotlin")
+                .with_annotations(annotations)
+                .with_modifiers(modifiers)
+                .with_signature_line(param_line);
 
-            return Some(parts.join("\n"));
+            return Some(hover.format());
         }
     }
 
     None
 }
 
-fn find_containing_class(_tree: &Tree, field_node: &Node, source: &str) -> Option<String> {
-    // Walk up the tree from the field node to find the containing class
-    let mut current = field_node.parent()?;
-
-    while let Some(parent) = current.parent() {
-        match current.kind() {
-            "class_declaration" | "object_declaration" => {
-                // Find the class/object name
-                for child in current.children(&mut current.walk()) {
-                    if child.kind() == "type_identifier" {
-                        return child.utf8_text(source.as_bytes()).ok().map(String::from);
-                    }
-                }
-            }
-            _ => {}
-        }
-        current = parent;
-    }
-
-    None
-}
 

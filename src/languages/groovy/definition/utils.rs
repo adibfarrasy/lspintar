@@ -1056,6 +1056,7 @@ fn extract_imports_from_source(source: &str) -> Vec<String> {
 }
 
 #[cfg(test)]
+#[allow(unused_variables)]
 mod tests {
     use super::*;
     use tree_sitter::Parser;
