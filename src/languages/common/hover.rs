@@ -201,27 +201,61 @@ pub fn parse_parameters(param_text: &str) -> Vec<String> {
         .collect()
 }
 
+/// Format items according to the ≤3 vs >3 rule with optional brackets
+/// - If ≤3 items: format inline
+/// - If >3 items: format multi-line with indentation
+/// - brackets: optional tuple of (open, close) brackets, e.g., Some(("(", ")")) or None
+/// - separator: separator for inline format (e.g., ", ")
+/// - indent: indentation level for multi-line format
+#[tracing::instrument(skip_all)]
+pub fn format_items_with_split_rule(
+    items: &[String],
+    brackets: Option<(&str, &str)>,
+    separator: &str,
+    indent: usize,
+) -> String {
+    if items.is_empty() {
+        return brackets.map_or(String::new(), |(open, close)| format!("{}{}", open, close));
+    }
+    
+    let indent_str = " ".repeat(indent);
+    
+    if items.len() <= 3 {
+        // Inline format for 3 or fewer items
+        let joined = items.join(separator);
+        brackets.map_or(joined.clone(), |(open, close)| format!("{}{}{}", open, joined, close))
+    } else {
+        // Multi-line format for more than 3 items
+        let mut result = String::new();
+        
+        if let Some((open, _)) = brackets {
+            result.push_str(open);
+            result.push('\n');
+        }
+        
+        for (i, item) in items.iter().enumerate() {
+            result.push_str(&indent_str);
+            result.push_str(item.trim().trim_end_matches(','));
+            if i < items.len() - 1 || brackets.is_some() {
+                result.push(',');
+            }
+            result.push('\n');
+        }
+        
+        if let Some((_, close)) = brackets {
+            result.push_str(close);
+        }
+        
+        result
+    }
+}
+
 /// Format parameters according to the ≤3 vs >3 rule
 /// - If ≤3 parameters: format inline as (param1, param2, param3)
 /// - If >3 parameters: format multi-line with each parameter on separate line
 #[tracing::instrument(skip_all)]
 pub fn format_parameters(params: &[String]) -> String {
-    if params.is_empty() {
-        return "()".to_string();
-    }
-    
-    if params.len() <= 3 {
-        // Inline format for 3 or fewer parameters
-        format!("({})", params.join(", "))
-    } else {
-        // Multi-line format for more than 3 parameters
-        let mut result = String::from("(\n");
-        for param in params {
-            result.push_str(&format!("    {},\n", param.trim().trim_end_matches(',')));
-        }
-        result.push(')');
-        result
-    }
+    format_items_with_split_rule(params, Some(("(", ")")), ", ", 4)
 }
 
 /// Deduplicate modifiers to prevent repetition like "data data data"
@@ -247,6 +281,31 @@ pub fn format_inheritance(supertypes: &str) -> Option<String> {
 
     let cleaned = supertypes.replace('\n', ", ");
     Some(cleaned)
+}
+
+/// Format inheritance items (extends/implements) according to the ≤3 rule
+/// Used for Java extends/implements and Kotlin ':' inheritance
+#[tracing::instrument(skip_all)]
+pub fn format_inheritance_items(items: &[String], prefix: &str) -> Option<String> {
+    if items.is_empty() {
+        return None;
+    }
+    
+    if items.len() <= 3 {
+        // Inline format for 3 or fewer items
+        Some(format!("{} {}", prefix, items.join(", ")))
+    } else {
+        // Multi-line format with single indentation level
+        let mut result = format!("{}\n", prefix);
+        for (i, item) in items.iter().enumerate() {
+            result.push_str(&format!("    {}", item.trim()));
+            if i < items.len() - 1 {
+                result.push(',');
+            }
+            result.push('\n');
+        }
+        Some(result.trim_end().to_string())
+    }
 }
 
 /// Strip comment signifiers from documentation text

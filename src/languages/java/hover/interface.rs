@@ -1,6 +1,6 @@
 use tree_sitter::{Query, QueryCursor, StreamingIterator, Tree};
 
-use crate::languages::common::hover::HoverSignature;
+use crate::languages::common::hover::{deduplicate_modifiers, format_inheritance_items, partition_modifiers, HoverSignature};
 
 /// Find the interface declaration node that contains or corresponds to the given node
 #[tracing::instrument(skip_all)]
@@ -38,6 +38,7 @@ pub fn extract_interface_signature(tree: &Tree, node: &tree_sitter::Node, source
     (interface_declaration
         (modifiers)? @modifiers
         name: (identifier) @interface_name
+        type_parameters: (type_parameters)? @type_parameters
         (extends_interfaces)? @extends_line
     )
 
@@ -47,6 +48,7 @@ pub fn extract_interface_signature(tree: &Tree, node: &tree_sitter::Node, source
         (interface_declaration
             (modifiers)? @modifiers
             name: (identifier) @interface_name
+            type_parameters: (type_parameters)? @type_parameters
             (extends_interfaces)? @extends_line
         )
     )
@@ -58,59 +60,85 @@ pub fn extract_interface_signature(tree: &Tree, node: &tree_sitter::Node, source
     let mut package_name = String::new();
     let mut interface_name = String::new();
     let mut extends_line = String::new();
+    let mut type_parameters = String::new();
     let mut modifiers = String::new();
     let mut javadoc = String::new();
 
     let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
 
     while let Some(query_match) = matches.next() {
-        // Check if this match corresponds to our target interface
-        let mut is_target_interface_match = false;
+        // First, handle package_name (always process this from any match)
         for capture in query_match.captures.iter() {
             let capture_name = query.capture_names()[capture.index as usize];
-            if capture_name == "interface_name" {
-                // Check if this interface_name capture is within our target interface node
-                if capture.node.start_byte() >= target_interface_node.start_byte() 
-                   && capture.node.end_byte() <= target_interface_node.end_byte() {
-                    is_target_interface_match = true;
-                    break;
-                }
+            if capture_name == "package_name" && package_name.is_empty() {
+                let text = capture.node.utf8_text(source.as_bytes()).unwrap_or("");
+                package_name.push_str(text);
             }
         }
 
-        // Only process captures for our target interface match
-        for capture in query_match.captures {
+        // Check if this match corresponds to our target interface
+        let mut target_interface_name_node = None;
+        
+        // Find the interface_name capture that matches our target
+        for capture in query_match.captures.iter() {
             let capture_name = query.capture_names()[capture.index as usize];
-            let text = capture.node.utf8_text(source.as_bytes()).unwrap_or("");
-
-            match capture_name {
-                "package_name" => {
-                    if package_name.is_empty() {
-                        package_name.push_str(text);
+            if capture_name == "interface_name" {
+                // Check if this interface_name node is within our target interface declaration
+                if capture.node.start_byte() >= target_interface_node.start_byte() 
+                   && capture.node.end_byte() <= target_interface_node.end_byte() {
+                    // Additional check: make sure this is the direct interface_name of target_interface_node
+                    if let Some(interface_name_field) = target_interface_node.child_by_field_name("name") {
+                        if capture.node.start_byte() == interface_name_field.start_byte()
+                           && capture.node.end_byte() == interface_name_field.end_byte() {
+                            target_interface_name_node = Some(capture.node);
+                            break;
+                        }
                     }
-                },
-                "modifiers" => {
-                    if is_target_interface_match && modifiers.is_empty() {
-                        modifiers.push_str(text);
-                    }
-                },
-                "interface_name" => {
-                    if is_target_interface_match && interface_name.is_empty() {
-                        interface_name.push_str(text);
-                    }
-                },
-                "extends_line" => {
-                    if is_target_interface_match && extends_line.is_empty() {
-                        extends_line = text.to_string();
-                    }
-                },
-                "javadoc" => {
-                    if is_target_interface_match && javadoc.is_empty() {
-                        javadoc = text.to_string();
-                    }
-                },
-                _ => {}
+                }
             }
+        }
+        
+        // Only process interface-specific captures if this match contains our target interface
+        if let Some(_target_node) = target_interface_name_node {
+            // Process all captures for this specific match
+            for capture in query_match.captures {
+                let capture_name = query.capture_names()[capture.index as usize];
+                let text = capture.node.utf8_text(source.as_bytes()).unwrap_or("");
+
+                match capture_name {
+                    "package_name" => {
+                        // Already handled above
+                    },
+                    "modifiers" => {
+                        if modifiers.is_empty() {
+                            modifiers.push_str(text);
+                        }
+                    },
+                    "interface_name" => {
+                        if interface_name.is_empty() {
+                            interface_name.push_str(text);
+                        }
+                    },
+                    "type_parameters" => {
+                        if type_parameters.is_empty() {
+                            type_parameters = text.to_string();
+                        }
+                    },
+                    "extends_line" => {
+                        if extends_line.is_empty() {
+                            extends_line = text.to_string();
+                        }
+                    },
+                    "javadoc" => {
+                        if javadoc.is_empty() {
+                            javadoc = text.to_string();
+                        }
+                    },
+                    _ => {}
+                }
+            }
+            // Break after processing the correct match - no need to continue
+            break;
         }
     }
     
@@ -119,6 +147,7 @@ pub fn extract_interface_signature(tree: &Tree, node: &tree_sitter::Node, source
         package_name,
         modifiers,
         interface_name,
+        type_parameters,
         extends_line,
         javadoc,
     )
@@ -129,6 +158,7 @@ fn format_interface_signature(
     package_name: String,
     modifiers: String,
     interface_name: String,
+    type_parameters: String,
     extends_line: String,
     javadoc: String,
 ) -> Option<String> {
@@ -137,20 +167,41 @@ fn format_interface_signature(
         return None;
     }
 
-    use crate::languages::common::hover::partition_modifiers;
     let (annotations, modifiers_vec) = partition_modifiers(&modifiers);
+    let unique_modifiers = deduplicate_modifiers(modifiers_vec);
 
     // Build signature line
     let mut signature_line = String::new();
     signature_line.push_str("interface ");
     signature_line.push_str(&interface_name);
+    if !type_parameters.is_empty() {
+        signature_line.push_str(&type_parameters);
+    }
+
+    // Format extends with <= 3 rule
+    let inheritance = if !extends_line.is_empty() {
+        let extends_items: Vec<String> = extends_line
+            .strip_prefix("extends")
+            .unwrap_or(&extends_line)
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        if !extends_items.is_empty() {
+            format_inheritance_items(&extends_items, "extends")
+        } else {
+            None
+        }
+    } else {
+        None
+    };
 
     let hover = HoverSignature::new("java")
         .with_package(if package_name.is_empty() { None } else { Some(package_name) })
         .with_annotations(annotations)
-        .with_modifiers(modifiers_vec)
+        .with_modifiers(unique_modifiers)
         .with_signature_line(signature_line)
-        .with_inheritance(if extends_line.is_empty() { None } else { Some(extends_line) })
+        .with_inheritance(inheritance)
         .with_documentation(if javadoc.is_empty() { None } else { Some(javadoc) });
 
     Some(hover.format())
@@ -346,6 +397,7 @@ public interface ExtendedInterface extends Serializable, Cloneable {
             String::new(),
             "TestInterface".to_string(),
             String::new(),
+            String::new(),
             String::new()
         );
         
@@ -364,6 +416,7 @@ public interface ExtendedInterface extends Serializable, Cloneable {
             "com.example.test".to_string(),
             "@FunctionalInterface public".to_string(),
             "ComplexInterface".to_string(),
+            String::new(),
             "extends Serializable".to_string(),
             "/** Interface documentation */".to_string()
         );
@@ -385,9 +438,82 @@ public interface ExtendedInterface extends Serializable, Cloneable {
             "public".to_string(),
             String::new(),
             String::new(),
+            String::new(),
             String::new()
         );
         
         assert!(result.is_none());
+    }
+    
+    #[test]
+    fn test_format_interface_signature_three_or_less_extends() {
+        let result = format_interface_signature(
+            "com.example".to_string(),
+            "public".to_string(),
+            "TestInterface".to_string(),
+            String::new(),
+            "extends Interface1, Interface2, Interface3".to_string(),
+            String::new()
+        );
+        
+        assert!(result.is_some());
+        let content = result.unwrap();
+        // With 3 interfaces, should be inline
+        assert!(content.contains("extends Interface1, Interface2, Interface3"));
+    }
+    
+    #[test]
+    fn test_format_interface_signature_more_than_three_extends() {
+        let result = format_interface_signature(
+            "com.example".to_string(),
+            "public".to_string(),
+            "TestInterface".to_string(),
+            String::new(),
+            "extends Interface1, Interface2, Interface3, Interface4".to_string(),
+            String::new()
+        );
+        
+        assert!(result.is_some());
+        let content = result.unwrap();
+        // With more than 3 interfaces, should be multi-line
+        assert!(content.contains("extends\n"));
+        assert!(content.contains("    Interface1,"));
+        assert!(content.contains("    Interface2,"));
+        assert!(content.contains("    Interface3,"));
+        assert!(content.contains("    Interface4"));
+    }
+    
+    #[test]
+    fn test_format_interface_signature_no_duplicate_modifiers() {
+        let result = format_interface_signature(
+            "com.example".to_string(),
+            "public static public static".to_string(),
+            "TestInterface".to_string(),
+            String::new(),
+            String::new(),
+            String::new()
+        );
+        
+        assert!(result.is_some());
+        let content = result.unwrap();
+        // Should only have one occurrence of each modifier (deduplicated)
+        assert_eq!(content.matches("public").count(), 1);
+        assert_eq!(content.matches("static").count(), 1);
+    }
+    
+    #[test]
+    fn test_format_interface_signature_with_generics() {
+        let result = format_interface_signature(
+            "com.example".to_string(),
+            "public".to_string(),
+            "GenericInterface".to_string(),
+            "<T extends Serializable, U>".to_string(),
+            String::new(),
+            String::new()
+        );
+        
+        assert!(result.is_some());
+        let content = result.unwrap();
+        assert!(content.contains("public interface GenericInterface<T extends Serializable, U>"));
     }
 }

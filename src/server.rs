@@ -274,6 +274,7 @@ impl LanguageServer for LspServer {
         &self,
         params: GotoDefinitionParams,
     ) -> Result<Option<GotoDefinitionResponse>> {
+        let start_time = Instant::now();
         let uri = params
             .text_document_position_params
             .text_document
@@ -282,7 +283,18 @@ impl LanguageServer for LspServer {
 
         let position = params.text_document_position_params.position;
 
-        let result = self.find_definition(uri, position).await;
+        let result = self.find_definition(uri.clone(), position).await;
+
+        let elapsed = start_time.elapsed();
+        if elapsed > Duration::from_secs(1) {
+            tracing::info!(
+                "goto_definition took {:.2}s for {} at {}:{}",
+                elapsed.as_secs_f64(),
+                uri,
+                position.line,
+                position.character
+            );
+        }
 
         match result {
             Ok(location) => Ok(Some(GotoDefinitionResponse::Scalar(location))),
@@ -294,6 +306,7 @@ impl LanguageServer for LspServer {
         &self,
         params: GotoImplementationParams,
     ) -> Result<Option<GotoImplementationResponse>> {
+        let start_time = Instant::now();
         let uri = params
             .text_document_position_params
             .text_document
@@ -331,6 +344,17 @@ impl LanguageServer for LspServer {
         .await
         .map_err(|_| tower_lsp::jsonrpc::Error::internal_error())?;
 
+        let elapsed = start_time.elapsed();
+        if elapsed > Duration::from_secs(1) {
+            tracing::info!(
+                "goto_implementation took {:.2}s for {} at {}:{}",
+                elapsed.as_secs_f64(),
+                uri,
+                position.line,
+                position.character
+            );
+        }
+
         match result {
             Ok(locations) if !locations.is_empty() => {
                 Ok(Some(GotoImplementationResponse::Array(locations)))
@@ -343,6 +367,7 @@ impl LanguageServer for LspServer {
     }
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
+        let start_time = Instant::now();
         let uri = params
             .text_document_position_params
             .text_document
@@ -360,6 +385,16 @@ impl LanguageServer for LspServer {
                 .ok_or(tower_lsp::jsonrpc::Error::internal_error())?;
 
             if let Some(hover) = language_support.provide_hover(&tree, &content, location) {
+                let elapsed = start_time.elapsed();
+                if elapsed > Duration::from_secs(1) {
+                    tracing::info!(
+                        "hover took {:.2}s for {} at {}:{}",
+                        elapsed.as_secs_f64(),
+                        uri,
+                        position.line,
+                        position.character
+                    );
+                }
                 return Ok(Some(hover));
             }
         }
@@ -380,10 +415,23 @@ impl LanguageServer for LspServer {
             },
         };
 
-        language_support
+        let result = language_support
             .provide_hover(&tree, &content, local_location)
             .ok_or(tower_lsp::jsonrpc::Error::invalid_request())
-            .map(Some)
+            .map(Some);
+
+        let elapsed = start_time.elapsed();
+        if elapsed > Duration::from_secs(1) {
+            tracing::info!(
+                "hover took {:.2}s for {} at {}:{}",
+                elapsed.as_secs_f64(),
+                uri,
+                position.line,
+                position.character
+            );
+        }
+
+        result
     }
 
     async fn completion(&self, _params: CompletionParams) -> Result<Option<CompletionResponse>> {
