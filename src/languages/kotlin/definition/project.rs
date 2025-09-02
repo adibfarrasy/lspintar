@@ -604,6 +604,8 @@ async fn try_regular_symbol_search(
     dependency_cache: Arc<DependencyCache>,
     language_support: &dyn LanguageSupport,
 ) -> Option<Location> {
+    let symbol_name = usage_node.utf8_text(source.as_bytes()).ok()?.to_string();
+    
     // Check if this is an enum constant access - handle it specially
     if let Ok(symbol_type) = language_support.determine_symbol_type_from_context(
         &crate::core::utils::uri_to_tree(file_uri)?, 
@@ -630,7 +632,6 @@ async fn try_regular_symbol_search(
     let (project_root, fqn) = if let Some(key) = symbol_key {
         key
     } else {
-        let symbol_name = usage_node.utf8_text(source.as_bytes()).ok()?.to_string();
         let project_root = crate::core::utils::uri_to_path(file_uri)
             .and_then(|path| crate::core::utils::find_project_root(&path))?;
 
@@ -658,7 +659,6 @@ async fn try_regular_symbol_search(
     };
 
     let file_location = dependency_cache.find_symbol(&project_root, &fqn).await?;
-
     let other_uri = path_to_file_uri(&file_location)?;
 
     if file_uri == &other_uri {

@@ -217,12 +217,8 @@ pub fn extract_imports_from_source(source: &str) -> Vec<String> {
                         if let Some(import_path) =
                             import_text.strip_prefix("import ").map(|s| s.trim())
                         {
-                            // Only process wildcard imports
-                            if import_path.ends_with(".*") {
-                                if let Some(base_package) = import_path.strip_suffix(".*") {
-                                    imports.push(base_package.to_string());
-                                }
-                            }
+                            // Keep the full import including wildcard suffix
+                            imports.push(import_path.to_string());
                         }
                     }
                 }
@@ -232,12 +228,8 @@ pub fn extract_imports_from_source(source: &str) -> Vec<String> {
             if let Ok(import_text) = child.utf8_text(source.as_bytes()) {
                 // Extract the import path (remove "import " prefix)
                 if let Some(import_path) = import_text.strip_prefix("import ").map(|s| s.trim()) {
-                    // Only process wildcard imports
-                    if import_path.ends_with(".*") {
-                        if let Some(base_package) = import_path.strip_suffix(".*") {
-                            imports.push(base_package.to_string());
-                        }
-                    }
+                    // Keep the full import including wildcard suffix
+                    imports.push(import_path.to_string());
                 }
             }
         }
@@ -350,8 +342,8 @@ pub fn resolve_symbol_with_imports(
             }
         }
 
-        // For basic types, if not found in builtins, just return the simple name
-        // The external dependency system should find it
+        // For basic types, if not found in builtins, return the simple name
+        // as it's likely a built-in type that should be resolved elsewhere
         return Some(symbol_name.to_string());
     }
 
@@ -379,8 +371,9 @@ pub fn resolve_symbol_with_imports(
         }
     }
 
-    // Fallback to symbol name alone
-    Some(symbol_name.to_string())
+    // Return None to indicate we couldn't resolve the import
+    // The caller should handle fallback strategies
+    None
 }
 
 /// Prepare symbol lookup key with wildcard and import support
@@ -395,10 +388,37 @@ pub fn prepare_symbol_lookup_key_with_wildcard_support(
     let symbol_name = usage_node.utf8_text(source.as_bytes()).ok()?.to_string();
     let project_root = uri_to_path(file_uri).and_then(|path| find_project_root(&path))?;
 
-    // Try to resolve the symbol with import context
-    let fqn = resolve_symbol_with_imports(&symbol_name, source, dependency_cache)?;
+    // First try direct symbol lookup (unqualified name)
+    let direct_key = (project_root.clone(), symbol_name.clone());
+    if dependency_cache
+        .find_symbol_sync(&direct_key.0, &direct_key.1)
+        .is_some()
+    {
+        return Some(direct_key);
+    }
 
-    Some((project_root, fqn))
+    // Try to resolve the symbol with import context
+    if let Some(fqn) = resolve_symbol_with_imports(&symbol_name, source, dependency_cache) {
+        return Some((project_root, fqn));
+    }
+
+    // Fallback: Try with package prefix if we can extract it
+    if let Some(package) = extract_package_from_source(source) {
+        if !package.is_empty() {
+            let package_fqn = format!("{}.{}", package, symbol_name);
+            
+            // Check if this FQN exists in the cache
+            if dependency_cache
+                .find_symbol_sync(&project_root, &package_fqn)
+                .is_some()
+            {
+                return Some((project_root, package_fqn));
+            }
+        }
+    }
+
+    // Last resort: Return just the symbol name - let the caller decide what to do
+    Some((project_root, symbol_name))
 }
 
 /// Search for definition in a specific project
@@ -692,9 +712,9 @@ fun example() {
 "#;
         
         let imports = extract_imports_from_source(source);
-        assert!(imports.contains(&"kotlin.collections".to_string()));
-        assert!(imports.contains(&"com.test.enums.Priority".to_string()));
-        assert!(!imports.contains(&"java.util.List".to_string())); // Not wildcard
+        assert!(imports.contains(&"kotlin.collections.*".to_string()));
+        assert!(imports.contains(&"com.test.enums.Priority.*".to_string()));
+        assert!(imports.contains(&"java.util.List".to_string())); // Now includes all imports
     }
 
     #[test] 

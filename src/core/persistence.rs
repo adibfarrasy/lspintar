@@ -10,7 +10,6 @@ use std::{
     sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
 };
-use tracing::debug;
 
 use crate::core::{
     build_tools::ExternalDependency,
@@ -648,7 +647,6 @@ impl PersistenceLayer {
     /// Lazy lookup for a single symbol from database
     /// Called from: go-to-definition requests when symbol not in memory cache
     pub fn lookup_symbol(&self, project_root: &PathBuf, fqn: &str) -> Result<Option<PathBuf>> {
-
         let conn = self.conn.lock().unwrap();
 
         // First try project-specific lookup (current behavior)
@@ -672,9 +670,9 @@ impl PersistenceLayer {
             Err(e) => return Err(e.into()),
         }
 
+        // If not found in current project, try workspace search
         let workspace_root = self.project_path.clone();
         let workspace_pattern = format!("{}%", workspace_root.to_string_lossy());
-
 
         let mut stmt = conn.prepare(
             "SELECT file_path FROM symbol_index WHERE project_path LIKE ? AND fully_qualified_name = ?"
@@ -686,47 +684,8 @@ impl PersistenceLayer {
         });
 
         match result {
-            Ok(file_path) => {
-                Ok(Some(file_path))
-            }
-            Err(rusqlite::Error::QueryReturnedNoRows) => {
-                // Symbol not found in workspace - debug what IS in the database for this project
-                if project_root.to_string_lossy().contains("lending-commons") {
-                    debug!("LSPINTAR_DEBUG: Listing symbols in database for lending-commons:");
-                    let workspace_pattern = format!("{}%", project_root.to_string_lossy());
-                    let mut debug_stmt = conn.prepare("SELECT fully_qualified_name FROM symbol_index WHERE project_path LIKE ? LIMIT 20")?;
-                    let rows = debug_stmt.query_map(params![workspace_pattern], |row| {
-                        let fqn: String = row.get(0)?;
-                        Ok(fqn)
-                    })?;
-                    let mut count = 0;
-                    for row in rows {
-                        if let Ok(fqn) = row {
-                            debug!("LSPINTAR_DEBUG: DB symbol: {}", fqn);
-                            count += 1;
-                        }
-                    }
-                    debug!("LSPINTAR_DEBUG: Total symbols found for lending-commons: {}", count);
-                    
-                    // Also search for Constants across ALL projects
-                    debug!("LSPINTAR_DEBUG: Searching for 'Constants' across ALL projects:");
-                    let mut constants_stmt = conn.prepare("SELECT project_path, fully_qualified_name FROM symbol_index WHERE fully_qualified_name LIKE '%Constants%' LIMIT 10")?;
-                    let constants_rows = constants_stmt.query_map(params![], |row| {
-                        let project_path: String = row.get(0)?;
-                        let fqn: String = row.get(1)?;
-                        Ok((project_path, fqn))
-                    })?;
-                    let mut constants_count = 0;
-                    for row in constants_rows {
-                        if let Ok((project_path, fqn)) = row {
-                            debug!("LSPINTAR_DEBUG: Found Constants: {} in {}", fqn, project_path);
-                            constants_count += 1;
-                        }
-                    }
-                    debug!("LSPINTAR_DEBUG: Total Constants symbols found across all projects: {}", constants_count);
-                }
-                Ok(None)
-            }
+            Ok(file_path) => Ok(Some(file_path)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e.into()),
         }
     }

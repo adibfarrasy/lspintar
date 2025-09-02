@@ -375,33 +375,6 @@ impl DependencyCache {
                         project_root.to_str().unwrap_or(""),
                         fqn
                     );
-                    
-                    // LSPINTAR_DEBUG: Show what symbols ARE available for this project
-                    debug!("LSPINTAR_DEBUG: Available symbols for project {:?}:", project_root);
-                    let mut count = 0;
-                    for entry in self.symbol_index.iter() {
-                        let ((entry_project, entry_fqn), _file_path) = (entry.key(), entry.value());
-                        if entry_project == project_root {
-                            debug!("LSPINTAR_DEBUG:   - {}", entry_fqn);
-                            count += 1;
-                            if count >= 10 { // Limit to first 10 to avoid spam
-                                debug!("LSPINTAR_DEBUG:   ... (showing first 10 out of many)");
-                                break;
-                            }
-                        }
-                    }
-                    if count == 0 {
-                        debug!("LSPINTAR_DEBUG: No symbols found in memory for this project!");
-                        debug!("LSPINTAR_DEBUG: Total symbols in entire symbol_index: {}", self.symbol_index.len());
-                        if self.symbol_index.len() > 0 {
-                            debug!("LSPINTAR_DEBUG: Sample symbols from symbol_index:");
-                            for (i, entry) in self.symbol_index.iter().enumerate() {
-                                if i >= 5 { break; }
-                                let ((sample_project, sample_fqn), _) = (entry.key(), entry.value());
-                                debug!("LSPINTAR_DEBUG: Sample - Project: {:?}, FQN: {}", sample_project, sample_fqn);
-                            }
-                        }
-                    }
                 }
                 Err(e) => {
                     debug!("{:#?}", e);
