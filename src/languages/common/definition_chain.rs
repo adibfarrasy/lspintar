@@ -8,30 +8,6 @@ use crate::{
     languages::LanguageSupport,
 };
 
-/// Resolve nested path from field access chain (e.g., Foo.Status -> "Foo.Status")
-/// This works across all JVM languages with similar syntax
-#[tracing::instrument(skip_all)]
-pub fn resolve_nested_path(source: &str, node: &Node<'_>) -> Option<String> {
-    // For simple identifier, return as-is
-    if node.kind() == "identifier" {
-        return node.utf8_text(source.as_bytes()).ok().map(|s| s.to_string());
-    }
-    
-    // For nested field access (Foo.Status), extract the full path
-    if node.kind() == "field_access" {
-        let object = node.child_by_field_name("object")?;
-        let field = node.child_by_field_name("field")?;
-        
-        let object_text = object.utf8_text(source.as_bytes()).ok()?;
-        let field_text = field.utf8_text(source.as_bytes()).ok()?;
-        
-        return Some(format!("{}.{}", object_text, field_text));
-    }
-    
-    // Fallback: extract the full text
-    node.utf8_text(source.as_bytes()).ok().map(|s| s.to_string())
-}
-
 /// Common method resolution logic shared across JVM languages (Java, Groovy, Kotlin)
 
 /// Detect if a method call is static and extract the class name
@@ -1214,102 +1190,57 @@ pub fn find_instance_field_definition(
     field_name: &str,
     dependency_cache: Arc<DependencyCache>,
 ) -> Option<Location> {
-    debug!(
-        "FIELDRES: find_instance_field_definition: looking for {}.{}",
-        variable_name, field_name
-    );
-
     // Step 1: Extract the variable type using language-specific trait methods
-    let variable_type = match extract_variable_type_from_tree(language_support, variable_name, tree, source, usage_node) {
-        Some(t) => t,
-        None => {
-            debug!("FIELDRES: Could not determine type for variable {}", variable_name);
-            return None;
-        }
-    };
-    
-    debug!(
-        "FIELDRES: find_instance_field_definition: variable {} has type {}",
-        variable_name, variable_type
-    );
+    let variable_type = extract_variable_type_from_tree(language_support, variable_name, tree, source, usage_node)?;
     
     // Step 2: Find the class definition for the variable type
     let class_location = find_class_definition(
         language_support, tree, source, file_uri, &variable_type, dependency_cache.clone()
     )?;
     
-    debug!(
-        "FIELDRES: find_instance_field_definition: found type class {} at {:?}",
-        variable_type, class_location.uri
-    );
-    
     // Step 3: Search for the field/property within the class file
     if let Some(field_location) = search_field_in_class_file_cross_language(
         &class_location, field_name
     ) {
-        debug!("FIELDRES: Found field {} in class file", field_name);
         return Some(field_location);
     }
-    
-    debug!("FIELDRES: Could not find field {} in class file, returning class location as fallback", field_name);
-    
     // Return class location as fallback
     Some(class_location)
 }
 
-/// Find class definition by trying all supported languages
+/// Find class definition using the main definition chain directly
 fn find_class_definition(
-    _language_support: &dyn LanguageSupport,
+    language_support: &dyn LanguageSupport,
     tree: &Tree,
     source: &str,
     file_uri: &str,
     class_name: &str,
     dependency_cache: Arc<DependencyCache>,
 ) -> Option<Location> {
+    // First try the static resolution approach (for consistency with existing working cases)
+    if let Some(location) = try_resolve_class_name(language_support, tree, source, file_uri, class_name, dependency_cache.clone()) {
+        return Some(location);
+    }
     
-    // Find any occurrence of the class name in the source to get a node
-    if let Some(class_node) = find_class_name_node(tree, source, class_name) {
-        
-        // Convert to LSP position
-        let type_position = node_to_lsp_position(&class_node);
-        
-        // Create all language supports and try each one
-        let language_supports: Vec<Box<dyn LanguageSupport + Send + Sync>> = 
-            crate::languages::ALL_LANGUAGE_SUPPORTS.iter().map(|f| f()).collect();
-        
-        // Try each language support's find_definition method
-        for (_i, lang_support) in language_supports.iter().enumerate() {
-            
-            match lang_support.find_definition(tree, source, type_position, file_uri, dependency_cache.clone()) {
-                Ok(location) => {
-                    return Some(location);
-                }
-                Err(_) => {
-                }
-            }
+    // If that fails, use the main definition chain directly
+    // Try to find a node representing this class name to use with the main definition chain
+    if let Some(class_node) = find_class_name_in_current_source(tree, source, class_name) {
+        // Use the main definition chain directly
+        if let Ok(location) = find_definition_chain_with_depth(
+            language_support, tree, source, dependency_cache, file_uri, &class_node, 0
+        ) {
+            return Some(location);
         }
-    } else {
     }
     
     None
 }
 
-/// Convert tree-sitter node to LSP position
-fn node_to_lsp_position(node: &tree_sitter::Node) -> tower_lsp::lsp_types::Position {
-    let start_pos = node.start_position();
-    tower_lsp::lsp_types::Position {
-        line: start_pos.row as u32,
-        character: start_pos.column as u32,
-    }
-}
-
-/// Find a node in the tree that represents the given class name
-fn find_class_name_node<'a>(tree: &'a Tree, source: &'a str, class_name: &str) -> Option<tree_sitter::Node<'a>> {
-    
-    // Simple approach: find any identifier node that matches the class name
+/// Find a class name node in the current source for standard resolution
+fn find_class_name_in_current_source<'a>(tree: &'a Tree, source: &'a str, class_name: &str) -> Option<tree_sitter::Node<'a>> {
     fn search_node<'a>(node: tree_sitter::Node<'a>, source: &'a str, target: &str) -> Option<tree_sitter::Node<'a>> {
-        // Check if this node is an identifier with the target text
-        if node.kind() == "identifier" || node.kind() == "type_identifier" {
+        // Check if this node matches the class name
+        if matches!(node.kind(), "identifier" | "type_identifier" | "simple_identifier") {
             if let Ok(node_text) = node.utf8_text(source.as_bytes()) {
                 if node_text == target {
                     return Some(node);
@@ -1328,12 +1259,10 @@ fn find_class_name_node<'a>(tree: &'a Tree, source: &'a str, class_name: &str) -
         None
     }
     
-    let result = search_node(tree.root_node(), source, class_name);
-    if result.is_some() {
-    } else {
-    }
-    result
+    search_node(tree.root_node(), source, class_name)
 }
+
+
 
 /// Extract variable type using language-specific trait methods
 fn extract_variable_type_from_tree(
@@ -1383,59 +1312,79 @@ pub fn find_definition_chain(
     file_uri: &str,
     usage_node: &Node,
 ) -> Result<Location, anyhow::Error> {
-    let symbol_text = usage_node.utf8_text(source.as_bytes()).unwrap_or("");
+    find_definition_chain_with_depth(
+        language_support,
+        tree,
+        source,
+        dependency_cache,
+        file_uri,
+        usage_node,
+        0,
+    )
+}
+
+/// Internal version with recursion depth tracking
+#[tracing::instrument(skip_all)]
+pub fn find_definition_chain_with_depth(
+    language_support: &dyn LanguageSupport,
+    tree: &Tree,
+    source: &str,
+    dependency_cache: Arc<DependencyCache>,
+    file_uri: &str,
+    usage_node: &Node,
+    recursion_depth: usize,
+) -> Result<Location, anyhow::Error> {
+    const MAX_RECURSION_DEPTH: usize = 10;
     
-    // FIRST: Check for nested access patterns (e.g., Outer.Inner.symbol) using unified trait methods
+    
+    if recursion_depth >= MAX_RECURSION_DEPTH {
+        tracing::warn!(
+            "Maximum recursion depth {} reached for symbol at position {:?}",
+            MAX_RECURSION_DEPTH,
+            usage_node.start_position()
+        );
+        return Err(anyhow::anyhow!("Maximum recursion depth exceeded"));
+    }
+    
+    // FIRST: Check for nested access patterns using parent context and symbol type
     if let Some(parent) = usage_node.parent() {
-        if parent.kind() == "field_access" {
-            if let Some(object_node) = parent.child_by_field_name("object") {
-                if let Some(nested_path) = resolve_nested_path(source, &object_node) {
-                    if nested_path.contains('.') {
-                        // Build the full symbol path: nested_path.symbol_text
-                        let full_symbol_path = format!("{}.{}", nested_path, symbol_text);
+        let symbol_text = usage_node.utf8_text(source.as_bytes()).unwrap_or("");
+        let parent_text = parent.utf8_text(source.as_bytes()).unwrap_or("");
+        
+        // For navigation_suffix, we need to go up one more level to get the full chain
+        let mut search_text = parent_text.to_string();
+        
+        if parent.kind() == "navigation_suffix" {
+            if let Some(grandparent) = parent.parent() {
+                let grandparent_text = grandparent.utf8_text(source.as_bytes()).unwrap_or("");
+                search_text = grandparent_text.to_string();
+            }
+        }
+        
+        // Check if search text contains a dotted pattern that includes our symbol
+        if search_text.contains('.') && search_text.contains(symbol_text) {
+            // Try to determine what type of access this is
+            if let Ok(symbol_type) = language_support.determine_symbol_type_from_context(tree, usage_node, source) {
+                // For FieldUsage in dotted patterns, check if this looks like a static/nested access or instance access
+                if matches!(symbol_type, crate::core::symbols::SymbolType::FieldUsage) {
+                    let full_symbol_path = search_text;
+                    
+                    // Check if this looks like static/nested access (PascalCase) vs instance access (camelCase)
+                    let parts: Vec<&str> = full_symbol_path.split('.').collect();
+                    let is_likely_static = parts.len() >= 2 && 
+                        parts[0].chars().next().map(|c| c.is_uppercase()).unwrap_or(false);
+                    
+                    if is_likely_static {
+                        // Try as Type first (nested class/enum), then Property
+                        if let Some(result) = language_support.find_type(source, file_uri, &full_symbol_path, dependency_cache.clone()) {
+                            return Ok(result);
+                        }
                         
-                        // Determine what type of symbol we're dealing with and use unified methods
-                        if let Ok(symbol_type) = language_support.determine_symbol_type_from_context(
-                            tree,
-                            usage_node,
-                            source,
-                        ) {
-                            match symbol_type {
-                                crate::core::symbols::SymbolType::Type => {
-                                    if let Some(result) = language_support.find_type(source, file_uri, &full_symbol_path, dependency_cache.clone()) {
-                                        return Ok(result);
-                                    }
-                                }
-                                crate::core::symbols::SymbolType::MethodCall => {
-                                    if let Some(result) = language_support.find_method(source, file_uri, &full_symbol_path, dependency_cache.clone()) {
-                                        return Ok(result);
-                                    }
-                                }
-                                crate::core::symbols::SymbolType::FieldUsage => {
-                                    if let Some(result) = language_support.find_property(source, file_uri, &full_symbol_path, dependency_cache.clone()) {
-                                        return Ok(result);
-                                    }
-                                }
-                                _ => {
-                                    // Try as type first, most common case
-                                    if let Some(result) = language_support.find_type(source, file_uri, &full_symbol_path, dependency_cache.clone()) {
-                                        return Ok(result);
-                                    }
-                                }
-                            }
-                        } else {
-                            // If we can't determine symbol type, try all unified methods in priority order
-                            if let Some(result) = language_support.find_type(source, file_uri, &full_symbol_path, dependency_cache.clone()) {
-                                return Ok(result);
-                            }
-                            if let Some(result) = language_support.find_method(source, file_uri, &full_symbol_path, dependency_cache.clone()) {
-                                return Ok(result);
-                            }
-                            if let Some(result) = language_support.find_property(source, file_uri, &full_symbol_path, dependency_cache.clone()) {
-                                return Ok(result);
-                            }
+                        if let Some(result) = language_support.find_property(source, file_uri, &full_symbol_path, dependency_cache.clone()) {
+                            return Ok(result);
                         }
                     }
+                    // For instance access (camelCase), skip nested resolution and continue to instance field resolution
                 }
             }
         }
@@ -1528,7 +1477,7 @@ pub fn find_definition_chain(
     
     // Try cross-file resolution
     language_support.find_in_project(source, file_uri, usage_node, dependency_cache.clone())
-        .or_else(|| language_support.find_in_workspace(source, file_uri, usage_node, dependency_cache.clone()))
+        .or_else(|| language_support.find_in_workspace(source, file_uri, usage_node, dependency_cache.clone(), recursion_depth + 1))
         .or_else(|| language_support.find_external(source, file_uri, usage_node, dependency_cache))
         .and_then(|location| {
             // If the definition is in the same file, don't call set_start_position
@@ -2741,6 +2690,100 @@ class TestClass {
         } else {
             None
         }
+    }
+
+    fn create_groovy_test_tree(source: &str) -> Tree {
+        let mut parser = Parser::new();
+        let language = tree_sitter_groovy::language();
+        parser.set_language(&language).unwrap();
+        parser.parse(source, None).unwrap()
+    }
+
+    #[test]
+    fn test_middle_identifier_resolution_in_call_chain() {
+        // Test the fix for middle identifier resolution in chains like Outer.Inner.CONSTANT
+        let source = "Outer.Inner.CONSTANT";
+        let tree = create_groovy_test_tree(source);
+        
+        // Find the "Inner" identifier (the middle one)
+        let inner_node = find_identifier_node(&tree, source, "Inner").unwrap();
+        
+        // Verify that the parent is a field_access node
+        let parent = inner_node.parent().unwrap();
+        assert_eq!(parent.kind(), "field_access");
+        
+        // Verify that the parent's text is "Outer.Inner"
+        let parent_text = parent.utf8_text(source.as_bytes()).unwrap();
+        assert_eq!(parent_text, "Outer.Inner");
+        
+        // This test verifies that the AST structure is correct for our fix
+        // The actual definition resolution is tested via integration tests
+        // since it depends on the language support implementation
+    }
+
+    #[test]
+    fn test_find_class_name_in_current_source() {
+        // Test the helper function that finds class name nodes
+        let kotlin_source = r#"
+        import com.example.DataContainer
+        
+        fun test() {
+            val container = DataContainer()
+            container.items.add("test")
+        }
+        "#;
+        
+        let tree = create_kotlin_test_tree(kotlin_source);
+        
+        // Should find the DataContainer identifier
+        let class_node = find_class_name_in_current_source(&tree, kotlin_source, "DataContainer");
+        assert!(class_node.is_some(), "Should find DataContainer in source");
+        
+        if let Some(node) = class_node {
+            let node_text = node.utf8_text(kotlin_source.as_bytes()).unwrap();
+            assert_eq!(node_text, "DataContainer");
+            assert!(matches!(node.kind(), "simple_identifier" | "identifier" | "type_identifier"));
+        }
+        
+        // Should not find non-existent class
+        let missing_class = find_class_name_in_current_source(&tree, kotlin_source, "NonExistentClass");
+        assert!(missing_class.is_none(), "Should not find NonExistentClass");
+    }
+
+    #[test]
+    fn test_find_class_definition_fallback_behavior() {
+        // Test that find_class_definition has proper fallback behavior
+        // This is a unit test for the function structure, not full resolution
+        
+        let kotlin_source = r#"
+        import com.example.TestClass
+        
+        fun test() {
+            val obj = TestClass()
+        }
+        "#;
+        
+        let tree = create_kotlin_test_tree(kotlin_source);
+        let kotlin_support = crate::languages::kotlin::support::KotlinSupport::new();
+        let dependency_cache = std::sync::Arc::new(crate::core::dependency_cache::DependencyCache::new());
+        let file_uri = "file:///test.kt";
+        
+        // Test the function doesn't panic and handles missing classes gracefully
+        let result = find_class_definition(
+            &kotlin_support,
+            &tree,
+            kotlin_source,
+            file_uri,
+            "NonExistentClass",
+            dependency_cache
+        );
+        
+        // Should return None for non-existent class (no panic)
+        assert!(result.is_none(), "Should return None for non-existent class");
+        
+        // Test that it can find nodes in the source
+        let class_node = find_class_name_in_current_source(&tree, kotlin_source, "TestClass");
+        assert!(class_node.is_some(), "Should find TestClass node in source for fallback resolution");
     }
 
 }

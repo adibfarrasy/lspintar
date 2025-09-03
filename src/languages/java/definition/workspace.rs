@@ -27,6 +27,7 @@ pub async fn find_in_workspace(
     usage_node: &Node<'_>,
     dependency_cache: Arc<DependencyCache>,
     language_support: &dyn LanguageSupport,
+    recursion_depth: usize,
 ) -> Option<Location> {
     let symbol_text = usage_node.utf8_text(source.as_bytes()).unwrap_or("");
     
@@ -67,6 +68,7 @@ pub async fn find_in_workspace(
             usage_node,
             dependency_cache,
             language_support,
+            recursion_depth,
         )
     })
 }
@@ -185,7 +187,15 @@ fn fallback_impl(
     usage_node: &Node,
     dependency_cache: Arc<DependencyCache>,
     language_support: &dyn LanguageSupport,
+    recursion_depth: usize,
 ) -> Option<Location> {
+    // Check recursion depth
+    const MAX_RECURSION_DEPTH: usize = 10;
+    if recursion_depth >= MAX_RECURSION_DEPTH {
+        tracing::warn!("Maximum recursion depth {} reached in fallback_impl", MAX_RECURSION_DEPTH);
+        return None;
+    }
+    
     // Fallback: try to resolve using wildcard imports
     let symbol_name = usage_node.utf8_text(source.as_bytes()).ok()?;
     let _current_project = uri_to_path(file_uri).and_then(|path| find_project_root(&path))?;

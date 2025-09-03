@@ -34,8 +34,6 @@ impl JavaDecompiler {
     /// Decompile a single .class file to .java source code
     #[tracing::instrument(skip_all)]
     pub fn decompile_class(&self, class_name: &str, class_bytes: &[u8]) -> Result<String> {
-        let start_time = std::time::Instant::now();
-        
         if self.decompiler_jar_path.is_none() {
             return Err(anyhow!(
                 "Java decompiler JAR not found. Please install FernFlower or CFR decompiler."
@@ -99,15 +97,6 @@ impl JavaDecompiler {
         let decompiled_source =
             fs::read_to_string(&java_file_path).context("Failed to read decompiled source file")?;
 
-        let elapsed = start_time.elapsed();
-        if elapsed > Duration::from_secs(1) {
-            tracing::info!(
-                "decompile_class took {:.2}s for class {}",
-                elapsed.as_secs_f64(),
-                class_name
-            );
-        }
-        
         debug!(
             "Successfully decompiled {} ({} bytes)",
             class_name,
@@ -115,7 +104,6 @@ impl JavaDecompiler {
         );
         Ok(decompiled_source)
     }
-
 
     /// Execute a command with a timeout to prevent runaway decompilation processes
     #[tracing::instrument(skip_all)]
@@ -224,4 +212,3 @@ mod tests {
         }
     }
 }
-

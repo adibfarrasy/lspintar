@@ -17,7 +17,15 @@ pub async fn find_in_workspace(
     usage_node: &Node<'_>,
     dependency_cache: Arc<DependencyCache>,
     language_support: &dyn LanguageSupport,
+    recursion_depth: usize,
 ) -> Option<Location> {
+    // Check recursion depth
+    const MAX_RECURSION_DEPTH: usize = 10;
+    if recursion_depth >= MAX_RECURSION_DEPTH {
+        tracing::warn!("Maximum recursion depth {} reached in Kotlin find_in_workspace", MAX_RECURSION_DEPTH);
+        return None;
+    }
+    
     let symbol_text = usage_node.utf8_text(source.as_bytes()).unwrap_or("");
     
     // FIRST: Check for nested enum access patterns (same as find_in_project)

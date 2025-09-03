@@ -72,6 +72,7 @@ pub trait LanguageSupport: Send + Sync + QueryProvider {
         _file_uri: &str,
         _usage_node: &Node,
         _dependency_cache: Arc<DependencyCache>,
+        _recursion_depth: usize,
     ) -> Option<Location>;
 
     fn find_external(
@@ -513,7 +514,7 @@ mod tests {
             self.find_local(tree, source, uri, usage_node)
                 .or_else(|| self.find_in_project(source, uri, usage_node, dependency_cache.clone()))
                 .or_else(|| {
-                    self.find_in_workspace(source, uri, usage_node, dependency_cache.clone())
+                    self.find_in_workspace(source, uri, usage_node, dependency_cache.clone(), 0)
                 })
                 .or_else(|| self.find_external(source, uri, usage_node, dependency_cache.clone()))
                 .and_then(|location| {
@@ -556,6 +557,7 @@ mod tests {
             file_uri: &str,
             _usage_node: &Node,
             _dependency_cache: Arc<DependencyCache>,
+            _recursion_depth: usize,
         ) -> Option<Location> {
             if self.should_find_workspace {
                 Some(self.create_mock_location(file_uri))
@@ -961,6 +963,7 @@ mod tests {
                         uri,
                         &root_node,
                         dependency_cache.clone(),
+                        0,
                     ),
                     "find_external" => test_case.language_support.find_external(
                         source,

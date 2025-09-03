@@ -386,10 +386,11 @@ impl LanguageSupport for KotlinSupport {
         file_uri: &str,
         usage_node: &Node,
         dependency_cache: Arc<DependencyCache>,
+        recursion_depth: usize,
     ) -> Option<Location> {
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(workspace::find_in_workspace(
-                source, file_uri, usage_node, dependency_cache, self,
+                source, file_uri, usage_node, dependency_cache, self, recursion_depth,
             ))
         })
     }
@@ -863,6 +864,41 @@ impl KotlinSupport {
     #[tracing::instrument(skip_all)]
     fn extract_kotlin_variable_type(&self, variable_name: &str, tree: &Tree, source: &str, _usage_node: &Node) -> Option<String> {
         
+        // First try type inference from constructor calls: val variable = Constructor()
+        let constructor_query = r#"
+            (property_declaration
+              (variable_declaration
+                (simple_identifier) @var_name)
+              (call_expression
+                (simple_identifier) @constructor_type))
+        "#;
+        
+        if let Ok(query) = Query::new(&tree_sitter_kotlin::language(), constructor_query) {
+            let mut cursor = QueryCursor::new();
+            let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
+            
+            while let Some(query_match) = matches.next() {
+                let mut found_name = None;
+                let mut found_type = None;
+                
+                for capture in query_match.captures {
+                    let capture_text = capture.node.utf8_text(source.as_bytes()).unwrap_or("");
+                    let capture_name = query.capture_names()[capture.index as usize];
+                    
+                    if capture_name == "var_name" && capture_text == variable_name {
+                        found_name = Some(capture_text);
+                    } else if capture_name == "constructor_type" {
+                        found_type = Some(capture_text.to_string());
+                    }
+                }
+                
+                if found_name.is_some() && found_type.is_some() {
+                    return found_type;
+                }
+            }
+        }
+        
+        // Fallback to explicit type declarations (class parameters)
         let query_text = r#"
             (class_parameter
               (simple_identifier) @param_name

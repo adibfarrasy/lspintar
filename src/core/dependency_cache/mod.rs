@@ -130,7 +130,6 @@ impl DependencyCache {
         Ok(())
     }
 
-
     #[tracing::instrument(skip_all)]
     pub async fn index_external_dependency(self: Arc<Self>, current_dir: PathBuf) -> Result<()> {
         tracing::debug!("index_external_dependency called for: {:?}", current_dir);
@@ -409,7 +408,7 @@ impl DependencyCache {
                     return Some(info);
                 }
                 Ok(None) => {
-                    debug!("builtin '{}' not found in database", class_name);
+                    // debug!("builtin '{}' not found in database", class_name);
                 }
                 Err(e) => {
                     debug!("database query error for builtin '{}': {}", class_name, e);
@@ -461,7 +460,10 @@ impl DependencyCache {
         symbol_name: &str,
     ) -> Option<SourceFileInfo> {
         // 1. First try the standard lookup (fast)
-        if let Some(source_info) = self.find_project_external_info(project_root, symbol_name).await {
+        if let Some(source_info) = self
+            .find_project_external_info(project_root, symbol_name)
+            .await
+        {
             return Some(source_info);
         }
 
@@ -470,11 +472,18 @@ impl DependencyCache {
             // Get all external class names for this project to understand which JARs to check
             for external_class_name in project_metadata.external_dep_names.iter() {
                 // Try to find a JAR that contains this class - this tells us which JARs this project uses
-                if let Some((jar_path, dependency)) = self.find_jar_for_class(project_root, external_class_name.key()).await {
+                if let Some((jar_path, dependency)) = self
+                    .find_jar_for_class(project_root, external_class_name.key())
+                    .await
+                {
                     // Now search this JAR for our target symbol using lazy content parsing
-                    if let Some(internal_path) = find_symbol_in_jar_content(&jar_path, symbol_name) {
-                        debug!("Found {} via lazy content parsing in JAR: {:?}", symbol_name, jar_path);
-                        
+                    if let Some(internal_path) = find_symbol_in_jar_content(&jar_path, symbol_name)
+                    {
+                        debug!(
+                            "Found {} via lazy content parsing in JAR: {:?}",
+                            symbol_name, jar_path
+                        );
+
                         // Create a new SourceFileInfo for this discovered symbol
                         let source_info = SourceFileInfo::new_for_decompilation(
                             jar_path,
@@ -485,7 +494,7 @@ impl DependencyCache {
                         // Cache it for future lookups
                         let key = (project_root.clone(), symbol_name.to_string());
                         self.project_external_infos.insert(key, source_info.clone());
-                        
+
                         return Some(source_info);
                     }
                 }
@@ -498,13 +507,16 @@ impl DependencyCache {
     /// Helper function to find which JAR contains a specific class
     #[tracing::instrument(skip_all)]
     async fn find_jar_for_class(
-        &self, 
-        project_root: &PathBuf, 
-        class_name: &str
+        &self,
+        project_root: &PathBuf,
+        class_name: &str,
     ) -> Option<(PathBuf, Option<ExternalDependency>)> {
         let key = (project_root.clone(), class_name.to_string());
         if let Some(source_info) = self.project_external_infos.get(&key) {
-            return Some((source_info.source_path.clone(), source_info.dependency.clone()));
+            return Some((
+                source_info.source_path.clone(),
+                source_info.dependency.clone(),
+            ));
         }
         None
     }

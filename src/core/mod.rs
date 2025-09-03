@@ -7,6 +7,7 @@ pub mod document_manager;
 pub mod jar_utils;
 pub mod logging_service;
 pub mod persistence;
+pub mod progress;
 pub mod queries;
 pub mod state_manager;
 pub mod symbols;

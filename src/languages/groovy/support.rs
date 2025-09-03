@@ -421,6 +421,7 @@ impl LanguageSupport for GroovySupport {
         file_uri: &str,
         usage_node: &Node,
         dependency_cache: Arc<DependencyCache>,
+        recursion_depth: usize,
     ) -> Option<Location> {
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(find_in_workspace(
@@ -429,6 +430,7 @@ impl LanguageSupport for GroovySupport {
                 usage_node,
                 dependency_cache,
                 self,
+                recursion_depth,
             ))
         })
     }

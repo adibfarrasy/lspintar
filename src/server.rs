@@ -18,6 +18,7 @@ use crate::core::constants::{BUILD_ON_INIT, GRADLE_CACHE_DIR, PROJECT_ROOT_MARKE
 use crate::core::dependency_cache::symbol_index::find_workspace_root;
 use crate::core::dependency_cache::DependencyCache;
 use crate::core::logging_service;
+use crate::core::progress::DelayedInfoReporter;
 use crate::core::state_manager::{self, get_global, set_global};
 use crate::core::symbols::SymbolType;
 use crate::core::utils::{
@@ -274,7 +275,6 @@ impl LanguageServer for LspServer {
         &self,
         params: GotoDefinitionParams,
     ) -> Result<Option<GotoDefinitionResponse>> {
-        let start_time = Instant::now();
         let uri = params
             .text_document_position_params
             .text_document
@@ -283,18 +283,9 @@ impl LanguageServer for LspServer {
 
         let position = params.text_document_position_params.position;
 
-        let result = self.find_definition(uri.clone(), position).await;
-
-        let elapsed = start_time.elapsed();
-        if elapsed > Duration::from_secs(1) {
-            tracing::info!(
-                "goto_definition took {:.2}s for {} at {}:{}",
-                elapsed.as_secs_f64(),
-                uri,
-                position.line,
-                position.character
-            );
-        }
+        let result = self.with_progress(|| async {
+            self.find_definition(uri.clone(), position).await
+        }).await;
 
         match result {
             Ok(location) => Ok(Some(GotoDefinitionResponse::Scalar(location))),
@@ -306,7 +297,6 @@ impl LanguageServer for LspServer {
         &self,
         params: GotoImplementationParams,
     ) -> Result<Option<GotoImplementationResponse>> {
-        let start_time = Instant::now();
         let uri = params
             .text_document_position_params
             .text_document
@@ -338,22 +328,13 @@ impl LanguageServer for LspServer {
 
         let cache = self.dependency_cache.clone();
 
-        let result = tokio::task::spawn_blocking(move || {
-            language_support.find_implementation(&tree, &content, position, cache)
-        })
-        .await
-        .map_err(|_| tower_lsp::jsonrpc::Error::internal_error())?;
-
-        let elapsed = start_time.elapsed();
-        if elapsed > Duration::from_secs(1) {
-            tracing::info!(
-                "goto_implementation took {:.2}s for {} at {}:{}",
-                elapsed.as_secs_f64(),
-                uri,
-                position.line,
-                position.character
-            );
-        }
+        let result = self.with_progress(|| async {
+            tokio::task::spawn_blocking(move || {
+                language_support.find_implementation(&tree, &content, position, cache)
+            })
+            .await
+            .map_err(|_| tower_lsp::jsonrpc::Error::internal_error())
+        }).await?;
 
         match result {
             Ok(locations) if !locations.is_empty() => {
@@ -367,7 +348,6 @@ impl LanguageServer for LspServer {
     }
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
-        let start_time = Instant::now();
         let uri = params
             .text_document_position_params
             .text_document
@@ -375,63 +355,46 @@ impl LanguageServer for LspServer {
             .to_string();
         let position = params.text_document_position_params.position;
 
-        if let Ok(location) = self.find_definition(uri.clone(), position).await {
-            let other_uri = location.uri.to_string();
-            let (content, tree) = self.get_content_and_tree(&other_uri).await?;
+        self.with_progress(|| async {
+            async {
+                if let Ok(location) = self.find_definition(uri.clone(), position).await {
+                    let other_uri = location.uri.to_string();
+                    let (content, tree) = self.get_content_and_tree(&other_uri).await?;
 
-            let language_support = self
-                .language_registry
-                .detect_language(&other_uri)
-                .ok_or(tower_lsp::jsonrpc::Error::internal_error())?;
+                    let language_support = self
+                        .language_registry
+                        .detect_language(&other_uri)
+                        .ok_or(tower_lsp::jsonrpc::Error::internal_error())?;
 
-            if let Some(hover) = language_support.provide_hover(&tree, &content, location) {
-                let elapsed = start_time.elapsed();
-                if elapsed > Duration::from_secs(1) {
-                    tracing::info!(
-                        "hover took {:.2}s for {} at {}:{}",
-                        elapsed.as_secs_f64(),
-                        uri,
-                        position.line,
-                        position.character
-                    );
+                    if let Some(hover) = language_support.provide_hover(&tree, &content, location) {
+                        return Ok(Some(hover));
+                    }
                 }
-                return Ok(Some(hover));
-            }
-        }
 
-        let (content, tree) = self.get_content_and_tree(&uri).await?;
-        let language_support = self
-            .language_registry
-            .detect_language(&uri)
-            .ok_or(tower_lsp::jsonrpc::Error::internal_error())?;
+                let (content, tree) = self.get_content_and_tree(&uri).await?;
+                let language_support = self
+                    .language_registry
+                    .detect_language(&uri)
+                    .ok_or(tower_lsp::jsonrpc::Error::internal_error())?;
 
-        let local_location = Location {
-            uri: tower_lsp::lsp_types::Url::parse(&uri).map_err(|_| {
-                tower_lsp::jsonrpc::Error::invalid_params("Invalid URI".to_string())
-            })?,
-            range: tower_lsp::lsp_types::Range {
-                start: position,
-                end: position,
-            },
-        };
+                let local_location = Location {
+                    uri: tower_lsp::lsp_types::Url::parse(&uri).map_err(|_| {
+                        tower_lsp::jsonrpc::Error::invalid_params("Invalid URI".to_string())
+                    })?,
+                    range: tower_lsp::lsp_types::Range {
+                        start: position,
+                        end: position,
+                    },
+                };
 
-        let result = language_support
-            .provide_hover(&tree, &content, local_location)
-            .ok_or(tower_lsp::jsonrpc::Error::invalid_request())
-            .map(Some);
+                let result = language_support
+                    .provide_hover(&tree, &content, local_location)
+                    .ok_or(tower_lsp::jsonrpc::Error::invalid_request())
+                    .map(Some);
 
-        let elapsed = start_time.elapsed();
-        if elapsed > Duration::from_secs(1) {
-            tracing::info!(
-                "hover took {:.2}s for {} at {}:{}",
-                elapsed.as_secs_f64(),
-                uri,
-                position.line,
-                position.character
-            );
-        }
-
-        result
+                result
+            }.await
+        }).await
     }
 
     async fn completion(&self, _params: CompletionParams) -> Result<Option<CompletionResponse>> {
@@ -466,6 +429,30 @@ impl LspServer {
             position_symbol_cache: Arc::new(DashMap::new()),
             definition_cache: Arc::new(DashMap::new()),
         }
+    }
+
+    /// Wrapper for long-running operations with automatic progress reporting
+    async fn with_progress<F, Fut, T>(&self, operation: F) -> T
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = T>,
+    {
+        let info_reporter = DelayedInfoReporter::new(Arc::new(self.client.clone()));
+        let delay_threshold = info_reporter.delay_threshold();
+        let message = "Still processing...".to_string();
+        
+        // Spawn task to send info message after the delay threshold
+        let reporter_clone = Arc::new(info_reporter);
+        let reporter_task = reporter_clone.clone();
+        let msg_clone = message.clone();
+        
+        tokio::spawn(async move {
+            tokio::time::sleep(delay_threshold).await;
+            reporter_task.maybe_send_info(&msg_clone).await;
+        });
+        
+        let result = operation().await;
+        result
     }
 
     async fn find_definition(&self, uri: String, position: Position) -> Result<Location> {

@@ -509,10 +509,11 @@ impl LanguageSupport for JavaSupport {
         file_uri: &str,
         usage_node: &Node,
         dependency_cache: Arc<DependencyCache>,
+        recursion_depth: usize,
     ) -> Option<Location> {
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(workspace::find_in_workspace(
-                source, file_uri, usage_node, dependency_cache, self,
+                source, file_uri, usage_node, dependency_cache, self, recursion_depth,
             ))
         })
     }

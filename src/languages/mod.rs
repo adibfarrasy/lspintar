@@ -162,6 +162,7 @@ mod tests {
             _file_uri: &str,
             _usage_node: &tree_sitter::Node,
             _dependency_cache: std::sync::Arc<crate::core::dependency_cache::DependencyCache>,
+            _recursion_depth: usize,
         ) -> Option<tower_lsp::lsp_types::Location> {
             None
         }
