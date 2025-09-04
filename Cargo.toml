@@ -3,6 +3,10 @@ name = "lspintar"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "error-checker"
+path = "src/bin/error_checker.rs"
+
 [dependencies]
 anyhow = "1.0.98"
 dashmap = "6.1.0"

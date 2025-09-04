@@ -18,20 +18,15 @@ note:
     @echo "# NOTE" >> NOTES.md
     @if ! grep -rn -H --exclude-dir=target --exclude-dir=.git "// NOTE" src | sed 's/:[[:space:]]*\/\/[[:space:]]*NOTE:[[:space:]]*/: /' >> NOTES.md 2>/dev/null; then echo "-" >> NOTES.md; fi
 
+# (c)lean (u)pdate (b)uild
 cub:
     @cargo clean && cargo update && cargo build
-
-# Fast build with essential tests only
-b:
-    @echo "cargo build"
-    @cargo build
     @just test
     @just note
 
-# Full build with all tests (slower)
-b-full:
-    @echo "RUSTFLAGS=-A warnings cargo build"
-    @RUSTFLAGS="-A warnings" cargo build
+# Fast build with essential tests only
+b:
+    @cargo build
     @just test
     @just note
 
@@ -40,9 +35,7 @@ test:
     @echo "Running all tests..."
     @cargo test
 
-# Quick test run (essential tests only) - much faster
-test-quick:
-    @echo "Running quick essential tests..."
-    @cargo test --quiet -- --test-threads=1 test_dependency_cache_creation
-    @cargo test --quiet -- --test-threads=1 test_symbol_type_is_declaration
-    @cargo test --quiet -- --test-threads=1 test_language_detection
+# Check for syntax errors in project files
+# (t)ree (s)itter (e)rror
+tse project_dir output_file="error_list.txt":
+    @cargo run --bin error-checker "{{project_dir}}" "{{output_file}}"

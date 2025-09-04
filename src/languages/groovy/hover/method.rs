@@ -8,7 +8,7 @@ pub fn extract_method_signature(tree: &Tree, node: &Node, source: &str) -> Optio
     (package_declaration
       (scoped_identifier) @package_name)
     (
-      (block_comment)? @groovydoc
+      (groovydoc_comment)? @groovydoc
       .
       (method_declaration
         (modifiers 

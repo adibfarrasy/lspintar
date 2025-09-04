@@ -8,7 +8,7 @@ pub fn extract_field_signature(tree: &Tree, node: &Node, source: &str) -> Option
     (package_declaration
       (scoped_identifier) @package_name)
     (
-      (block_comment)? @groovydoc
+      (groovydoc_comment)? @groovydoc
       (field_declaration
         (modifiers 
           [
