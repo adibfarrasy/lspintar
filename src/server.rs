@@ -441,24 +441,33 @@ impl LspServer {
         let delay_threshold = info_reporter.delay_threshold();
         let message = "Still processing...".to_string();
         
+        // Create a flag to track if this request has responded
+        let responded = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        
         // Spawn task to send info message after the delay threshold
-        // Only show the message if indexing is complete
+        // Only show the message if indexing is complete but request hasn't responded
         let reporter_clone = Arc::new(info_reporter);
         let reporter_task = reporter_clone.clone();
         let msg_clone = message.clone();
+        let responded_clone = Arc::clone(&responded);
         
         tokio::spawn(async move {
             tokio::time::sleep(delay_threshold).await;
-            // Only show progress message if indexing is complete
+            // Only show progress message if indexing is complete but request hasn't responded yet
             if get_global(IS_INDEXING_COMPLETED)
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false) 
+                && !responded_clone.load(std::sync::atomic::Ordering::Relaxed)
             {
                 reporter_task.maybe_send_info(&msg_clone).await;
             }
         });
         
         let result = operation().await;
+        
+        // Mark this request as responded
+        responded.store(true, std::sync::atomic::Ordering::Relaxed);
+        
         result
     }
 
