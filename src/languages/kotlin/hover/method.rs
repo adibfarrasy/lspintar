@@ -2,6 +2,52 @@ use tree_sitter::{Node, Query, QueryCursor, StreamingIterator, Tree};
 
 use crate::languages::common::hover::{parse_parameters, format_parameters, HoverSignature};
 
+/// Find the multiline comment that immediately precedes a function declaration
+fn find_preceding_kdoc(tree: &Tree, function_node: &Node, source: &str) -> Option<String> {
+    let function_start_row = function_node.start_position().row;
+    
+    // Walk through all nodes to find multiline comments
+    let mut cursor = tree.walk();
+    let mut best_comment: Option<Node> = None;
+    
+    fn find_comments_recursive<'a>(cursor: &mut tree_sitter::TreeCursor<'a>, function_start_row: usize, best_comment: &mut Option<Node<'a>>) {
+        loop {
+            let node = cursor.node();
+            
+            if node.kind() == "multiline_comment" {
+                let comment_end_row = node.end_position().row;
+                // Only consider comments that end before the function starts
+                if comment_end_row < function_start_row {
+                    // Check if this is closer to the function than the current best
+                    match best_comment {
+                        None => *best_comment = Some(node),
+                        Some(current_best) => {
+                            if comment_end_row > current_best.end_position().row {
+                                *best_comment = Some(node);
+                            }
+                        }
+                    }
+                }
+            }
+            
+            if cursor.goto_first_child() {
+                find_comments_recursive(cursor, function_start_row, best_comment);
+                cursor.goto_parent();
+            }
+            
+            if !cursor.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+    
+    find_comments_recursive(&mut cursor, function_start_row, &mut best_comment);
+    
+    best_comment.and_then(|comment| {
+        comment.utf8_text(source.as_bytes()).ok().map(|s| s.to_string())
+    })
+}
+
 #[tracing::instrument(skip_all)]
 pub fn extract_method_signature(tree: &Tree, node: &Node, source: &str) -> Option<String> {
     // Get the method name from the node
@@ -11,24 +57,20 @@ pub fn extract_method_signature(tree: &Tree, node: &Node, source: &str) -> Optio
     let query_text = r#"
     (package_header (identifier) @package_name)
     
-    (
-        (multiline_comment)? @kdoc
-        .
-        (function_declaration
-            (modifiers 
-                (annotation)* @annotation
-                (visibility_modifier)* @modifier
-                (function_modifier)* @modifier
-                (member_modifier)* @modifier
-                (parameter_modifier)* @modifier
-                (platform_modifier)* @modifier
-            )?
-            (simple_identifier) @method_name
-            (type_parameters)? @type_params
-            (function_value_parameters) @parameters
-            (user_type)? @return_type
-        )
-    )
+    (function_declaration
+        (modifiers 
+            (annotation)* @annotation
+            (visibility_modifier)* @modifier
+            (function_modifier)* @modifier
+            (member_modifier)* @modifier
+            (parameter_modifier)* @modifier
+            (platform_modifier)* @modifier
+        )?
+        (simple_identifier) @method_name
+        (type_parameters)? @type_params
+        (function_value_parameters) @parameters
+        (user_type)? @return_type
+    ) @function_node
     "#;
 
     let query = Query::new(&tree.language(), query_text).ok()?;
@@ -59,7 +101,7 @@ pub fn extract_method_signature(tree: &Tree, node: &Node, source: &str) -> Optio
         let mut type_params = String::new();
         let mut parameters = String::new();
         let mut return_type = String::new();
-        let mut kdoc = String::new();
+        let mut function_node: Option<Node> = None;
 
         for capture in query_match.captures.iter() {
             let capture_name = query.capture_names()[capture.index as usize];
@@ -86,16 +128,20 @@ pub fn extract_method_signature(tree: &Tree, node: &Node, source: &str) -> Optio
                 "return_type" => {
                     return_type.push_str(text);
                 }
-                "kdoc" => {
-                    if kdoc.is_empty() {
-                        kdoc.push_str(text);
-                    }
+                "function_node" => {
+                    function_node = Some(capture.node);
                 }
                 _ => {}
             }
         }
 
         if found_method {
+            // Find the preceding KDoc comment for this function
+            let kdoc = if let Some(func_node) = function_node {
+                find_preceding_kdoc(tree, &func_node, source).unwrap_or_default()
+            } else {
+                String::new()
+            };
             // Parse parameters and format them according to ≤3 vs >3 rule
             let param_list = parse_parameters(&parameters);
             let formatted_params = format_parameters(&param_list);
@@ -242,13 +288,11 @@ mod tests {
         let source = r#"
 package com.example
 
-class TestClass {
-    /**
-     * A simple test method
-     */
-    fun testMethod(name: String): Unit {
-        println(name)
-    }
+/**
+ * A simple test method
+ */
+fun testMethod(name: String): Unit {
+    println(name)
 }
         "#;
         
@@ -288,13 +332,15 @@ class TestClass {
         
         if let Some(node) = method_identifier {
             let result = extract_method_signature(&tree, &node, source);
-            assert!(result.is_some());
+            assert!(result.is_some(), "Failed to extract method signature");
             let content = result.unwrap();
             assert!(content.contains("package com.example"));
             assert!(content.contains("```kotlin"));
             assert!(content.contains("fun testMethod(name: String): Unit"));
             assert!(content.contains("A simple test method"));
             assert!(content.contains("---"));
+        } else {
+            panic!("Could not find method identifier");
         }
     }
 

@@ -206,6 +206,7 @@ pub trait LanguageSupport: Send + Sync + QueryProvider {
 
     /// Find a method - handles both nested and non-nested
     /// e.g., "myMethod" or "Outer.Inner.myMethod"
+    #[allow(dead_code)]
     fn find_method(
         &self,
         source: &str,
@@ -348,6 +349,7 @@ pub trait LanguageSupport: Send + Sync + QueryProvider {
     fn find_type_in_tree(&self, tree: &Tree, source: &str, type_name: &str, file_uri: &str) -> Option<Location>;
 
     /// Language-specific: Find a method within a tree
+    #[allow(dead_code)]
     fn find_method_in_tree(&self, tree: &Tree, source: &str, method_name: &str, file_uri: &str) -> Option<Location>;
 
     /// Language-specific: Find a property/field within a tree

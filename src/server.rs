@@ -14,7 +14,7 @@ use tower_lsp::LanguageServer;
 use tree_sitter::Tree;
 
 use crate::core::build_tools::{detect_build_tool, run_gradle_build, BuildTool};
-use crate::core::constants::{BUILD_ON_INIT, GRADLE_CACHE_DIR, PROJECT_ROOT_MARKER};
+use crate::core::constants::{BUILD_ON_INIT, GRADLE_CACHE_DIR, PROJECT_ROOT_MARKER, IS_INDEXING_COMPLETED};
 use crate::core::dependency_cache::symbol_index::find_workspace_root;
 use crate::core::dependency_cache::DependencyCache;
 use crate::core::logging_service;
@@ -442,13 +442,20 @@ impl LspServer {
         let message = "Still processing...".to_string();
         
         // Spawn task to send info message after the delay threshold
+        // Only show the message if indexing is complete
         let reporter_clone = Arc::new(info_reporter);
         let reporter_task = reporter_clone.clone();
         let msg_clone = message.clone();
         
         tokio::spawn(async move {
             tokio::time::sleep(delay_threshold).await;
-            reporter_task.maybe_send_info(&msg_clone).await;
+            // Only show progress message if indexing is complete
+            if get_global(IS_INDEXING_COMPLETED)
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false) 
+            {
+                reporter_task.maybe_send_info(&msg_clone).await;
+            }
         });
         
         let result = operation().await;
