@@ -52,7 +52,7 @@ pub fn handle(
         }
         SymbolType::MethodCall => {
             // For method calls, try to find the declaration first, then extract signature
-            if let Some(method_decl_node) = find_method_declaration_for_call(tree, &node, source) {
+            if let Some(method_decl_node) = find_function_declaration_for_call(tree, &node, source) {
                 extract_method_signature(tree, &method_decl_node, source)
             } else {
                 // Fallback: provide basic method call info
@@ -76,7 +76,7 @@ pub fn handle(
 
 /// Find method declaration for a method call within the same file
 #[tracing::instrument(skip_all)]
-fn find_method_declaration_for_call<'a>(
+fn find_function_declaration_for_call<'a>(
     tree: &'a Tree,
     node: &Node,
     source: &str,
@@ -84,7 +84,7 @@ fn find_method_declaration_for_call<'a>(
     let method_name = node.utf8_text(source.as_bytes()).ok()?;
 
     let query_text = r#"
-        (method_declaration
+        (function_declaration
           name: (identifier) @method_name
         )
     "#;

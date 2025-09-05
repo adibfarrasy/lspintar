@@ -341,9 +341,9 @@ pub fn set_start_position_for_language(
     let other_source = read_to_string(uri_to_path(file_uri)?).ok()?;
 
 
-    // Use broader query that captures identifiers, type_identifiers, and simple_identifiers (for enum constants)
+    // Use broader query that captures identifiers, type_identifiers, and identifiers (for enum constants)
     let query_text = match language {
-        "kotlin" => r#"(identifier) @name (type_identifier) @name (simple_identifier) @name"#,
+        "kotlin" => r#"(identifier) @name (type_identifier) @name (identifier) @name"#,
         _ => r#"(identifier) @name"#,
     };
 

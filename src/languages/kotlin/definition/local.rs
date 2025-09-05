@@ -148,7 +148,7 @@ fn find_closest_declaration<'a>(
 /// Find variables as field declarations
 #[tracing::instrument(skip_all)]
 fn find_as_field<'a>(tree: &'a Tree, source: &str, symbol_name: &str) -> Option<Node<'a>> {
-    let query_text = r#"(property_declaration (variable_declaration (simple_identifier) @name))"#;
+    let query_text = r#"(property_declaration (variable_declaration (identifier) @name))"#;
     let candidates = find_definition_candidates(tree, source, symbol_name, query_text)?;
     candidates.into_iter().next()
 }
@@ -165,7 +165,7 @@ fn find_best_method_match<'a>(
     let call_signature = extract_call_signature_from_context(usage_node, source);
     
     // Find method candidates
-    let query_text = r#"(function_declaration (simple_identifier) @name)"#;
+    let query_text = r#"(function_declaration (identifier) @name)"#;
     let candidates = find_definition_candidates(tree, source, symbol_name, query_text)?;
     
     if let Some(call_sig) = call_signature {
@@ -206,11 +206,11 @@ fn find_function_parameters<'a>(
     let mut parameters = Vec::new();
     
     for child in function_node.children(&mut function_node.walk()) {
-        if child.kind() == "function_value_parameters" {
+        if child.kind() == "parameters" {
             for param_child in child.children(&mut child.walk()) {
                 if param_child.kind() == "parameter" {
                     for param_part in param_child.children(&mut param_child.walk()) {
-                        if param_part.kind() == "simple_identifier" {
+                        if param_part.kind() == "identifier" {
                             if let Ok(param_name) = param_part.utf8_text(source.as_bytes()) {
                                 if param_name == symbol_name {
                                     parameters.push(param_child);
@@ -244,7 +244,7 @@ fn find_lambda_parameters<'a>(
                     for param_child in child.children(&mut child.walk()) {
                         if param_child.kind() == "lambda_parameter" {
                             for param_part in param_child.children(&mut param_child.walk()) {
-                                if param_part.kind() == "simple_identifier" {
+                                if param_part.kind() == "identifier" {
                                     if let Ok(param_name) = param_part.utf8_text(source.as_bytes()) {
                                         if param_name == symbol_name {
                                             parameters.push(param_child);
@@ -308,7 +308,7 @@ fn find_variables_in_block<'a>(
             "catch_block" => {
                 // Check catch parameter
                 for catch_child in child.children(&mut child.walk()) {
-                    if catch_child.kind() == "simple_identifier" {
+                    if catch_child.kind() == "identifier" {
                         if let Ok(param_name) = catch_child.utf8_text(source.as_bytes()) {
                             if param_name == symbol_name {
                                 candidates.push(child); // Return the catch_block itself
@@ -331,7 +331,7 @@ fn get_declared_name(node: &Node, source: &str) -> Option<String> {
     match node.kind() {
         "function_declaration" => {
             for child in node.children(&mut node.walk()) {
-                if child.kind() == "simple_identifier" {
+                if child.kind() == "identifier" {
                     return child.utf8_text(source.as_bytes()).ok().map(String::from);
                 }
             }
@@ -345,13 +345,13 @@ fn get_declared_name(node: &Node, source: &str) -> Option<String> {
             }
         }
         "property_declaration" | "variable_declaration" => {
-            // Look for simple_identifier directly or in variable_declaration child
+            // Look for identifier directly or in variable_declaration child
             for child in node.children(&mut node.walk()) {
-                if child.kind() == "simple_identifier" {
+                if child.kind() == "identifier" {
                     return child.utf8_text(source.as_bytes()).ok().map(String::from);
                 } else if child.kind() == "variable_declaration" {
                     for grandchild in child.children(&mut child.walk()) {
-                        if grandchild.kind() == "simple_identifier" {
+                        if grandchild.kind() == "identifier" {
                             return grandchild.utf8_text(source.as_bytes()).ok().map(String::from);
                         }
                     }
@@ -360,15 +360,15 @@ fn get_declared_name(node: &Node, source: &str) -> Option<String> {
         }
         "parameter" | "class_parameter" | "lambda_parameter" => {
             for child in node.children(&mut node.walk()) {
-                if child.kind() == "simple_identifier" {
+                if child.kind() == "identifier" {
                     return child.utf8_text(source.as_bytes()).ok().map(String::from);
                 }
             }
         }
         "catch_block" => {
-            // Catch parameter is directly a simple_identifier
+            // Catch parameter is directly a identifier
             for child in node.children(&mut node.walk()) {
-                if child.kind() == "simple_identifier" {
+                if child.kind() == "identifier" {
                     return child.utf8_text(source.as_bytes()).ok().map(String::from);
                 }
             }
@@ -385,7 +385,7 @@ fn get_declared_name(node: &Node, source: &str) -> Option<String> {
             for child in node.children(&mut node.walk()) {
                 if child.kind() == "variable_declaration" {
                     for grandchild in child.children(&mut child.walk()) {
-                        if grandchild.kind() == "simple_identifier" {
+                        if grandchild.kind() == "identifier" {
                             return grandchild.utf8_text(source.as_bytes()).ok().map(String::from);
                         }
                     }
@@ -436,7 +436,7 @@ fn find_matching_constructor_params<'a>(
         if child.kind() == "class_parameter" {
             // Extract the parameter name
             for param_child in child.children(&mut child.walk()) {
-                if param_child.kind() == "simple_identifier" {
+                if param_child.kind() == "identifier" {
                     if let Ok(param_name) = param_child.utf8_text(source.as_bytes()) {
                         if param_name == symbol_name {
                             params.push(param_child);

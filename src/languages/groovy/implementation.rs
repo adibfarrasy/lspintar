@@ -127,14 +127,14 @@ fn get_parent_name(tree: &Tree, source: &str, symbol_name: &str) -> Option<Strin
         (interface_declaration
           name: (identifier) @interface_name
           body: (interface_body
-            (method_declaration
+            (function_declaration
               name: (identifier) @method_name)))
               
         ; Class method  
         (class_declaration
           name: (identifier) @class_name
           body: (class_body
-            (method_declaration
+            (function_declaration
               name: (identifier) @method_name)))
     "#;
     
@@ -228,7 +228,7 @@ fn get_implementation_with_method_query() -> &'static Option<Query> {
                 interfaces: (super_interfaces 
                     (type_list (type_identifier) @interface_name))
                 body: (class_body
-                    (method_declaration (identifier) @method_name))
+                    (function_declaration (identifier) @method_name))
                 )"#;
 
         Query::new(&language, text).ok()
@@ -402,7 +402,7 @@ async fn find_method_in_class(
     
     // Use a query to find method declarations with the specific name
     let query_text = r#"
-        (method_declaration
+        (function_declaration
             name: (identifier) @method_name)
     "#;
     

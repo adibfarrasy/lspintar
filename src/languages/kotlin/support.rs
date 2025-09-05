@@ -91,7 +91,7 @@ impl KotlinSupport {
 impl QueryProvider for KotlinSupport {
 
 #[tracing::instrument(skip_all)]
-    fn method_declaration_queries(&self) -> &[&'static str] {
+    fn function_declaration_queries(&self) -> &[&'static str] {
         &[
             r#"(function_declaration) @function"#,
             r#"(primary_constructor) @constructor"#,
@@ -110,11 +110,11 @@ impl QueryProvider for KotlinSupport {
         ; Property declarations (val/var)
         (property_declaration
           (variable_declaration
-            (simple_identifier) @var_decl))
+            (identifier) @var_decl))
             
         ; Function declarations
         (function_declaration
-          (simple_identifier) @method_decl)
+          (identifier) @method_decl)
           
         ; Class declarations (including enum classes)
         (class_declaration
@@ -130,33 +130,26 @@ impl QueryProvider for KotlinSupport {
 
         ; Parameters
         (parameter
-          (simple_identifier) @param_decl)
+          (identifier) @param_decl)
         (class_parameter
-          (simple_identifier) @param_decl)
+          (identifier) @param_decl)
 
         ; Function parameter types
         (function_declaration
-          (function_value_parameters
+          (parameters
             (parameter
               (user_type (type_identifier) @type_name))))
 
         (function_declaration
-          (function_value_parameters
+          (parameters
             (parameter
               (user_type (type_identifier) @type_name))))
 
         ; Interface method parameter types  
         (interface_declaration
-          (class_body
+          (interface_body
             (function_declaration
-              (function_value_parameters
-                (parameter
-                  (user_type (type_identifier) @type_name))))))
-
-        (interface_declaration
-          (class_body  
-            (function_declaration
-              (function_value_parameters
+              (parameters
                 (parameter
                   (user_type (type_identifier) @type_name))))))
 
@@ -166,7 +159,7 @@ impl QueryProvider for KotlinSupport {
 
         ; Interface method return types
         (interface_declaration
-          (class_body
+          (interface_body
             (function_declaration
               (user_type (type_identifier) @type_name))))
 
@@ -184,22 +177,22 @@ impl QueryProvider for KotlinSupport {
         ; USAGES
         ; Call expressions
         (call_expression
-          (simple_identifier) @method_call)
+          (identifier) @method_call)
         (call_expression
           (navigation_expression
             (navigation_suffix
-              (simple_identifier) @method_call)))
+              (identifier) @method_call)))
               
         ; Navigation expressions (property access)
         (navigation_expression
           (navigation_suffix
-            (simple_identifier) @field_usage))
+            (identifier) @field_usage))
             
         ; Type identifiers
         (type_identifier) @type_name
         
         ; Simple identifiers (variables)
-        (simple_identifier) @variable_usage
+        (identifier) @variable_usage
         "#
     }
 
@@ -486,10 +479,10 @@ impl LanguageSupport for KotlinSupport {
         if let Some(nav_node) = nav_expr {
             if let (Some(object_node), Some(nav_suffix)) = (nav_node.child(0), nav_node.child(1)) {
                 if nav_suffix.kind() == "navigation_suffix" {
-                    // Find the simple_identifier child (not the '.' token)
+                    // Find the identifier child (not the '.' token)
                     let method_node = (0..nav_suffix.child_count())
                         .filter_map(|i| nav_suffix.child(i))
-                        .find(|child| child.kind() == "simple_identifier");
+                        .find(|child| child.kind() == "identifier");
                     
                     if let Some(method_node) = method_node {
                         let variable_name = object_node.utf8_text(source.as_bytes()).ok()?.to_string();
@@ -533,10 +526,10 @@ impl LanguageSupport for KotlinSupport {
                             // Extract class and method from navigation_expression
                             if let (Some(object_node), Some(nav_suffix)) = (nav_expr.child(0), nav_expr.child(1)) {
                                 if nav_suffix.kind() == "navigation_suffix" {
-                                    // Find the simple_identifier in nav_suffix
+                                    // Find the identifier in nav_suffix
                                     let method_node = (0..nav_suffix.child_count())
                                         .filter_map(|i| nav_suffix.child(i))
-                                        .find(|child| child.kind() == "simple_identifier");
+                                        .find(|child| child.kind() == "identifier");
                                     
                                     if let Some(method_node) = method_node {
                                         let class_name = object_node.utf8_text(source.as_bytes()).ok()?.to_string();
@@ -579,10 +572,10 @@ impl LanguageSupport for KotlinSupport {
                 // Extract object and field from navigation_expression
                 if let (Some(object_node), Some(nav_suffix)) = (node.child(0), node.child(1)) {
                     if nav_suffix.kind() == "navigation_suffix" {
-                        // Find the simple_identifier in nav_suffix
+                        // Find the identifier in nav_suffix
                         let field_node = (0..nav_suffix.child_count())
                             .filter_map(|i| nav_suffix.child(i))
-                            .find(|child| child.kind() == "simple_identifier");
+                            .find(|child| child.kind() == "identifier");
                         
                         if let Some(field_node) = field_node {
                             let variable_name = object_node.utf8_text(source.as_bytes()).ok()?.to_string();
@@ -605,14 +598,14 @@ impl LanguageSupport for KotlinSupport {
             }
             else if node.kind() == "directly_assignable_expression" {
                 // For assignments like sms.body = "test", the structure is:
-                // directly_assignable_expression -> simple_identifier (sms) + navigation_suffix -> simple_identifier (body)
+                // directly_assignable_expression -> identifier (sms) + navigation_suffix -> identifier (body)
                 if node.child_count() >= 2 {
                     if let (Some(object_node), Some(nav_suffix)) = (node.child(0), node.child(1)) {
-                        if object_node.kind() == "simple_identifier" && nav_suffix.kind() == "navigation_suffix" {
-                            // Find the simple_identifier in nav_suffix
+                        if object_node.kind() == "identifier" && nav_suffix.kind() == "navigation_suffix" {
+                            // Find the identifier in nav_suffix
                             let field_node = (0..nav_suffix.child_count())
                                 .filter_map(|i| nav_suffix.child(i))
-                                .find(|child| child.kind() == "simple_identifier");
+                                .find(|child| child.kind() == "identifier");
                             
                             if let Some(field_node) = field_node {
                                 let variable_name = object_node.utf8_text(source.as_bytes()).ok()?.to_string();
@@ -653,7 +646,7 @@ impl LanguageSupport for KotlinSupport {
         // Search for regular function parameters first
         let function_param_query = r#"
             (parameter
-              (simple_identifier) @param_name
+              (identifier) @param_name
               (user_type (type_identifier) @param_type))
         "#;
         
@@ -661,7 +654,7 @@ impl LanguageSupport for KotlinSupport {
         let constructor_param_query = r#"
             (primary_constructor
               (class_parameter
-                (simple_identifier) @param_name
+                (identifier) @param_name
                 (user_type (type_identifier) @param_type)))
         "#;
         
@@ -812,7 +805,7 @@ impl LanguageSupport for KotlinSupport {
         use tree_sitter::{QueryCursor, StreamingIterator};
         
         let method_query_text = r#"
-            (simple_identifier) @method_name
+            (identifier) @method_name
         "#;
         let method_query = get_or_create_query(method_query_text).ok()?;
 
@@ -837,8 +830,8 @@ impl LanguageSupport for KotlinSupport {
         use tree_sitter::{QueryCursor, StreamingIterator};
 
         let property_query_text = r#"
-            (property_declaration (variable_declaration (simple_identifier) @property_name))
-            (class_parameter (simple_identifier) @property_name)
+            (property_declaration (variable_declaration (identifier) @property_name))
+            (class_parameter (identifier) @property_name)
         "#;
         let property_query = get_or_create_query(property_query_text).ok()?;
 
@@ -868,9 +861,9 @@ impl KotlinSupport {
         let constructor_query = r#"
             (property_declaration
               (variable_declaration
-                (simple_identifier) @var_name)
+                (identifier) @var_name)
               (call_expression
-                (simple_identifier) @constructor_type))
+                (identifier) @constructor_type))
         "#;
         
         if let Ok(query) = Query::new(&tree_sitter_kotlin::language(), constructor_query) {
@@ -901,7 +894,7 @@ impl KotlinSupport {
         // Fallback to explicit type declarations (class parameters)
         let query_text = r#"
             (class_parameter
-              (simple_identifier) @param_name
+              (identifier) @param_name
               (user_type (type_identifier) @param_type))
         "#;
         

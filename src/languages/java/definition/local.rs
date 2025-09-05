@@ -122,7 +122,7 @@ fn find_variable_declarations_in_scope<'a>(
 
     // 1. Check method parameters first (highest priority)
     if let Some(method) = find_containing_method(usage_node) {
-        let param_query = r#"(formal_parameter (identifier) @name)"#;
+        let param_query = r#"(parameter (identifier) @name)"#;
         if let Ok(query) = get_or_create_query(param_query) {
             let mut cursor = QueryCursor::new();
             cursor
@@ -144,7 +144,7 @@ fn find_variable_declarations_in_scope<'a>(
     while let Some(node) = current_node {
         if matches!(
             node.kind(),
-            "block" | "method_declaration" | "constructor_declaration"
+            "block" | "function_declaration" | "constructor_declaration"
         ) {
             find_local_variables_in_block(&node, source, symbol_name, usage_node, &mut candidates);
         }
@@ -164,7 +164,7 @@ fn find_local_variables_in_block<'a>(
     usage_node: &Node<'a>,
     candidates: &mut Vec<Node<'a>>,
 ) {
-    let var_query = r#"(local_variable_declaration 
+    let var_query = r#"(variable_declaration 
                         declarator: (variable_declarator 
                             name: (identifier) @name))"#;
 
@@ -280,7 +280,7 @@ fn find_containing_method<'a>(node: &Node<'a>) -> Option<Node<'a>> {
     while let Some(parent) = current {
         if matches!(
             parent.kind(),
-            "method_declaration" | "constructor_declaration"
+            "function_declaration" | "constructor_declaration"
         ) {
             return Some(parent);
         }
@@ -340,7 +340,7 @@ fn find_method_in_same_class_with_signature<'a>(
     let containing_class = find_containing_class(usage_node)?;
 
     // Search for method declarations within this class with signature matching
-    let method_query = r#"(method_declaration name: (identifier) @name)"#;
+    let method_query = r#"(function_declaration name: (identifier) @name)"#;
 
     if let Ok(query) = get_or_create_query(method_query) {
         let mut cursor = QueryCursor::new();
@@ -357,7 +357,7 @@ fn find_method_in_same_class_with_signature<'a>(
                         if capture_text == method_name {
                             // CRITICAL: Verify this is actually a method declaration name, not a method call
                             if let Some(parent) = capture.node.parent() {
-                                if parent.kind() == "method_declaration" {
+                                if parent.kind() == "function_declaration" {
                                     // This is definitely a method declaration
                                     
                                     // Keep first match as fallback
@@ -405,7 +405,7 @@ fn find_method_in_same_class<'a>(
     let containing_class = find_containing_class(usage_node)?;
 
     // Search for method declarations within this class
-    let method_query = r#"(method_declaration name: (identifier) @name)"#;
+    let method_query = r#"(function_declaration name: (identifier) @name)"#;
 
     if let Ok(query) = get_or_create_query(method_query) {
         let mut cursor = QueryCursor::new();
@@ -419,7 +419,7 @@ fn find_method_in_same_class<'a>(
                         if capture_text == method_name {
                             // CRITICAL: Verify this is actually a method declaration name, not a method call
                             if let Some(parent) = capture.node.parent() {
-                                if parent.kind() == "method_declaration" {
+                                if parent.kind() == "function_declaration" {
                                     // This is definitely a method declaration
                                     candidates.push(capture.node);
                                 }
@@ -439,7 +439,7 @@ fn find_method_in_same_class<'a>(
 /// Find a method declaration globally across the entire tree
 #[tracing::instrument(skip_all)]
 fn find_method_globally<'a>(tree: &'a Tree, source: &str, method_name: &str) -> Option<Node<'a>> {
-    let method_query = r#"(method_declaration name: (identifier) @name)"#;
+    let method_query = r#"(function_declaration name: (identifier) @name)"#;
 
     if let Ok(query) = get_or_create_query(method_query) {
         let mut cursor = QueryCursor::new();
@@ -453,7 +453,7 @@ fn find_method_globally<'a>(tree: &'a Tree, source: &str, method_name: &str) -> 
                         if capture_text == method_name {
                             // CRITICAL: Verify this is actually a method declaration name, not a method call
                             if let Some(parent) = capture.node.parent() {
-                                if parent.kind() == "method_declaration" {
+                                if parent.kind() == "function_declaration" {
                                     // This is definitely a method declaration
                                     candidates.push(capture.node);
                                 }

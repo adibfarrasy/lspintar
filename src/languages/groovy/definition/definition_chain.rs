@@ -21,7 +21,7 @@ pub fn find_method_with_signature<'a>(
     call_signature: &CallSignature,
 ) -> Option<Node<'a>> {
     
-    let query_text = r#"(method_declaration name: (identifier) @name)"#;
+    let query_text = r#"(function_declaration name: (identifier) @name)"#;
     
     let query = Query::new(&tree.language(), query_text);
     if query.is_err() {
@@ -51,7 +51,7 @@ pub fn find_method_with_signature<'a>(
                     }
                     
                     // Walk up the tree to find the method declaration
-                    if let Some(method_decl) = find_method_declaration_ancestor(&name_node) {
+                    if let Some(method_decl) = find_function_declaration_ancestor(&name_node) {
                         if let Some(method_sig) = extract_method_signature(&method_decl, source) {
                             let score = calculate_signature_match_score(call_signature, &method_sig);
                             
@@ -110,7 +110,7 @@ fn extract_call_signature_from_invocation(method_invocation: &Node, source: &str
 
 #[tracing::instrument(skip_all)]
 fn extract_method_signature(method_node: &Node, source: &str) -> Option<MethodSignature> {
-    if method_node.kind() != "method_declaration" {
+    if method_node.kind() != "function_declaration" {
         return None;
     }
 
@@ -122,7 +122,7 @@ fn extract_method_signature(method_node: &Node, source: &str) -> Option<MethodSi
     let mut has_spread = false;
 
     for child in parameters.named_children(&mut cursor) {
-        if vec!["formal_parameter", "spread_parameter"].contains(&child.kind()) {
+        if vec!["parameter", "spread_parameter"].contains(&child.kind()) {
             if let Some(param_type) = child.child_by_field_name("type") {
                 param_types.push(
                     param_type
@@ -193,10 +193,10 @@ fn find_parent_method_invocation<'a>(node: &Node<'a>) -> Option<Node<'a>> {
 
 /// Find the method declaration ancestor by walking up the tree
 #[tracing::instrument(skip_all)]
-fn find_method_declaration_ancestor<'a>(node: &Node<'a>) -> Option<Node<'a>> {
+fn find_function_declaration_ancestor<'a>(node: &Node<'a>) -> Option<Node<'a>> {
     let mut current = Some(*node);
     while let Some(curr_node) = current {
-        if curr_node.kind() == "method_declaration" {
+        if curr_node.kind() == "function_declaration" {
             return Some(curr_node);
         }
         current = curr_node.parent();

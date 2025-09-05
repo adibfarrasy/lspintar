@@ -417,7 +417,7 @@ mod tests {
     }
 
     impl QueryProvider for MockLanguageSupport {
-        fn method_declaration_queries(&self) -> &[&'static str] {
+        fn function_declaration_queries(&self) -> &[&'static str] {
             &[]
         }
 

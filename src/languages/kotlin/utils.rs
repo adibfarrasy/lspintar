@@ -51,7 +51,7 @@ fn position_to_byte_offset(source: &str, position: Position) -> Option<usize> {
 
 #[tracing::instrument(skip_all)]
 fn find_identifier_at_byte_offset<'a>(node: Node<'a>, byte_offset: usize) -> Option<Node<'a>> {
-    let is_identifier = matches!(node.kind(), "simple_identifier" | "type_identifier");
+    let is_identifier = matches!(node.kind(), "identifier" | "type_identifier");
     if is_identifier && node.start_byte() <= byte_offset && byte_offset < node.end_byte() {
         return Some(node);
     }

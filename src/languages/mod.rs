@@ -219,7 +219,7 @@ mod tests {
     }
 
     impl crate::core::queries::QueryProvider for MockLanguageSupport {
-        fn method_declaration_queries(&self) -> &[&'static str] {
+        fn function_declaration_queries(&self) -> &[&'static str] {
             &[]
         }
 

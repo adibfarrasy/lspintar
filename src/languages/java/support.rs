@@ -143,9 +143,9 @@ impl JavaSupport {
 }
 
 impl QueryProvider for JavaSupport {
-    fn method_declaration_queries(&self) -> &[&'static str] {
+    fn function_declaration_queries(&self) -> &[&'static str] {
         &[
-            r#"(method_declaration) @method"#,
+            r#"(function_declaration) @method"#,
             r#"(constructor_declaration) @constructor"#,
         ]
     }
@@ -153,13 +153,13 @@ impl QueryProvider for JavaSupport {
     fn symbol_type_detection_query(&self) -> &'static str {
         r#"
         ; DECLARATIONS
-        (local_variable_declaration
+        (variable_declaration
           declarator: (variable_declarator
             name: (identifier) @var_decl))
         (field_declaration
           declarator: (variable_declarator
             name: (identifier) @field_decl))
-        (method_declaration
+        (function_declaration
           name: (identifier) @method_decl)
         (class_declaration
           name: (identifier) @class_decl)
@@ -278,8 +278,8 @@ impl LanguageSupport for JavaSupport {
 
         let query_text = r#"
         ; DECLARATIONS
-        ; Local variable declarations  
-        (local_variable_declaration
+        ; Variable declarations  
+        (variable_declaration
           declarator: (variable_declarator
             name: (identifier) @var_decl))
 
@@ -297,7 +297,7 @@ impl LanguageSupport for JavaSupport {
           name: (identifier) @interface_decl)
 
         ; Method declarations
-        (method_declaration
+        (function_declaration
           name: (identifier) @method_decl)
 
         ; Constructor declarations
@@ -309,7 +309,7 @@ impl LanguageSupport for JavaSupport {
           name: (identifier) @enum_decl)
 
         ; Parameters
-        (formal_parameter
+        (parameter
           name: (identifier) @param_decl)
 
         ; USAGES
@@ -650,7 +650,7 @@ impl LanguageSupport for JavaSupport {
         _usage_node: &Node,
     ) -> Option<String> {
         let query_text = r#"
-            (local_variable_declaration 
+            (variable_declaration 
               type: (type_identifier) @var_type
               declarator: (variable_declarator 
                 name: (identifier) @var_name))
@@ -698,7 +698,7 @@ impl LanguageSupport for JavaSupport {
         _usage_node: &Node,
     ) -> Option<String> {
         let query_text = r#"
-            (formal_parameter
+            (parameter
               type: (type_identifier) @param_type
               name: (identifier) @param_name)
         "#;
@@ -847,7 +847,7 @@ impl LanguageSupport for JavaSupport {
         use tree_sitter::{QueryCursor, StreamingIterator};
         
         let method_query_text = r#"
-            (method_declaration name: (identifier) @method_name)
+            (function_declaration name: (identifier) @method_name)
             (constructor_declaration name: (identifier) @method_name)
         "#;
         let method_query = get_or_create_query(method_query_text).ok()?;
@@ -895,5 +895,92 @@ impl LanguageSupport for JavaSupport {
 impl Default for JavaSupport {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::symbols::SymbolType;
+    use tree_sitter::{Node, Parser};
+
+    fn create_test_tree(source: &str) -> (tree_sitter::Tree, String) {
+        let mut parser = Parser::new();
+        let language: tree_sitter::Language = tree_sitter_java::LANGUAGE.into();
+        parser.set_language(&language).unwrap();
+        let tree = parser.parse(source, None).unwrap();
+        (tree, source.to_string())
+    }
+
+    fn find_identifier_by_name<'a>(node: Node<'a>, source: &str, name: &str) -> Option<Node<'a>> {
+        if node.kind() == "identifier" {
+            if let Ok(text) = node.utf8_text(source.as_bytes()) {
+                if text == name {
+                    return Some(node);
+                }
+            }
+        }
+        
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if let Some(found) = find_identifier_by_name(child, source, name) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn test_variable_declaration_symbol_type_detection() {
+        let java_support = JavaSupport::new();
+        let source = r#"
+public class Test {
+    public void method() {
+        String name = "test";
+        int count = 5;
+        VariableService service = new VariableService();
+    }
+}
+"#;
+        
+        let (tree, source_string) = create_test_tree(source);
+        
+        // Test variable declaration
+        if let Some(name_node) = find_identifier_by_name(tree.root_node(), &source_string, "name") {
+            let result = java_support.determine_symbol_type_from_context(&tree, &name_node, &source_string);
+            assert!(result.is_ok(), "Should successfully detect symbol type for variable 'name'");
+            assert_eq!(result.unwrap(), SymbolType::VariableDeclaration);
+        } else {
+            panic!("Could not find identifier 'name' in test source");
+        }
+
+        // Test another variable declaration  
+        if let Some(count_node) = find_identifier_by_name(tree.root_node(), &source_string, "count") {
+            let result = java_support.determine_symbol_type_from_context(&tree, &count_node, &source_string);
+            assert!(result.is_ok(), "Should successfully detect symbol type for variable 'count'");
+            assert_eq!(result.unwrap(), SymbolType::VariableDeclaration);
+        } else {
+            panic!("Could not find identifier 'count' in test source");
+        }
+        
+        // Test service variable declaration (this was the failing case from the error)
+        if let Some(service_node) = find_identifier_by_name(tree.root_node(), &source_string, "service") {
+            let result = java_support.determine_symbol_type_from_context(&tree, &service_node, &source_string);
+            assert!(result.is_ok(), "Should successfully detect symbol type for variable 'service'");
+            assert_eq!(result.unwrap(), SymbolType::VariableDeclaration);
+        } else {
+            panic!("Could not find identifier 'service' in test source");
+        }
+    }
+
+    #[test]
+    fn test_symbol_type_detection_query_creation() {
+        let java_support = JavaSupport::new();
+        let query_text = java_support.symbol_type_detection_query();
+        
+        // Verify the query can be created successfully
+        let language: tree_sitter::Language = tree_sitter_java::LANGUAGE.into();
+        let result = tree_sitter::Query::new(&language, query_text);
+        assert!(result.is_ok(), "Symbol type detection query should be valid: {:?}", result.err());
     }
 }

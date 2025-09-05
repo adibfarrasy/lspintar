@@ -10,7 +10,7 @@ pub fn extract_method_signature(tree: &Tree, node: &Node, source: &str) -> Optio
     (
       (groovydoc_comment)? @groovydoc
       .
-      (method_declaration
+      (function_declaration
         (modifiers 
           (annotation)* @annotation
           (marker_annotation)* @marker_annotation
@@ -26,7 +26,7 @@ pub fn extract_method_signature(tree: &Tree, node: &Node, source: &str) -> Optio
         )?
         type: (_)? @return_type
         name: (identifier) @method_name
-        parameters: (formal_parameters) @parameters
+        parameters: (parameters) @parameters
         (throws)? @throws_clause
       )
     )

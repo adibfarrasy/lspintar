@@ -180,14 +180,14 @@ fn get_parent_name(tree: &Tree, source: &str, method_name: &str) -> Option<Strin
         (interface_declaration
           (identifier) @interface_name
           (interface_body
-            (method_declaration
+            (function_declaration
               (identifier) @method_name)))
               
         ; Class method  
         (class_declaration
           (identifier) @class_name
           (class_body
-            (method_declaration
+            (function_declaration
               (identifier) @method_name)))
     "#;
     
@@ -244,7 +244,7 @@ async fn find_method_in_class(
     
     // Use a query to find method declarations with the specific name
     let query_text = r#"
-        (method_declaration
+        (function_declaration
             (identifier) @method_name)
     "#;
     
@@ -311,7 +311,7 @@ fn extract_instance_method_context(identifier_node: &tree_sitter::Node, source: 
 fn resolve_variable_type(variable_name: &str, tree: &Tree, source: &str, _context_node: &tree_sitter::Node) -> Option<String> {
     // Look for variable declarations with the given name
     let query_text = r#"
-        (local_variable_declaration
+        (variable_declaration
           type: (type_identifier) @type_name
           declarator: (variable_declarator
             name: (identifier) @var_name))

@@ -39,14 +39,14 @@ pub fn get_declaration_query_for_symbol_type(symbol_type: &SymbolType) -> Option
         ),
         SymbolType::SuperClass => Some(r#"(class_declaration name: (identifier) @name)"#),
         SymbolType::SuperInterface => Some(r#"(interface_declaration name: (identifier) @name)"#),
-        SymbolType::MethodCall => Some(r#"(method_declaration name: (identifier) @name)"#),
+        SymbolType::MethodCall => Some(r#"(function_declaration name: (identifier) @name)"#),
         SymbolType::FieldUsage => Some(
             r#"(field_declaration declarator: (variable_declarator name: (identifier) @name))"#,
         ),
         SymbolType::VariableUsage => Some(
             r#"
-            (local_variable_declaration declarator: (variable_declarator name: (identifier) @name))
-            (formal_parameter name: (identifier) @name)
+            (variable_declaration declarator: (variable_declarator name: (identifier) @name))
+            (parameter name: (identifier) @name)
             (field_declaration declarator: (variable_declarator name: (identifier) @name))
         "#,
         ),
@@ -85,7 +85,7 @@ pub fn find_definition_candidates<'a>(
         // Early termination for single-result queries (local scope)
         if !candidates.is_empty()
             && is_local_scope_query(query_text)
-            && !query_text.contains("local_variable_declaration")
+            && !query_text.contains("variable_declaration")
         {
             break;
         }
@@ -101,7 +101,7 @@ pub fn find_definition_candidates<'a>(
 /// Check if this is a query that should terminate early for local scope
 #[tracing::instrument(skip_all)]
 fn is_local_scope_query(query_text: &str) -> bool {
-    query_text.contains("formal_parameter") || query_text.contains("local_variable_declaration")
+    query_text.contains("parameter") || query_text.contains("variable_declaration")
 }
 
 #[tracing::instrument(skip_all)]
@@ -113,7 +113,7 @@ pub fn search_definition<'a>(tree: &'a Tree, source: &str, symbol_name: &str) ->
         r#"(interface_declaration name: (identifier) @name)"#,
         r#"(enum_declaration name: (identifier) @name)"#,
         r#"(annotation_type_declaration name: (identifier) @name)"#,
-        r#"(method_declaration name: (identifier) @name)"#,
+        r#"(function_declaration name: (identifier) @name)"#,
         r#"(field_declaration declarator: (variable_declarator name: (identifier) @name))"#,
         r#"(constructor_declaration name: (identifier) @name)"#,
     ];
@@ -690,7 +690,7 @@ public class TestClass {
         
         // Both enum constant and method exist, but enum should have priority
         let enum_query = r#"(enum_constant name: (identifier) @name)"#;
-        let method_query = r#"(method_declaration name: (identifier) @name)"#;
+        let method_query = r#"(function_declaration name: (identifier) @name)"#;
         
         let enum_result = find_definition_candidates(&tree, source, "SUCCESS", enum_query);
         let method_result = find_definition_candidates(&tree, source, "SUCCESS", method_query);

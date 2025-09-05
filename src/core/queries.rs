@@ -1,7 +1,7 @@
 /// Trait for providing language-specific tree-sitter queries
 pub trait QueryProvider {
     /// Queries for finding method declarations
-    fn method_declaration_queries(&self) -> &[&'static str];
+    fn function_declaration_queries(&self) -> &[&'static str];
 
     /// Query for symbol type detection (single large query with multiple captures)
     fn symbol_type_detection_query(&self) -> &'static str;

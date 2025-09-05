@@ -106,7 +106,7 @@ fn find_variable_declarations_in_scope<'a>(
 
     // 1. Check method parameters first (highest priority)
     if let Some(method) = find_containing_method(usage_node) {
-        let param_query = r#"(formal_parameter (identifier) @name)"#;
+        let param_query = r#"(parameter (identifier) @name)"#;
         let language = tree.language();
 
         if let Some(query) = get_or_create_query(param_query, &language) {
@@ -133,7 +133,7 @@ fn find_variable_declarations_in_scope<'a>(
         // that come before the usage position
         if matches!(
             node.kind(),
-            "block" | "method_declaration" | "class_declaration"
+            "block" | "function_declaration" | "class_declaration"
         ) {
             // Try multiple query patterns for different declaration types
             let queries = vec![
@@ -303,7 +303,7 @@ fn is_in_scope(usage_node: &Node, declaration_node: &Node) -> bool {
 fn find_containing_method<'a>(node: &Node<'a>) -> Option<Node<'a>> {
     let mut current = node.parent();
     while let Some(parent) = current {
-        if parent.kind() == "method_declaration" {
+        if parent.kind() == "function_declaration" {
             return Some(parent);
         }
         current = parent.parent();
@@ -330,7 +330,7 @@ fn get_nesting_depth(node: &Node) -> usize {
     while let Some(parent) = current {
         if matches!(
             parent.kind(),
-            "block" | "method_declaration" | "class_declaration"
+            "block" | "function_declaration" | "class_declaration"
         ) {
             depth += 1;
         }
@@ -373,7 +373,7 @@ fn extract_call_signature(usage_node: &Node, source: &str) -> Option<CallSignatu
 
 #[tracing::instrument(skip_all)]
 fn extract_method_signature(method_node: &Node, source: &str) -> Option<MethodSignature> {
-    if method_node.kind() != "method_declaration" {
+    if method_node.kind() != "function_declaration" {
         return None;
     }
 
@@ -385,7 +385,7 @@ fn extract_method_signature(method_node: &Node, source: &str) -> Option<MethodSi
     let mut has_spread = false;
 
     for child in parameters.named_children(&mut cursor) {
-        if vec!["formal_parameter", "spread_parameter"].contains(&child.kind()) {
+        if vec!["parameter", "spread_parameter"].contains(&child.kind()) {
             if let Some(param_type) = child.child_by_field_name("type") {
                 param_types.push(
                     param_type
@@ -600,7 +600,7 @@ fn is_floating_point_variable(var_name: &str, current_node: &Node, source: &str)
 fn find_variable_type_in_node(var_name: &str, node: &Node, source: &str) -> Option<String> {
     // Look for local variable declarations with explicit types
     let var_decl_query = r#"
-        (local_variable_declaration
+        (variable_declaration
             type: (_) @type
             declarator: (variable_declarator
                 name: (identifier) @name))
@@ -706,7 +706,7 @@ fn find_best_method_match<'a>(
     usage_node: &Node<'a>,
     symbol_name: &str,
 ) -> Option<Node<'a>> {
-    let query_text = r#"(method_declaration name: (identifier) @name)"#;
+    let query_text = r#"(function_declaration name: (identifier) @name)"#;
     let query = get_or_create_query(query_text, &tree.language())?;
     let mut cursor = QueryCursor::new();
 

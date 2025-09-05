@@ -49,22 +49,22 @@ pub fn get_declaration_query_for_symbol_type(symbol_type: &SymbolType) -> Option
         ),
         SymbolType::SuperClass => Some(r#"(class_declaration (type_identifier) @name)"#),
         SymbolType::SuperInterface => Some(r#"(interface_declaration (type_identifier) @name)"#),
-        SymbolType::MethodCall => Some(r#"(function_declaration (simple_identifier) @name)"#),
+        SymbolType::MethodCall => Some(r#"(function_declaration (identifier) @name)"#),
         SymbolType::FieldUsage => {
-            Some(r#"(property_declaration (variable_declaration (simple_identifier) @name))"#)
+            Some(r#"(property_declaration (variable_declaration (identifier) @name))"#)
         }
         SymbolType::VariableUsage => Some(
             r#"
-            (property_declaration (variable_declaration (simple_identifier) @name))
-            (parameter (simple_identifier) @name)
-            (class_parameter (simple_identifier) @name)
-            (lambda_parameter (simple_identifier) @name)
+            (property_declaration (variable_declaration (identifier) @name))
+            (parameter (identifier) @name)
+            (class_parameter (identifier) @name)
+            (lambda_parameter (identifier) @name)
         "#,
         ),
         SymbolType::EnumDeclaration => Some(r#"(class_declaration (type_identifier) @name)"#),
         SymbolType::EnumUsage => Some(
             r#"
-            (enum_entry (simple_identifier) @name)
+            (enum_entry (identifier) @name)
             (class_declaration (type_identifier) @name)
         "#,
         ),
@@ -108,8 +108,8 @@ pub fn find_definition_candidates<'a>(
 pub fn search_definition<'a>(tree: &'a Tree, source: &str, symbol_name: &str) -> Option<Node<'a>> {
     // Try different declaration types for Kotlin
     let queries = [
-        r#"(enum_entry (simple_identifier) @name)"#, // Add enum constants first for priority
-        r#"(function_declaration (simple_identifier) @name)"#,
+        r#"(enum_entry (identifier) @name)"#, // Add enum constants first for priority
+        r#"(function_declaration (identifier) @name)"#,
         r#"(class_declaration (type_identifier) @name)"#,
         r#"(class_declaration (modifiers) (type_identifier) @name)"#,
         r#"(interface_declaration (type_identifier) @name)"#,
@@ -120,9 +120,9 @@ pub fn search_definition<'a>(tree: &'a Tree, source: &str, symbol_name: &str) ->
         r#"(enum_declaration (modifiers) (type_identifier) @name)"#,
         r#"(type_alias (type_identifier) @name)"#,
         r#"(type_alias (modifiers) (type_identifier) @name)"#,
-        r#"(property_declaration (variable_declaration (simple_identifier) @name))"#,
-        r#"(parameter (simple_identifier) @name)"#,
-        r#"(class_parameter (simple_identifier) @name)"#,
+        r#"(property_declaration (variable_declaration (identifier) @name))"#,
+        r#"(parameter (identifier) @name)"#,
+        r#"(class_parameter (identifier) @name)"#,
     ];
 
     for query_text in &queries {
@@ -509,7 +509,7 @@ enum class Priority {
         let tree = parser.parse(source, None).unwrap();
         
         // Search for enum constants using specialized query
-        let enum_constant_query = r#"(enum_entry (simple_identifier) @name)"#;
+        let enum_constant_query = r#"(enum_entry (identifier) @name)"#;
         let result = find_definition_candidates(&tree, source, "MEDIUM", enum_constant_query);
         assert!(result.is_some(), "Should find MEDIUM enum constant");
         
@@ -594,7 +594,7 @@ class MyClass {
         let tree = parser.parse(source, None).unwrap();
         
         // Search for enum constant definition
-        let enum_constant_query = r#"(enum_entry (simple_identifier) @name)"#;
+        let enum_constant_query = r#"(enum_entry (identifier) @name)"#;
         let result = find_definition_candidates(&tree, source, "ACTIVE", enum_constant_query);
         assert!(result.is_some(), "Should find ACTIVE enum constant definition");
     }
@@ -650,7 +650,7 @@ fun process() {
         let tree = parser.parse(source, None).unwrap();
         
         // Test that we can find navigation expression enum constants
-        let enum_constant_query = r#"(enum_entry (simple_identifier) @name)"#;
+        let enum_constant_query = r#"(enum_entry (identifier) @name)"#;
         let result = find_definition_candidates(&tree, source, "HIGH", enum_constant_query);
         assert!(result.is_some(), "Should find HIGH enum constant");
         
@@ -685,8 +685,8 @@ class TestClass {
         let tree = parser.parse(source, None).unwrap();
         
         // Both enum constant and method exist, but enum should have priority
-        let enum_query = r#"(enum_entry (simple_identifier) @name)"#;
-        let method_query = r#"(function_declaration (simple_identifier) @name)"#;
+        let enum_query = r#"(enum_entry (identifier) @name)"#;
+        let method_query = r#"(function_declaration (identifier) @name)"#;
         
         let enum_result = find_definition_candidates(&tree, source, "SUCCESS", enum_query);
         let method_result = find_definition_candidates(&tree, source, "SUCCESS", method_query);
@@ -1165,7 +1165,7 @@ fun example() {
         let tree = parser.parse(source, None).unwrap();
         
         // The enum constant query should only match the actual enum entry
-        let enum_constant_query = r#"(enum_entry (simple_identifier) @name)"#;
+        let enum_constant_query = r#"(enum_entry (identifier) @name)"#;
         let candidates = find_definition_candidates(&tree, source, "ACTIVE", enum_constant_query);
         
         assert!(candidates.is_some(), "Should find ACTIVE enum constant");
@@ -1210,7 +1210,7 @@ enum class Status {
         // If it's returning the comment, that's the bug
         println!("search_definition returned node kind: '{}' at row: {}, col: {}", node.kind(), start.row, start.column);
         
-        // We expect to get the enum_entry node, not the simple_identifier
+        // We expect to get the enum_entry node, not the identifier
         assert_eq!(node.kind(), "enum_entry", "Should return enum_entry node");
         assert_eq!(start.row, 2, "enum_entry should be at row 2 (0-indexed)");
         assert_eq!(start.column, 4, "enum_entry should start at column 4");

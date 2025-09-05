@@ -50,7 +50,7 @@ pub fn handle(
         }
         SymbolType::MethodCall => {
             // For method calls, try to find the declaration first, then extract signature
-            if let Some(method_decl_node) = find_method_declaration_for_call(tree, &node, source) {
+            if let Some(method_decl_node) = find_function_declaration_for_call(tree, &node, source) {
                 extract_method_signature(tree, &method_decl_node, source)
             } else {
                 // Fallback: provide basic method call info
@@ -352,13 +352,13 @@ fn extract_type_usage_info(node: &Node, source: &str) -> Option<String> {
 }
 
 #[tracing::instrument(skip_all)]
-fn find_method_declaration_for_call<'a>(tree: &'a Tree, node: &'a Node<'a>, source: &str) -> Option<Node<'a>> {
+fn find_function_declaration_for_call<'a>(tree: &'a Tree, node: &'a Node<'a>, source: &str) -> Option<Node<'a>> {
     let method_name = node.utf8_text(source.as_bytes()).ok()?;
     
     // Look for function declarations with the same name in the current file
     let query_text = r#"
         (function_declaration
-          (simple_identifier) @method_name
+          (identifier) @method_name
         )
     "#;
     
@@ -462,7 +462,7 @@ fn extract_variable_info(tree: &Tree, node: &Node, source: &str) -> Option<Strin
     (property_declaration
         (modifiers)? @modifiers
         (variable_declaration
-            (simple_identifier) @var_name
+            (identifier) @var_name
             (user_type)? @var_type
         )
         ("=" (_))? @initializer

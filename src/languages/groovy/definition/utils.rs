@@ -36,14 +36,14 @@ pub fn get_declaration_query_for_symbol_type(symbol_type: &SymbolType) -> Option
         ),
         SymbolType::SuperClass => Some(r#"(class_declaration name: (identifier) @name)"#),
         SymbolType::SuperInterface => Some(r#"(interface_declaration name: (identifier) @name)"#),
-        SymbolType::MethodCall => Some(r#"(method_declaration name: (identifier) @name)"#),
+        SymbolType::MethodCall => Some(r#"(function_declaration name: (identifier) @name)"#),
         SymbolType::FieldUsage => {
             Some(r#"(field_declaration declarator: (variable_declarator (identifier) @name))"#)
         }
         SymbolType::VariableUsage => Some(
             r#"
             (variable_declaration declarator: (variable_declarator (identifier) @name))
-            (formal_parameter (identifier) @name)
+            (parameter (identifier) @name)
             (field_declaration declarator: (variable_declarator (identifier) @name))
         "#,
         ),
@@ -102,7 +102,7 @@ pub fn find_definition_candidates<'a>(
 /// Check if this is a query that should terminate early for local scope
 #[tracing::instrument(skip_all)]
 fn is_local_scope_query(query_text: &str) -> bool {
-    query_text.contains("formal_parameter") || query_text.contains("variable_declaration")
+    query_text.contains("parameter") || query_text.contains("variable_declaration")
 }
 
 #[tracing::instrument(skip_all)]
@@ -382,11 +382,11 @@ fn find_parameter_type(
     current_position: &Node,
 ) -> Option<String> {
     let query_text = r#"
-        (formal_parameter 
+        (parameter 
           type: (type_identifier) @param_type
           name: (identifier) @param_name)
         
-        (formal_parameter 
+        (parameter 
           name: (identifier) @param_name_untyped)
     "#;
 
@@ -569,7 +569,7 @@ fn infer_type_from_field_name(field_name: &str) -> Option<String> {
 fn find_containing_method_node<'a>(node: &Node<'a>) -> Option<Node<'a>> {
     let mut current = node.parent();
     while let Some(parent) = current {
-        if parent.kind() == "method_declaration" {
+        if parent.kind() == "function_declaration" {
             return Some(parent);
         }
         current = parent.parent();

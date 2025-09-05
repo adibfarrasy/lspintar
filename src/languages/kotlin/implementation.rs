@@ -180,7 +180,7 @@ fn extract_instance_method_context(identifier_node: &Node, source: &str) -> Opti
                 let mut object_name = None;
                 for child in parent.children(&mut parent.walk()) {
                     match child.kind() {
-                        "simple_identifier" | "type_identifier" => {
+                        "identifier" | "type_identifier" => {
                             if let Ok(text) = child.utf8_text(source.as_bytes()) {
                                 if text != method_name {
                                     object_name = Some(text.to_string());
@@ -190,7 +190,7 @@ fn extract_instance_method_context(identifier_node: &Node, source: &str) -> Opti
                         "navigation_suffix" => {
                             // The method name should be in the navigation suffix
                             for suffix_child in child.children(&mut child.walk()) {
-                                if matches!(suffix_child.kind(), "simple_identifier") {
+                                if matches!(suffix_child.kind(), "identifier") {
                                     if let Ok(text) = suffix_child.utf8_text(source.as_bytes()) {
                                         if text == method_name && object_name.is_some() {
                                             return Some((object_name.unwrap(), method_name));
@@ -220,11 +220,11 @@ fn resolve_variable_type(variable_name: &str, tree: &Tree, source: &str, _contex
     let query_text = r#"
         (property_declaration
           (variable_declaration
-            (simple_identifier) @var_name
+            (identifier) @var_name
             (user_type (type_identifier) @type_name)))
             
         (variable_declaration
-          (simple_identifier) @var_name  
+          (identifier) @var_name  
           (user_type (type_identifier) @type_name))
     "#;
     
@@ -271,21 +271,21 @@ fn get_parent_name(tree: &Tree, source: &str, method_name: &str) -> Option<Strin
           (type_identifier) @interface_name
           (class_body
             (function_declaration
-              (simple_identifier) @method_name)))
+              (identifier) @method_name)))
               
         ; Class method  
         (class_declaration
           (type_identifier) @class_name
           (class_body
             (function_declaration
-              (simple_identifier) @method_name)))
+              (identifier) @method_name)))
               
         ; Object method
         (object_declaration
           (type_identifier) @object_name
           (class_body
             (function_declaration
-              (simple_identifier) @method_name)))
+              (identifier) @method_name)))
     "#;
     
     let language = tree_sitter_kotlin::language();
@@ -369,7 +369,7 @@ async fn find_method_in_class(
     // Use a query to find method declarations with the specific name
     let query_text = r#"
         (function_declaration
-            (simple_identifier) @method_name)
+            (identifier) @method_name)
     "#;
     
     let query = Query::new(&tree_sitter_kotlin::language(), query_text)?;

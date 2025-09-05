@@ -48,7 +48,7 @@ pub fn handle(
         }
         SymbolType::MethodCall => {
             // For method calls, try to find the declaration first, then extract signature
-            if let Some(method_decl_node) = find_method_declaration_for_call(tree, &node, source) {
+            if let Some(method_decl_node) = find_function_declaration_for_call(tree, &node, source) {
                 extract_method_signature(tree, &method_decl_node, source)
             } else {
                 // Fallback: provide basic method call info
@@ -204,7 +204,7 @@ fn extract_type_usage_info(node: &Node, source: &str) -> Option<String> {
 fn extract_variable_info(_tree: &Tree, node: &Node, source: &str) -> Option<String> {
     // Try to find variable declaration (local variables, fields, parameters)
     let var_node = find_parent_of_kind(node, "variable_declaration")
-        .or_else(|| find_parent_of_kind(node, "local_variable_declaration"))
+        .or_else(|| find_parent_of_kind(node, "variable_declaration"))
         .or_else(|| find_parent_of_kind(node, "field_declaration"));
 
     if let Some(var_node) = var_node {
@@ -218,7 +218,7 @@ fn extract_variable_info(_tree: &Tree, node: &Node, source: &str) -> Option<Stri
 
 /// Find method declaration for a method call within the same file
 #[tracing::instrument(skip_all)]
-fn find_method_declaration_for_call<'a>(
+fn find_function_declaration_for_call<'a>(
     tree: &'a Tree,
     node: &Node,
     source: &str,
@@ -226,7 +226,7 @@ fn find_method_declaration_for_call<'a>(
     let method_name = node.utf8_text(source.as_bytes()).ok()?;
 
     let query_text = r#"
-        (method_declaration
+        (function_declaration
           name: (identifier) @method_name
         )
     "#;
@@ -454,7 +454,7 @@ class Test {
     }
 
     #[test]
-    fn test_find_method_declaration_for_call() {
+    fn test_find_function_declaration_for_call() {
         let source = r#"
 class Test {
     public void testMethod() {
@@ -504,10 +504,10 @@ class Test {
         call_node = find_method_call(&mut cursor, source);
         
         if let Some(node) = call_node {
-            let result = find_method_declaration_for_call(&tree, &node, source);
+            let result = find_function_declaration_for_call(&tree, &node, source);
             assert!(result.is_some());
             let decl_node = result.unwrap();
-            assert_eq!(decl_node.kind(), "method_declaration");
+            assert_eq!(decl_node.kind(), "function_declaration");
         }
     }
 

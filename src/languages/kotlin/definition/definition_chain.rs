@@ -54,7 +54,7 @@ pub fn find_method_with_signature<'a>(
     method_name: &str,
     signature: &CallSignature,
 ) -> Option<Node<'a>> {
-    let query_text = r#"(function_declaration (simple_identifier) @name)"#;
+    let query_text = r#"(function_declaration (identifier) @name)"#;
     
     let language = KOTLIN_PARSER.get_or_init(|| tree_sitter_kotlin::language());
     let query = Query::new(language, query_text).ok()?;
@@ -86,7 +86,7 @@ fn method_signature_matches(function_node: &Node, _source: &str, call_signature:
     let mut param_count = 0;
     
     for child in function_node.children(&mut function_node.walk()) {
-        if child.kind() == "function_value_parameters" {
+        if child.kind() == "parameters" {
             for param_child in child.children(&mut child.walk()) {
                 if param_child.kind() == "parameter" {
                     param_count += 1;

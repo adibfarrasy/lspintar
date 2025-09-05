@@ -55,7 +55,7 @@ pub fn extract_method_signature(tree: &Tree, node: &Node, source: &str) -> Optio
 
     // Look for function declarations that match this method name
     let query_text = r#"
-    (package_header (identifier) @package_name)
+    (package_header (qualified_identifier) @package_name)
     
     (function_declaration
         (modifiers 
@@ -66,10 +66,10 @@ pub fn extract_method_signature(tree: &Tree, node: &Node, source: &str) -> Optio
             (parameter_modifier)* @modifier
             (platform_modifier)* @modifier
         )?
-        (simple_identifier) @method_name
+        name: (identifier) @method_name
         (type_parameters)? @type_params
-        (function_value_parameters) @parameters
-        (user_type)? @return_type
+        parameters: (parameters) @parameters
+        return_type: (user_type)? @return_type
     ) @function_node
     "#;
 
@@ -189,7 +189,7 @@ pub fn extract_method_signature(tree: &Tree, node: &Node, source: &str) -> Optio
             (visibility_modifier)* @modifier
             (member_modifier)* @modifier
         )? 
-        (function_value_parameters) @parameters
+        (parameters) @parameters
     )
     "#;
 
@@ -306,7 +306,7 @@ fun testMethod(name: String): Unit {
         fn find_method_identifier<'a>(cursor: &mut tree_sitter::TreeCursor<'a>, source: &str) -> Option<tree_sitter::Node<'a>> {
             loop {
                 let node = cursor.node();
-                if node.kind() == "simple_identifier" {
+                if node.kind() == "identifier" {
                     if let Ok(text) = node.utf8_text(source.as_bytes()) {
                         if text == "testMethod" {
                             return Some(node);
@@ -368,7 +368,7 @@ class TestClass {
         fn find_method_identifier<'a>(cursor: &mut tree_sitter::TreeCursor<'a>, source: &str) -> Option<tree_sitter::Node<'a>> {
             loop {
                 let node = cursor.node();
-                if node.kind() == "simple_identifier" {
+                if node.kind() == "identifier" {
                     if let Ok(text) = node.utf8_text(source.as_bytes()) {
                         if text == "complexMethod" {
                             return Some(node);
@@ -424,7 +424,7 @@ class TestClass {
         fn find_method_identifier<'a>(cursor: &mut tree_sitter::TreeCursor<'a>, source: &str) -> Option<tree_sitter::Node<'a>> {
             loop {
                 let node = cursor.node();
-                if node.kind() == "simple_identifier" {
+                if node.kind() == "identifier" {
                     if let Ok(text) = node.utf8_text(source.as_bytes()) {
                         if text == "manyParamMethod" {
                             return Some(node);

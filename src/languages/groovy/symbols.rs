@@ -211,7 +211,7 @@ fn is_groovy_symbol_accessible(node: &Node, content: &str) -> bool {
         "class_declaration"
         | "interface_declaration"
         | "enum_declaration"
-        | "method_declaration" => true,
+        | "function_declaration" => true,
         "field_declaration" => true,
         "property_declaration" => true,
         _ => false,

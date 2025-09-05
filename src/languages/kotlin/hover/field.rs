@@ -19,7 +19,7 @@ pub fn extract_field_signature(tree: &Tree, node: &Node, source: &str) -> Option
                 (property_modifier)* @modifier
             )?
             (variable_declaration
-                (simple_identifier) @field_name
+                (identifier) @field_name
                 (user_type)? @field_type
             )
             ("=" (_))? @initializer
@@ -114,7 +114,7 @@ pub fn extract_field_signature(tree: &Tree, node: &Node, source: &str) -> Option
                     (member_modifier)* @modifier
                     (property_modifier)* @modifier
                 )?
-                (simple_identifier) @param_name
+                (identifier) @param_name
                 (user_type) @param_type
             )
         )

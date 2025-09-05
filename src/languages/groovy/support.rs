@@ -98,9 +98,9 @@ impl GroovySupport {
 }
 
 impl QueryProvider for GroovySupport {
-    fn method_declaration_queries(&self) -> &[&'static str] {
+    fn function_declaration_queries(&self) -> &[&'static str] {
         &[
-            r#"(method_declaration) @method"#,
+            r#"(function_declaration) @method"#,
             r#"(constructor_declaration) @constructor"#,
         ]
     }
@@ -117,7 +117,7 @@ impl QueryProvider for GroovySupport {
           declarator: (variable_declarator
             name: (identifier) @field_decl))
         ; Method declarations
-        (method_declaration
+        (function_declaration
           name: (identifier) @method_decl)
         ; Class declarations
         (class_declaration
@@ -232,7 +232,7 @@ impl LanguageSupport for GroovySupport {
           name: (identifier) @interface_decl)
 
         ; Method declarations
-        (method_declaration
+        (function_declaration
           name: (identifier) @method_decl)
 
         ; Enum declarations
@@ -240,7 +240,7 @@ impl LanguageSupport for GroovySupport {
           name: (identifier) @enum_decl)
 
         ; Parameters
-        (formal_parameter
+        (parameter
           name: (identifier) @param_decl)
 
         ; USAGES - WORKING PATTERNS BASED ON ACTUAL GROOVY GRAMMAR
@@ -668,7 +668,7 @@ impl LanguageSupport for GroovySupport {
         _usage_node: &Node,
     ) -> Option<String> {
         let query_text = r#"
-            (formal_parameter
+            (parameter
               type: (type_identifier) @param_type
               name: (identifier) @param_name)
         "#;
@@ -780,7 +780,7 @@ impl LanguageSupport for GroovySupport {
         use tree_sitter::{QueryCursor, StreamingIterator};
 
         let method_query_text = r#"
-            (method_declaration name: (identifier) @method_name)
+            (function_declaration name: (identifier) @method_name)
             (constructor_declaration name: (identifier) @method_name)
         "#;
         let method_query = get_or_create_query(method_query_text, &tree_sitter_groovy::language())?;

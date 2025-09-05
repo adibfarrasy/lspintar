@@ -4,7 +4,7 @@ use crate::languages::common::hover::{parse_parameters, format_parameters, Hover
 
 #[tracing::instrument(skip_all)]
 pub fn extract_method_signature(tree: &Tree, node: &Node, source: &str) -> Option<String> {
-    // Find the method declaration node that contains this node
+    // Find the function declaration node that contains this node
     let method_node = find_method_node(node)?;
     
     
@@ -15,7 +15,7 @@ pub fn extract_method_signature(tree: &Tree, node: &Node, source: &str) -> Optio
     (
       (block_comment)? @javadoc
       .
-      (method_declaration
+      (function_declaration
         (modifiers 
           (annotation)* @annotation
           (marker_annotation)* @annotation
@@ -31,7 +31,7 @@ pub fn extract_method_signature(tree: &Tree, node: &Node, source: &str) -> Optio
         )?
         type: (_) @return_type
         name: (identifier) @method_name
-        parameters: (formal_parameters) @parameters
+        parameters: (parameters) @parameters
         (throws)? @throws_clause
       )
     )
@@ -73,7 +73,7 @@ pub fn extract_method_signature(tree: &Tree, node: &Node, source: &str) -> Optio
         for capture in query_match.captures.iter() {
             let capture_name = query.capture_names()[capture.index as usize];
             
-            // Check if we found a method_declaration that encompasses our target node
+            // Check if we found a function_declaration that encompasses our target node
             if capture_name == "method_name" {
                 // Check if the method name node is within our target method_node
                 if capture.node.start_byte() >= method_node.start_byte() && 
@@ -124,7 +124,7 @@ fn find_method_node<'a>(node: &'a Node<'a>) -> Option<Node<'a>> {
     
     while let Some(current_node) = current {
         match current_node.kind() {
-            "method_declaration" | "constructor_declaration" => return Some(current_node),
+            "function_declaration" | "constructor_declaration" => return Some(current_node),
             _ => current = current_node.parent(),
         }
     }
@@ -242,7 +242,7 @@ class TestClass {
             let method_node = find_method_node(&node);
             assert!(method_node.is_some());
             let method_decl = method_node.unwrap();
-            assert_eq!(method_decl.kind(), "method_declaration");
+            assert_eq!(method_decl.kind(), "function_declaration");
         }
     }
 

@@ -19,14 +19,14 @@ fn get_extract_symbol_queries() -> &'static [(Query, SymbolType)] {
             (
                 r#"(class_declaration 
                     (modifiers)?
-                    (type_identifier) @name
+                    name: (type_identifier) @name
                 )"#,
                 SymbolType::ClassDeclaration,
             ),
             (
                 r#"(interface_declaration
                     (modifiers)?
-                    (type_identifier) @name
+                    name: (type_identifier) @name
                 )"#,
                 SymbolType::InterfaceDeclaration,
             ),
@@ -34,7 +34,7 @@ fn get_extract_symbol_queries() -> &'static [(Query, SymbolType)] {
                 r#"(class_declaration
                     (modifiers
                         "enum")
-                    (type_identifier) @name
+                    name: (type_identifier) @name
                 )"#,
                 SymbolType::EnumDeclaration,
             ),
@@ -42,28 +42,28 @@ fn get_extract_symbol_queries() -> &'static [(Query, SymbolType)] {
                 r#"(class_declaration
                     (modifiers
                         "annotation")
-                    (type_identifier) @name
+                    name: (type_identifier) @name
                 )"#,
                 SymbolType::AnnotationDeclaration,
             ),
             (
                 r#"(object_declaration 
                     (modifiers)?
-                    (type_identifier) @name
+                    name: (type_identifier) @name
                 )"#,
                 SymbolType::ClassDeclaration, // Objects are treated as special classes
             ),
             (
                 r#"(type_alias
                     (modifiers)?
-                    (type_identifier) @name
+                    name: (type_identifier) @name
                 )"#,
                 SymbolType::Type,
             ),
             (
                 r#"(function_declaration
                     (modifiers)?
-                    (simple_identifier) @name
+                    name: (identifier) @name
                 )"#,
                 SymbolType::MethodDeclaration,
             ),
@@ -72,7 +72,7 @@ fn get_extract_symbol_queries() -> &'static [(Query, SymbolType)] {
                     (modifiers)?
                     (binding_pattern_kind)?
                     (variable_declaration
-                        (simple_identifier) @name
+                        name: (identifier) @name
                     )
                 )"#,
                 SymbolType::FieldDeclaration,
@@ -176,7 +176,7 @@ pub fn extract_kotlin_symbols(parsed_file: &ParsedSourceFile) -> Result<Vec<Symb
 
 #[tracing::instrument(skip_all)]
 fn extract_kotlin_package(tree: &Tree, source: &str) -> Option<String> {
-    let query_text = r#"(package_header (identifier) @package)"#;
+    let query_text = r#"(package_header (qualified_identifier) @package)"#;
     
     let language = KOTLIN_PARSER.get_or_init(|| tree_sitter_kotlin::language());
     let query = Query::new(language, query_text).ok()?;
@@ -370,6 +370,7 @@ object MySingleton {
         let object_symbol = &symbols[0];
         assert_eq!(object_symbol.fully_qualified_name, "com.example.MySingleton");
     }
+
 
     #[test]
     fn test_extract_interface_symbols() {

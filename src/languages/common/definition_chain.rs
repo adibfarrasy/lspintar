@@ -185,10 +185,10 @@ pub fn extract_static_field_context(usage_node: &Node, source: &str) -> Option<(
         // Extract object and field from navigation_expression
         if let (Some(object_node), Some(nav_suffix)) = (nav_expr.child(0), nav_expr.child(1)) {
             if nav_suffix.kind() == "navigation_suffix" {
-                // Find the simple_identifier in nav_suffix
+                // Find the identifier in nav_suffix
                 let field_node = (0..nav_suffix.child_count())
                     .filter_map(|i| nav_suffix.child(i))
-                    .find(|child| child.kind() == "simple_identifier");
+                    .find(|child| child.kind() == "identifier");
                 
                 if let Some(field_node) = field_node {
                     let class_name = object_node.utf8_text(source.as_bytes()).ok()?.to_string();
@@ -676,7 +676,7 @@ fn search_field_in_class_file(
     // Create language-specific queries that capture field names directly
     let field_name_query = match language_support.language_id() {
         "kotlin" => format!(
-            r#"(property_declaration (variable_declaration (simple_identifier) @field_name (#eq? @field_name "{}"))) @field_decl (enum_entry (simple_identifier) @field_name (#eq? @field_name "{}")) @field_decl"#, 
+            r#"(property_declaration (variable_declaration (identifier) @field_name (#eq? @field_name "{}"))) @field_decl (enum_entry (identifier) @field_name (#eq? @field_name "{}")) @field_decl"#, 
             field_name, field_name
         ),
         "java" => format!(
@@ -805,7 +805,7 @@ fn search_enum_constant_in_class_file(
     
     // Create language-specific enum constant queries
     let enum_query = match language_id {
-        "kotlin" => r#"(enum_entry (simple_identifier) @constant_name)"#,
+        "kotlin" => r#"(enum_entry (identifier) @constant_name)"#,
         "java" | "groovy" => r#"(enum_constant name: (identifier) @constant_name)"#,
         _ => return None,
     };
@@ -856,15 +856,15 @@ fn search_method_in_class_file(
     // Create language-specific queries that capture method names directly
     let method_name_query = match language_support.language_id() {
         "kotlin" => format!(
-            r#"(function_declaration (simple_identifier) @method_name (#eq? @method_name "{}")) @method_decl"#, 
+            r#"(function_declaration (identifier) @method_name (#eq? @method_name "{}")) @method_decl"#, 
             method_name
         ),
         "java" => format!(
-            r#"(method_declaration name: (identifier) @method_name (#eq? @method_name "{}")) @method_decl"#, 
+            r#"(function_declaration name: (identifier) @method_name (#eq? @method_name "{}")) @method_decl"#, 
             method_name
         ),
         "groovy" => format!(
-            r#"(method_declaration name: (identifier) @method_name (#eq? @method_name "{}")) @method_decl"#, 
+            r#"(function_declaration name: (identifier) @method_name (#eq? @method_name "{}")) @method_decl"#, 
             method_name
         ),
         _ => {
@@ -967,7 +967,7 @@ fn try_find_getter_setter_field(
     // Create language-specific queries for field declarations
     let field_query = match language_support.language_id() {
         "kotlin" => format!(
-            r#"(property_declaration (variable_declaration (simple_identifier) @field_name (#eq? @field_name "{}"))) @field_decl"#,
+            r#"(property_declaration (variable_declaration (identifier) @field_name (#eq? @field_name "{}"))) @field_decl"#,
             field_name
         ),
         "java" => format!(
@@ -1024,7 +1024,7 @@ fn search_method_fallback(
     let tree = parser.parse(&content, None)?;
     
     // Use the language's method declaration queries to find all methods
-    let method_queries = language_support.method_declaration_queries();
+    let method_queries = language_support.function_declaration_queries();
     
     for query_str in method_queries {
         let query = tree_sitter::Query::new(&tree.language(), query_str).ok()?;
@@ -1098,7 +1098,7 @@ fn find_method_name_in_declaration<'a>(
         source: &'a str
     ) -> Option<tree_sitter::Node<'a>> {
         // Check if this node is an identifier with the target name
-        if node.kind() == "identifier" || node.kind() == "simple_identifier" {
+        if node.kind() == "identifier" || node.kind() == "identifier" {
             if let Ok(node_text) = node.utf8_text(source.as_bytes()) {
                 if node_text == target_name {
                     return Some(node);
@@ -1240,7 +1240,7 @@ fn find_class_definition(
 fn find_class_name_in_current_source<'a>(tree: &'a Tree, source: &'a str, class_name: &str) -> Option<tree_sitter::Node<'a>> {
     fn search_node<'a>(node: tree_sitter::Node<'a>, source: &'a str, target: &str) -> Option<tree_sitter::Node<'a>> {
         // Check if this node matches the class name
-        if matches!(node.kind(), "identifier" | "type_identifier" | "simple_identifier") {
+        if matches!(node.kind(), "identifier" | "type_identifier") {
             if let Ok(node_text) = node.utf8_text(source.as_bytes()) {
                 if node_text == target {
                     return Some(node);
@@ -1521,7 +1521,7 @@ mod tests {
 
     fn find_identifier_node<'a>(tree: &'a Tree, source: &'a str, target_text: &str) -> Option<tree_sitter::Node<'a>> {
         fn find_node_recursive<'a>(node: tree_sitter::Node<'a>, source: &'a str, target: &str) -> Option<tree_sitter::Node<'a>> {
-            if node.kind() == "identifier" || node.kind() == "simple_identifier" {
+            if node.kind() == "identifier" || node.kind() == "identifier" {
                 if let Ok(text) = node.utf8_text(source.as_bytes()) {
                     if text == target {
                         return Some(node);
@@ -1691,7 +1691,7 @@ mod tests {
                 }
                 
                 // If no child matched, return this node if it's a leaf or identifier
-                if node.child_count() == 0 || node.kind() == "simple_identifier" || node.kind() == "identifier" {
+                if node.child_count() == 0 || node.kind() == "identifier" || node.kind() == "identifier" {
                     return Some(node);
                 }
             }
@@ -1955,7 +1955,7 @@ mod tests {
         
         // Find all identifiers to see what's available
         println!("\nAll identifiers in the source:");
-        let simple_query = "(simple_identifier) @id";
+        let simple_query = "(identifier) @id";
         let language = tree_sitter_kotlin::language();
         if let Ok(query) = tree_sitter::Query::new(&language, simple_query) {
             let mut cursor = tree_sitter::QueryCursor::new();
@@ -2014,7 +2014,7 @@ mod tests {
         print_kotlin_ast(&tree.root_node(), kotlin_content, 0);
         
         // Test the corrected query
-        let corrected_query = r#"(function_declaration (simple_identifier) @method_name (#eq? @method_name "targetMethod")) @method_decl"#;
+        let corrected_query = r#"(function_declaration (identifier) @method_name (#eq? @method_name "targetMethod")) @method_decl"#;
         let language = tree_sitter_kotlin::language();
         match tree_sitter::Query::new(&language, corrected_query) {
             Ok(query) => {
@@ -2097,8 +2097,8 @@ fun main() {
         println!("\nSearching for identifiers...");
         
         // Test queries to find both identifiers
-        let obj_query = r#"(simple_identifier) @obj (#eq? @obj "obj")"#;
-        let method_query = r#"(simple_identifier) @method (#eq? @method "instanceMethod")"#;
+        let obj_query = r#"(identifier) @obj (#eq? @obj "obj")"#;
+        let method_query = r#"(identifier) @method (#eq? @method "instanceMethod")"#;
         
         let language = tree_sitter_kotlin::language();
         
@@ -2169,7 +2169,7 @@ fun main() {
                         if child.kind() == "navigation_expression" {
                             let mut nav_cursor = child.walk();
                             for nav_child in child.children(&mut nav_cursor) {
-                                if nav_child.kind() == "simple_identifier" {
+                                if nav_child.kind() == "identifier" {
                                     let text = nav_child.utf8_text(source.as_bytes()).unwrap_or("");
                                     println!("Testing context extraction for identifier '{}' at line {}", text, nav_child.start_position().row + 1);
                                     
@@ -2199,7 +2199,7 @@ fun main() {
                                 if nav_child.kind() == "navigation_suffix" {
                                     let mut suffix_cursor = nav_child.walk();
                                     for suffix_child in nav_child.children(&mut suffix_cursor) {
-                                        if suffix_child.kind() == "simple_identifier" {
+                                        if suffix_child.kind() == "identifier" {
                                             let text = suffix_child.utf8_text(source.as_bytes()).unwrap_or("");
                                             println!("Testing context extraction for method identifier '{}' at line {}", text, suffix_child.start_position().row + 1);
                                             
@@ -2299,7 +2299,7 @@ fun main() {
         let service_query = r#"
             (call_expression
               (navigation_expression
-                (simple_identifier) @service_var (#eq? @service_var "service")))
+                (identifier) @service_var (#eq? @service_var "service")))
         "#;
         
         let language = tree_sitter_kotlin::language();
@@ -2436,11 +2436,11 @@ fun main() {
             let tree = create_kotlin_test_tree(source);
             let kotlin_support = crate::languages::kotlin::support::KotlinSupport::new();
             
-            // Find all simple_identifier nodes that could be variables in method calls
+            // Find all identifier nodes that could be variables in method calls
             let variable_query = r#"
                 (call_expression
                   (navigation_expression
-                    (simple_identifier) @var))
+                    (identifier) @var))
             "#;
             
             let language = tree_sitter_kotlin::language();
@@ -2742,7 +2742,7 @@ class TestClass {
         if let Some(node) = class_node {
             let node_text = node.utf8_text(kotlin_source.as_bytes()).unwrap();
             assert_eq!(node_text, "DataContainer");
-            assert!(matches!(node.kind(), "simple_identifier" | "identifier" | "type_identifier"));
+            assert!(matches!(node.kind(), "identifier" | "type_identifier"));
         }
         
         // Should not find non-existent class

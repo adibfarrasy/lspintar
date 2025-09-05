@@ -198,7 +198,7 @@ async fn find_enum_constant_in_project(
 #[tracing::instrument(skip_all)]
 pub fn resolve_nested_enum_type(source: &str, enum_type_node: &Node<'_>) -> Option<String> {
     // For simple identifier, return as-is
-    if enum_type_node.kind() == "simple_identifier" || enum_type_node.kind() == "type_identifier" {
+    if enum_type_node.kind() == "identifier" || enum_type_node.kind() == "type_identifier" {
         return enum_type_node.utf8_text(source.as_bytes()).ok().map(|s| s.to_string());
     }
     
@@ -293,7 +293,7 @@ fn find_enum_constant_in_node(
     use crate::core::utils::node_to_lsp_location;
     use tree_sitter::{QueryCursor, StreamingIterator};
 
-    let query_text = r#"(enum_entry (simple_identifier) @constant_name)"#;
+    let query_text = r#"(enum_entry (identifier) @constant_name)"#;
     let query = get_or_create_query(query_text).ok()?;
 
     let mut cursor = QueryCursor::new();

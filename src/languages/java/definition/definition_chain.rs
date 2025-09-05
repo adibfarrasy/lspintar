@@ -20,7 +20,7 @@ pub fn find_method_with_signature<'a>(
     method_name: &str,
     call_signature: &CallSignature,
 ) -> Option<Node<'a>> {
-    let query_text = r#"(method_declaration name: (identifier) @name)"#;
+    let query_text = r#"(function_declaration name: (identifier) @name)"#;
     let query = Query::new(&tree.language(), query_text).ok()?;
     let mut cursor = QueryCursor::new();
 
@@ -38,7 +38,7 @@ pub fn find_method_with_signature<'a>(
                 if name_text == method_name {
                     // CRITICAL: Only consider nodes that are actually method declaration names
                     if let Some(method_decl) = name_node.parent() {
-                        if method_decl.kind() == "method_declaration" {
+                        if method_decl.kind() == "function_declaration" {
                             // Keep first method declaration as fallback
                             if fallback_match.is_none() {
                                 fallback_match = Some(name_node);
@@ -110,7 +110,7 @@ pub fn extract_method_signature(method_decl: &Node, source: &str) -> Option<Meth
     let mut cursor = parameters.walk();
 
     for child in parameters.named_children(&mut cursor) {
-        if child.kind() == "formal_parameter" {
+        if child.kind() == "parameter" {
             if let Some(type_node) = child.child_by_field_name("type") {
                 let type_text = type_node.utf8_text(source.as_bytes()).unwrap_or("Unknown");
                 param_types.push(type_text.to_string());
