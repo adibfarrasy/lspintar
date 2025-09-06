@@ -133,7 +133,7 @@ fn find_variable_declarations_in_scope<'a>(
         // that come before the usage position
         if matches!(
             node.kind(),
-            "block" | "function_declaration" | "class_declaration"
+            "block" | "function_declaration" | "class_declaration" | "source_file"
         ) {
             // Try multiple query patterns for different declaration types
             let queries = vec![
@@ -155,6 +155,11 @@ fn find_variable_declarations_in_scope<'a>(
                             // Check if this declaration contains our symbol
                             if let Ok(decl_text) = var_decl.utf8_text(source.as_bytes()) {
                                 if decl_text.contains(symbol_name) {
+                                    // Check if declaration is in a mutually exclusive branch
+                                    if are_in_mutually_exclusive_branches(&var_decl, usage_node) {
+                                        continue; // Skip this declaration
+                                    }
+
                                     // Make sure declaration comes before usage (for same block)
                                     // or is in a parent block
                                     if var_decl.start_position() < usage_node.start_position() {
@@ -186,7 +191,86 @@ fn find_variable_declarations_in_scope<'a>(
         current_node = node.parent();
     }
 
+    // Deduplicate candidates by node ID
+    candidates.sort_by_key(|node| node.id());
+    candidates.dedup_by_key(|node| node.id());
+
     candidates
+}
+
+/// Check if two nodes are in mutually exclusive branches (e.g., if vs else)
+#[tracing::instrument(skip_all)]
+fn are_in_mutually_exclusive_branches(node1: &Node, node2: &Node) -> bool {
+    // Find the closest if_statement or switch_expression containing each node
+    let if_stmt1 = find_containing_conditional(node1);
+    let if_stmt2 = find_containing_conditional(node2);
+    
+    // If both nodes are in the same conditional statement
+    if let (Some(stmt1), Some(stmt2)) = (if_stmt1, if_stmt2) {
+        if stmt1.id() == stmt2.id() {
+            // Check if they're in different branches
+            let branch1 = find_branch_type(node1, &stmt1);
+            let branch2 = find_branch_type(node2, &stmt2);
+            
+            // If one is in consequence (if) and other in alternative (else), they're mutually exclusive
+            if let (Some(b1), Some(b2)) = (branch1, branch2) {
+                return b1 != b2;
+            }
+        }
+    }
+    
+    false
+}
+
+/// Find the containing if_statement or switch_expression
+#[tracing::instrument(skip_all)]
+fn find_containing_conditional<'a>(node: &Node<'a>) -> Option<Node<'a>> {
+    let mut current = node.parent();
+    while let Some(parent) = current {
+        if matches!(parent.kind(), "if_statement" | "switch_expression") {
+            return Some(parent);
+        }
+        current = parent.parent();
+    }
+    None
+}
+
+/// Determine which branch of a conditional statement contains the node
+#[tracing::instrument(skip_all)]
+fn find_branch_type<'a>(node: &Node<'a>, conditional: &Node<'a>) -> Option<&'static str> {
+    // Check if node is within the consequence or alternative branch
+    if let Some(consequence) = conditional.child_by_field_name("consequence") {
+        if is_ancestor_of(&consequence, node) {
+            return Some("consequence");
+        }
+    }
+    
+    if let Some(alternative) = conditional.child_by_field_name("alternative") {
+        if is_ancestor_of(&alternative, node) {
+            return Some("alternative");
+        }
+    }
+    
+    // For switch expressions, check cases
+    if conditional.kind() == "switch_expression" {
+        // This would need more complex logic for switch cases
+        // For now, we'll skip switch handling
+    }
+    
+    None
+}
+
+/// Check if ancestor node contains descendant node
+#[tracing::instrument(skip_all)]
+fn is_ancestor_of(ancestor: &Node, descendant: &Node) -> bool {
+    let mut current = descendant.parent();
+    while let Some(parent) = current {
+        if parent.id() == ancestor.id() {
+            return true;
+        }
+        current = parent.parent();
+    }
+    false
 }
 
 /// Find the identifier node within a variable declaration that matches the symbol name
@@ -768,4 +852,100 @@ fn find_as_field<'a>(tree: &'a Tree, source: &str, symbol_name: &str) -> Option<
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use tree_sitter_groovy;
+
+    #[test]
+    fn test_variable_in_different_if_else_branches() {
+        // Test that variables declared in different if/else branches are not confused
+        let source = r#"
+if (true) {
+    String name = "if block"
+} else {
+    String name = "else block"
+    name
+}
+"#;
+        
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&tree_sitter_groovy::language()).unwrap();
+        let tree = parser.parse(source, None).unwrap();
+        
+        // Find the usage of 'name' in the else block
+        let usage_query = r#"
+            (if_statement
+                alternative: (block
+                    (expression_statement
+                        (identifier) @usage)))
+        "#;
+        
+        let query = tree_sitter::Query::new(&tree_sitter_groovy::language(), usage_query).unwrap();
+        let mut cursor = tree_sitter::QueryCursor::new();
+        let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
+        
+        let usage_node = matches
+            .next()
+            .and_then(|m| m.captures.first())
+            .map(|c| c.node)
+            .expect("Should find usage node");
+        
+        // Find variable declarations
+        let candidates = find_variable_declarations_in_scope(&tree, source, &usage_node, "name");
+        
+        // Should only find the declaration in the else block, not the if block
+        assert_eq!(candidates.len(), 1, "Should find exactly one declaration");
+        
+        // Verify it's the else block declaration
+        let decl = candidates[0];
+        let decl_text = decl.utf8_text(source.as_bytes()).unwrap();
+        assert_eq!(decl_text, "name");
+        
+        // Check that the declaration is in the else block (after the if block)
+        let if_block_end = source.find("\"if block\"").unwrap();
+        let decl_position = decl.start_byte();
+        assert!(decl_position > if_block_end, "Declaration should be in else block");
+    }
+    
+    #[test]
+    fn test_variable_accessible_from_parent_scope() {
+        // Test that variables from parent scopes are still accessible
+        let source = r#"
+String name = "outer"
+if (true) {
+    name
+}
+"#;
+        
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&tree_sitter_groovy::language()).unwrap();
+        let tree = parser.parse(source, None).unwrap();
+        
+        // Find the usage of 'name' in the if block
+        let usage_query = r#"
+            (if_statement
+                consequence: (block
+                    (expression_statement
+                        (identifier) @usage)))
+        "#;
+        
+        let query = tree_sitter::Query::new(&tree_sitter_groovy::language(), usage_query).unwrap();
+        let mut cursor = tree_sitter::QueryCursor::new();
+        let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
+        
+        let usage_node = matches
+            .next()
+            .and_then(|m| m.captures.first())
+            .map(|c| c.node)
+            .expect("Should find usage node");
+        
+        // Find variable declarations
+        let candidates = find_variable_declarations_in_scope(&tree, source, &usage_node, "name");
+        
+        // Should find the outer declaration
+        assert_eq!(candidates.len(), 1, "Should find the outer declaration");
+        
+        let decl = candidates[0];
+        let decl_text = decl.utf8_text(source.as_bytes()).unwrap();
+        assert_eq!(decl_text, "name");
+    }
 }
