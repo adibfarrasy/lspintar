@@ -9,6 +9,7 @@ mod constants;
 mod core;
 mod languages;
 mod server;
+mod types;
 
 #[tokio::main]
 async fn main() {

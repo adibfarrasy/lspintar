@@ -11,6 +11,7 @@ pub mod progress;
 pub mod queries;
 pub mod state_manager;
 pub mod symbols;
+pub mod types;
 pub mod utils;
 
 pub use diagnostic_manager::DiagnosticManager;
