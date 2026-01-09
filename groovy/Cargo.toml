@@ -1,0 +1,34 @@
+[package]
+name = "groovy"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+lsp_core = { path = "../lsp_core" }
+
+anyhow = { workspace = true }
+log = { workspace = true }
+tokio = { workspace = true }
+tower-lsp = { workspace = true }
+tree-sitter = { workspace = true }
+tree-sitter-groovy = { workspace = true }
+tree-sitter-java = { workspace = true }
+tree-sitter-kotlin = { workspace = true }
+walkdir = { workspace = true }
+num_cpus = { workspace = true }
+futures = { workspace = true }
+dirs = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+just = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+zip = { workspace = true }
+rayon = { workspace = true }
+serde = { workspace = true }
+sqlx = { workspace = true }
+bincode = { workspace = true }
+sha2 = { workspace = true }
+tempfile = { workspace = true }
+
+

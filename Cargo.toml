@@ -1,0 +1,36 @@
+[workspace]
+members = [
+    "lsp_core",
+    "java",
+    "groovy",
+    "kotlin",
+    "server",
+]
+resolver = "2"
+
+[workspace.dependencies]
+anyhow = "1.0.98"
+log = "0.4.27"
+tokio = { version = "1.45.1", features = ["full"] }
+tower-lsp = "0.20.0"
+tree-sitter = "0.25.6"
+tree-sitter-groovy = { git = "https://github.com/adibfarrasy/tree-sitter-groovy" }
+tree-sitter-java = { git = "https://github.com/adibfarrasy/tree-sitter-java" }
+tree-sitter-kotlin = { git = "https://github.com/adibfarrasy/tree-sitter-kotlin" }
+walkdir = "2.0"
+num_cpus = "1.0"
+futures = "0.3"
+dirs = "6.0.0"
+serde_json = "1.0.140"
+chrono = "0.4.41"
+just = "1.40.0"
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+zip = "4.1.0"
+rayon = "1.10.0"
+serde = { version = "1.0.219", features = ["derive"] }
+sqlx = { version = "0.8", features = ["runtime-tokio-native-tls", "sqlite"] }
+bincode = "1.3.3"
+sha2 = "0.10.9"
+tempfile = "3.12.0"
+
