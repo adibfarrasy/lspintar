@@ -1,0 +1,1 @@
+- didChange doesn't reindex

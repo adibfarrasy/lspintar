@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, types::Json};
+use tower_lsp::lsp_types::{Location, Position, Range, Url};
 
 #[derive(Debug, Clone, FromRow, PartialEq, Eq)]
 pub struct Symbol {
@@ -55,4 +56,23 @@ pub struct SymbolMetadata {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub annotations: Option<Vec<String>>,
+}
+
+impl Symbol {
+    pub fn to_lsp_location(&self) -> Option<Location> {
+        let uri = Url::from_file_path(&self.file_path).ok()?;
+        Some(Location {
+            uri: uri,
+            range: Range {
+                start: Position {
+                    line: self.ident_line_start as u32,
+                    character: self.ident_char_start as u32,
+                },
+                end: Position {
+                    line: self.ident_line_end as u32,
+                    character: self.ident_char_end as u32,
+                },
+            },
+        })
+    }
 }

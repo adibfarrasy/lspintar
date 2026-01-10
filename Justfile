@@ -10,10 +10,10 @@ test:
     @echo "Running all tests..."
     @cargo test
 
-reset-db:
-    rm dev.db
-    export DATABASE_URL="sqlite:./dev.db"
-    sqlx database create
+reset-db filter="./dev.db":
+    rm -f {{filter}}
+    export DATABASE_URL="sqlite:{{filter}}" && \
+    sqlx database create && \
     sqlx migrate run
 
 tp filter="":

@@ -28,10 +28,8 @@ impl Indexer {
         }
     }
 
-    pub fn register_language(&mut self, extensions: Vec<&str>, lang: Arc<dyn LanguageSupport>) {
-        for ext in extensions {
-            self.languages.insert(ext.to_string(), lang.clone());
-        }
+    pub fn register_language(&mut self, ext: &str, lang: Arc<dyn LanguageSupport>) {
+        self.languages.insert(ext.to_string(), lang.clone());
     }
 
     pub async fn index_workspace(&self, path: &Path) -> Result<()> {
@@ -77,6 +75,7 @@ impl Indexer {
             tree.root_node(),
             lang,
             &parent_name,
+            false,
             &mut symbols,
             path,
             content,
@@ -89,15 +88,23 @@ impl Indexer {
         node: Node,
         lang: &dyn LanguageSupport,
         parent_name: &str,
+        is_type_parent: bool,
         symbols: &mut Vec<Symbol>,
         path: &Path,
         content: &str,
     ) -> Result<()> {
-        let new_parent = if lang.should_index(&node) {
+        let node_type = lang.get_type(&node);
+        let (new_parent, new_is_type_parent) = if lang.should_index(&node) {
             let short_name = lang
                 .get_short_name(&node, content)
                 .context("Failed to get short name")?;
-            let fqn = format!("{}.{}", parent_name, short_name);
+            let fqn = match node_type {
+                Some(NodeType::Class | NodeType::Interface | NodeType::Enum) => {
+                    let sep = if is_type_parent { "$" } else { "." };
+                    format!("{}{}{}", parent_name, sep, short_name)
+                }
+                _ => format!("{}.{}", parent_name, short_name),
+            };
 
             let range = lang.get_range(&node).context("Failed to get range")?;
             let ident_range = lang
@@ -110,7 +117,6 @@ impl Indexer {
             let modifiers = lang.get_modifiers(&node, content);
             let implements = lang.get_implements(&node, content);
 
-            let node_type = lang.get_type(&node);
             let documentation = lang.get_documentation(&node, content);
             let annotations = lang.get_annotations(&node, content);
 
@@ -136,10 +142,7 @@ impl Indexer {
 
                     metadata.parameters = Some(symbol_params);
 
-                    let ret = lang
-                        .get_return(&node, content)
-                        .context("failed to get function return type")?;
-                    metadata.return_type = Some(ret);
+                    metadata.return_type = lang.get_return(&node, content);
                 }
                 Some(NodeType::Field) => {
                     let ret = lang
@@ -152,13 +155,13 @@ impl Indexer {
 
             symbols.push(Symbol {
                 id: None,
-                vcs_branch: self.vcs.get_branch().ok().unwrap(),
+                vcs_branch: self.vcs.get_current_branch().ok().unwrap(),
                 short_name: short_name,
                 fully_qualified_name: fqn.clone(),
                 parent_name: Some(parent_name.to_string()),
                 file_path: path.to_string_lossy().to_string(),
                 file_type: lang.get_language().to_string(),
-                symbol_type: node_type.expect("unknown node type").to_string(),
+                symbol_type: node_type.clone().expect("unknown node type").to_string(),
                 modifiers: Json::from(modifiers),
                 line_start: range.start.line as i64,
                 line_end: range.end.line as i64,
@@ -174,13 +177,25 @@ impl Indexer {
                 last_modified: now as i64,
             });
 
-            fqn
+            let is_next_type = matches!(
+                node_type,
+                Some(NodeType::Class | NodeType::Interface | NodeType::Enum)
+            );
+            (fqn, is_next_type)
         } else {
-            parent_name.to_string()
+            (parent_name.to_string(), is_type_parent)
         };
 
         for child in node.children(&mut node.walk()) {
-            self.dfs(child, lang, &new_parent, symbols, path, content)?;
+            self.dfs(
+                child,
+                lang,
+                &new_parent,
+                new_is_type_parent,
+                symbols,
+                path,
+                content,
+            )?;
         }
 
         Ok(())

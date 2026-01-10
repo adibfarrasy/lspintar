@@ -1,13 +1,15 @@
 use lsp_core::{
-    language_support::{LanguageSupport, ParameterResult, ParseResult},
+    language_support::{IdentResult, LanguageSupport, ParameterResult, ParseResult},
     languages::Language,
     node_types::NodeType,
-    ts_helper,
+    ts_helper::{self, node_contains_position},
 };
 use std::{fs, path::Path, sync::Mutex};
 
 use tower_lsp::lsp_types::{Position, Range};
-use tree_sitter::{Node, Parser, Tree};
+use tree_sitter::{Node, Parser, Query, QueryCursor, QueryMatch, StreamingIterator, Tree};
+
+use crate::constants::GROOVY_IMPLICIT_IMPORTS;
 
 pub struct GroovySupport {
     parser: Mutex<Parser>,
@@ -22,6 +24,43 @@ impl GroovySupport {
         Self {
             parser: Mutex::new(parser),
         }
+    }
+
+    fn try_extract_ident_result(
+        &self,
+        query: &Query,
+        match_: &QueryMatch,
+        content: &str,
+        position: &Position,
+        name: &str,
+        qual: Option<&str>,
+    ) -> Option<IdentResult> {
+        let name_idx = query.capture_index_for_name(name);
+        let name_cap = match_.captures.iter().find(|c| Some(c.index) == name_idx)?;
+
+        if !node_contains_position(&name_cap.node, position) {
+            return None;
+        }
+
+        let ident = name_cap
+            .node
+            .utf8_text(content.as_bytes())
+            .ok()?
+            .to_string();
+
+        let qualifier = if let Some(qual_name) = qual {
+            let qual_idx = query.capture_index_for_name(qual_name);
+            match_
+                .captures
+                .iter()
+                .find(|c| Some(c.index) == qual_idx)
+                .and_then(|cap| cap.node.utf8_text(content.as_bytes()).ok())
+                .map(|s| s.to_string())
+        } else {
+            None
+        };
+
+        Some((ident, qualifier))
     }
 }
 
@@ -92,9 +131,14 @@ impl LanguageSupport for GroovySupport {
         })
     }
 
-    fn get_package_name(&self, tree: &Tree, source: &str) -> Option<String> {
+    fn get_package_name(&self, tree: &Tree, content: &str) -> Option<String> {
         let query_str = "(package_declaration (scoped_identifier) @package)";
-        ts_helper::get_one(self.get_ts_language(), &tree.root_node(), source, query_str)
+        ts_helper::get_one(
+            self.get_ts_language(),
+            &tree.root_node(),
+            content,
+            query_str,
+        )
     }
 
     fn get_type(&self, node: &Node) -> Option<NodeType> {
@@ -227,9 +271,124 @@ impl LanguageSupport for GroovySupport {
             _ => None,
         }
     }
+
+    fn get_imports(&self, tree: &Tree, source: &str) -> Vec<String> {
+        let query_str = "(import_declaration) @doc";
+        let explicit_imports =
+            ts_helper::get_many(self.get_ts_language(), &tree.root_node(), source, query_str)
+                .into_iter()
+                .map(|i| i.strip_prefix("import ").unwrap_or_default().to_string())
+                .collect::<Vec<String>>();
+
+        GROOVY_IMPLICIT_IMPORTS
+            .iter()
+            .map(|s| s.to_string())
+            .chain(explicit_imports)
+            .collect()
+    }
+
+    fn get_type_at_position(
+        &self,
+        tree: &Tree,
+        content: &str,
+        position: &Position,
+    ) -> Option<String> {
+        let query_text = "(type_identifier) @identifier";
+        let query = Query::new(&tree.language(), query_text).ok()?;
+
+        let mut result = None;
+
+        let mut cursor = QueryCursor::new();
+        cursor
+            .matches(&query, tree.root_node(), content.as_bytes())
+            .find(|match_| {
+                for capture in match_.captures.iter() {
+                    let node = capture.node;
+                    if node_contains_position(&node, position) {
+                        let ident_name = node
+                            .utf8_text(content.as_bytes())
+                            .unwrap_or_default()
+                            .to_string();
+
+                        result = Some(ident_name);
+                    }
+                }
+
+                result.is_some()
+            });
+
+        result
+    }
+
+    fn get_ident_at_position(
+        &self,
+        tree: &Tree,
+        content: &str,
+        position: &Position,
+    ) -> Option<IdentResult> {
+        let query_text = r#"
+            (expression_statement (identifier) @trivial_case)
+
+            (method_invocation
+                object: (_) @method_qualifier
+                name: (identifier) @method_name)
+
+            (method_invocation
+                object: (this) @this_qualifier
+                name: (identifier) @this_method_name)
+
+            (field_access
+                object: (_) @field_qualifier
+                field: (identifier) @field_name)
+
+            (argument_list (identifier) @arg_name)
+
+            (variable_declarator (identifier) @var_decl)
+        "#;
+        let query = Query::new(&tree.language(), query_text).ok()?;
+        let mut cursor = QueryCursor::new();
+        let mut result = None;
+
+        cursor
+            .matches(&query, tree.root_node(), content.as_bytes())
+            .for_each(|m| {
+                if result.is_some() {
+                    return;
+                }
+
+                println!("Match pattern_index: {}", m.pattern_index);
+                for cap in m.captures {
+                    let name = query.capture_names()[cap.index as usize];
+                    let text = cap.node.utf8_text(content.as_bytes()).ok();
+                    println!("  Capture '{}': {:?}", name, text);
+                }
+
+                vec![
+                    ("trivial_case", None),
+                    ("method_name", Some("method_qualifier")),
+                    ("this_method_name", Some("this_qualifier")),
+                    ("field_name", Some("field_qualifier")),
+                    ("arg_name", None),
+                    ("var_decl", None),
+                ]
+                .into_iter()
+                .for_each(|(name, qual)| {
+                    if let Some(r) =
+                        self.try_extract_ident_result(&query, &m, content, position, name, qual)
+                    {
+                        result = Some(r);
+                        return;
+                    }
+                });
+            });
+
+        result
+    }
 }
 
 mod tests {
+    use tree_sitter::Point;
+
     use super::*;
 
     fn find_node_by_kind<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {
@@ -514,5 +673,184 @@ mod tests {
         let node = find_node_by_kind(parsed.0.root_node(), "field_declaration").unwrap();
         let ret = support.get_return(&node, &parsed.1);
         assert_eq!(ret, Some("String".to_string()));
+    }
+
+    #[test]
+    fn test_get_imports() {
+        let support = GroovySupport::new();
+        let content = "package com.example.app\n\nimport com.example.Foo\nimport java.lang.*";
+        let parsed = support.parse_str(&content).expect("cannot parse content");
+
+        let node_names = support.get_imports(&parsed.0, &parsed.1);
+        assert_eq!(
+            node_names,
+            GROOVY_IMPLICIT_IMPORTS
+                .iter()
+                .map(|s| s.to_string())
+                .chain(vec![
+                    "com.example.Foo".to_string(),
+                    "java.lang.*".to_string()
+                ])
+                .collect::<Vec<String>>()
+        );
+    }
+
+    fn find_position(content: &str, marker: &str) -> Position {
+        content
+            .lines()
+            .enumerate()
+            .find_map(|(line_num, line)| {
+                line.find(marker)
+                    .map(|col| Position::new(line_num as u32, col as u32))
+            })
+            .expect(&format!("Marker '{}' not found", marker))
+    }
+
+    #[test]
+    fn test_get_ident_at_position() {
+        let support = GroovySupport::new();
+
+        let content = r#"
+        class Foo {
+            void test() {
+                def bar = new Bar()
+                bar;
+            }
+        }
+        "#;
+        let parsed = support.parse_str(&content).expect("cannot parse content");
+        let pos = find_position(content, "bar;");
+        let ident = support.get_ident_at_position(&parsed.0, &parsed.1, &pos);
+        assert_eq!(ident, Some(("bar".to_string(), None)));
+
+        let content = r#"
+        class Foo {
+            void test() {
+                def bar = new Bar()
+                bar.baz() 
+            }
+        }
+        "#;
+        let parsed = support.parse_str(&content).expect("cannot parse content");
+        let pos = find_position(content, "baz");
+        let ident = support.get_ident_at_position(&parsed.0, &parsed.1, &pos);
+        assert_eq!(ident, Some(("baz".to_string(), Some("bar".to_string()))));
+
+        let content = r#"
+        class Foo {
+            void test() {
+                def bar = new Bar()
+                bar.name 
+            }
+        }
+        "#;
+        let parsed = support.parse_str(&content).expect("cannot parse content");
+        let pos = find_position(content, "name");
+        let ident = support.get_ident_at_position(&parsed.0, &parsed.1, &pos);
+        assert_eq!(ident, Some(("name".to_string(), Some("bar".to_string()))));
+
+        let content = r#"
+        class Foo {
+            void test() {
+                def bar = new Bar()
+                println(bar)
+            }
+        }"#;
+        let parsed = support.parse_str(&content).expect("cannot parse content");
+        let pos = find_position(content, "bar)"); // Second 'bar'
+        let ident = support.get_ident_at_position(&parsed.0, &parsed.1, &pos);
+        assert_eq!(ident, Some(("bar".to_string(), None)));
+
+        let content = r#"
+        class Foo {
+            void test() {
+                Bar myBar = someOtherVar
+            }
+        }"#;
+        let parsed = support.parse_str(&content).expect("cannot parse content");
+        let pos = find_position(content, "someOtherVar");
+        let ident = support.get_ident_at_position(&parsed.0, &parsed.1, &pos);
+        assert_eq!(ident, Some(("someOtherVar".to_string(), None)));
+
+        let content = r#"
+        class Foo {
+            void test() {
+                this.doSomething()
+            }
+        }"#;
+        let parsed = support.parse_str(&content).expect("cannot parse content");
+        let pos = find_position(content, "doSomething");
+        let ident = support.get_ident_at_position(&parsed.0, &parsed.1, &pos);
+        assert_eq!(
+            ident,
+            Some(("doSomething".to_string(), Some("this".to_string())))
+        );
+
+        let content = r#"
+        class Foo {
+            void test() {
+                user.getProfile().getName()
+            }
+        }"#;
+        let parsed = support.parse_str(&content).expect("cannot parse content");
+        let pos = find_position(content, "getName");
+        let ident = support.get_ident_at_position(&parsed.0, &parsed.1, &pos);
+        assert_eq!(
+            ident,
+            Some(("getName".to_string(), Some("user.getProfile()".to_string())))
+        );
+
+        let content = r#"
+        class Foo {
+            void test() {
+                UserService.createUser()
+            }
+        }"#;
+        let parsed = support.parse_str(&content).expect("cannot parse content");
+        let pos = find_position(content, "createUser");
+        let ident = support.get_ident_at_position(&parsed.0, &parsed.1, &pos);
+        assert_eq!(
+            ident,
+            Some(("createUser".to_string(), Some("UserService".to_string())))
+        );
+
+        let content = r#"
+        class Foo {
+            void test() {
+                user.profile.name
+            }
+        }"#;
+        let parsed = support.parse_str(&content).expect("cannot parse content");
+        let pos = find_position(content, "name");
+        let ident = support.get_ident_at_position(&parsed.0, &parsed.1, &pos);
+        assert_eq!(
+            ident,
+            Some(("name".to_string(), Some("user.profile".to_string())))
+        );
+
+        let content = r#"
+        class Foo {
+            void test(User user) {
+                user;
+            }
+        }"#;
+        let parsed = support.parse_str(&content).expect("cannot parse content");
+        let pos = find_position(content, "user;");
+        let ident = support.get_ident_at_position(&parsed.0, &parsed.1, &pos);
+        assert_eq!(ident, Some(("user".to_string(), None)));
+
+        let content = r#"
+        class Foo {
+            void test() {
+                def list = [1, 2, 3]
+                list.each { item -> 
+                    println(item)
+                }
+            }
+        }"#;
+        let parsed = support.parse_str(&content).expect("cannot parse content");
+        let pos = find_position(content, "item)");
+        let ident = support.get_ident_at_position(&parsed.0, &parsed.1, &pos);
+        assert_eq!(ident, Some(("item".to_string(), None)));
     }
 }

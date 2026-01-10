@@ -1,11 +1,12 @@
-use tree_sitter::{Node, Query, QueryCursor, StreamingIterator};
+use tower_lsp::lsp_types::Position;
+use tree_sitter::{Node, Query, QueryCursor, StreamingIterator, Tree};
 
 use crate::language_support::ParameterResult;
 
 pub fn get_one(
     language: tree_sitter::Language,
     node: &Node,
-    source: &str,
+    content: &str,
     query_str: &str,
 ) -> Option<String> {
     let query = Query::new(&language, query_str)
@@ -13,19 +14,19 @@ pub fn get_one(
         .expect("failed to instantiate query");
 
     let mut cursor = QueryCursor::new();
-    let mut matches = cursor.matches(&query, *node, source.as_bytes());
+    let mut matches = cursor.matches(&query, *node, content.as_bytes());
 
     matches.next().and_then(|m| {
         m.captures
             .first()
-            .and_then(|c| c.node.utf8_text(source.as_bytes()).ok().map(String::from))
+            .and_then(|c| c.node.utf8_text(content.as_bytes()).ok().map(String::from))
     })
 }
 
 pub fn get_many(
     language: tree_sitter::Language,
     node: &Node,
-    source: &str,
+    content: &str,
     query_str: &str,
 ) -> Vec<String> {
     let query = Query::new(&language, query_str)
@@ -36,10 +37,10 @@ pub fn get_many(
 
     let mut results = Vec::new();
     cursor
-        .matches(&query, *node, source.as_bytes())
+        .matches(&query, *node, content.as_bytes())
         .for_each(|m| {
             for capture in m.captures {
-                if let Ok(text) = capture.node.utf8_text(source.as_bytes()) {
+                if let Ok(text) = capture.node.utf8_text(content.as_bytes()) {
                     results.push(text.to_string());
                 }
             }
@@ -65,4 +66,12 @@ pub fn parse_parameter(param: &str) -> ParameterResult {
         // No whitespace = untyped parameter (for Groovy)
         (type_and_name.to_string(), None, default.map(String::from))
     }
+}
+
+pub fn node_contains_position(node: &Node, position: &Position) -> bool {
+    let (start, end) = (node.start_position(), node.end_position());
+    let (line, char) = (position.line as usize, position.character as usize);
+
+    (start.row < line || (start.row == line && start.column <= char))
+        && (line < end.row || (line == end.row && char <= end.column))
 }

@@ -1,3 +1,4 @@
+mod constants;
 mod definition;
 mod groovy_support;
 mod hover;

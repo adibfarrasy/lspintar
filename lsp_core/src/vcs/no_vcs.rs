@@ -11,7 +11,7 @@ impl VcsHandler for NoVcs {
         false
     }
 
-    fn get_branch(&self) -> Result<String> {
+    fn get_current_branch(&self) -> Result<String> {
         Ok("NONE".to_string())
     }
 }

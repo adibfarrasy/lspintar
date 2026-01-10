@@ -10,7 +10,7 @@ impl VcsHandler for GitHandler {
         false
     }
 
-    fn get_branch(&self) -> Result<String> {
+    fn get_current_branch(&self) -> Result<String> {
         todo!()
     }
 }

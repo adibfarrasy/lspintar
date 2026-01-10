@@ -1,6 +1,8 @@
 package com.example
 
-class UserService {
+import java.io.Serializable;
+
+class UserService extends BaseService implements Serializable {
     private Repository repo
 
     @Getter
@@ -10,5 +12,10 @@ class UserService {
     @CompileDynamic
     User findUser(String id) {
         return repo.find(id)
+    }
+
+    @Override
+    void execute() {
+        println("Executing user service")
     }
 }

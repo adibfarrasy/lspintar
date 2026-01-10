@@ -1,0 +1,11 @@
+subprojects {
+    apply plugin: 'groovy'
+    
+    repositories {
+        mavenCentral()
+    }
+    
+    dependencies {
+        implementation 'org.apache.groovy:groovy-all:4.0.15'
+    }
+}
