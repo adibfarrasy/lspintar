@@ -6,7 +6,7 @@ edition = "2024"
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 pretty_assertions = "1.4"
-serial_test = "3"
+uuid = { version = "1", features = ["v4"] }
 
 [dependencies]
 lsp_core = { path = "../lsp_core" }
