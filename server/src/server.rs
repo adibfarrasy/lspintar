@@ -112,7 +112,7 @@ impl Backend {
             .flatten()
     }
 
-    async fn try_this_member(
+    async fn try_instance_member(
         &self,
         qualifier: &str,
         member: &str,
@@ -130,7 +130,7 @@ impl Backend {
             .resolve_fqn(&var_type, imports.clone(), package_name.clone())
             .await?;
 
-        let mut visited = std::collections::HashSet::new();
+        let mut visited = HashSet::new();
         self.try_member_with_inheritance(
             &type_fqn,
             member,
@@ -158,7 +158,6 @@ impl Backend {
         // Try direct member
         let member_fqn = format!("{}.{}", type_fqn, member);
 
-        println!("I'm here 1 {}", member_fqn);
         if let Ok(Some(found)) = self
             .repo
             .find_symbol_by_fqn_and_branch(&member_fqn, branch)
@@ -179,8 +178,6 @@ impl Backend {
             .await
             .ok()??;
 
-        println!("I'm here 2 {}", type_fqn);
-
         // Try superclass
         if let Some(super_name) = type_symbol.extends_name {
             if let Some(symbol) = self
@@ -198,7 +195,6 @@ impl Backend {
             }
         }
 
-        println!("I'm here 3 {}", type_fqn);
         // Try interfaces
         if !type_symbol.implements_names.0.is_empty() {
             for super_name in &type_symbol.implements_names.0 {
@@ -378,11 +374,21 @@ impl LanguageServer for Backend {
             let package_name = lang.get_package_name(&tree, &content);
 
             let position = params.text_document_position_params.position;
-            let name = if let Some(type_name) =
+
+            if let Some(type_name) =
                 lang.get_type_at_position(tree.root_node(), &content, &position)
             {
-                type_name
-            } else if let Some((ident, qualifier)) =
+                let fqn = self
+                    .resolve_fqn(&type_name, imports, package_name)
+                    .await
+                    .ok_or(tower_lsp::jsonrpc::Error::invalid_params(format!(
+                        "Failed to find FQN by location",
+                    )))?;
+
+                return Ok(Some(self.symbol_to_response(fqn, &branch).await?));
+            };
+
+            if let Some((ident, qualifier)) =
                 lang.find_ident_at_position(&tree, &content, &position)
             {
                 match qualifier {
@@ -404,7 +410,33 @@ impl LanguageServer for Backend {
                         }
 
                         if let Some(symbol) = self
-                            .try_this_member(
+                            .try_instance_member(
+                                &q,
+                                &ident,
+                                &lang,
+                                &tree,
+                                &content,
+                                imports.clone(),
+                                &branch,
+                                &position,
+                                package_name.clone(),
+                            )
+                            .await
+                        {
+                            return Ok(Some(
+                                symbol
+                                    .to_lsp_location()
+                                    .map(GotoDefinitionResponse::from)
+                                    .ok_or_else(|| {
+                                        tower_lsp::jsonrpc::Error::invalid_params(
+                                            "Failed to convert to location".to_string(),
+                                        )
+                                    })?,
+                            ));
+                        }
+
+                        if let Some(symbol) = self
+                            .try_instance_member(
                                 &q,
                                 &ident,
                                 &lang,
@@ -429,45 +461,32 @@ impl LanguageServer for Backend {
                             ));
                         }
 
-                        // Strategy 3: Resolve qualifier as a variable (instance member access)
-                        // Examples: user.getName(), bar.field
-                        // - Use find_variable_type() to get the type of the variable
-                        // - Resolve that type to FQN using imports/package
-                        // - Build member FQN as "VariableType.memberName"
-                        // - Check if member exists
-                        // - If found, return member FQN
-
                         // Strategy 4: Handle chained calls (advanced - maybe defer)
                         // Examples: user.getProfile().getName()
                         // - Would need to evaluate left-to-right
                         // - Find type of "user", then return type of "getProfile()", etc.
                         // - This is complex, consider skipping for MVP
 
-                        // Strategy 5: Fallback - try to resolve the qualifier itself
-                        // If we can't find the member, at least try jumping to the qualifier's definition
-                        // Examples: UnknownClass.someMethod() -> jump to UnknownClass
-                        // - Resolve qualifier to FQN
-                        // - Return qualifier FQN instead of member FQN
-
                         return Err(tower_lsp::jsonrpc::Error::invalid_params(
                             "Qualifier found but failed to resolve".to_string(),
                         ));
                     }
-                    None => ident,
+                    None => {
+                        let fqn = self
+                            .resolve_fqn(&ident, imports, package_name)
+                            .await
+                            .ok_or(tower_lsp::jsonrpc::Error::invalid_params(format!(
+                                "Failed to find FQN by location",
+                            )))?;
+
+                        return Ok(Some(self.symbol_to_response(fqn, &branch).await?));
+                    }
                 }
             } else {
                 return Err(tower_lsp::jsonrpc::Error::invalid_params(
                     "Failed to get ident/type name".to_string(),
                 ));
             };
-
-            let fqn = self.resolve_fqn(&name, imports, package_name).await.ok_or(
-                tower_lsp::jsonrpc::Error::invalid_params(format!(
-                    "Failed to find FQN by location",
-                )),
-            )?;
-
-            return Ok(Some(self.symbol_to_response(fqn, &branch).await?));
         };
 
         Ok(None)

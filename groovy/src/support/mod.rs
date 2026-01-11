@@ -223,8 +223,14 @@ impl GroovySupport {
                 break;
             }
 
+            println!(
+                "Kind '{}', text: '{}'",
+                child.kind(),
+                child.utf8_text(content.as_bytes()).unwrap()
+            );
+
             match child.kind() {
-                "variable_declaration" | "field_declaration" => {
+                "variable_declaration" | "field_declaration" | "parameter" => {
                     if self.declares_variable(child, content, var_name) {
                         let type_node = child.child_by_field_name("type")?;
 
@@ -235,22 +241,14 @@ impl GroovySupport {
                         return self.get_type_at_position(child, content, &position);
                     }
                 }
-                "parameters" => {
+                "expression_statement"
+                | "assignment_expression"
+                | "object_creation_expression"
+                | "parameters" => {
                     if let Some(var_type) =
                         self.find_in_current_scope(child, content, var_name, reference_byte)
                     {
                         return Some(var_type);
-                    }
-                }
-                "parameter" => {
-                    if self.declares_variable(child, content, var_name) {
-                        let type_node = child.child_by_field_name("type")?;
-
-                        let position = Position {
-                            line: type_node.start_position().row as u32,
-                            character: type_node.start_position().column as u32,
-                        };
-                        return self.get_type_at_position(child, content, &position);
                     }
                 }
                 _ => {}

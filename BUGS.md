@@ -1,3 +1,2 @@
 - didChange doesn't reindex
-- haven't handled go to definition when the cursor is at the qualifier
-    - e.g. cursor is at obj in the obj.myMethod() chain.
+- haven't handled method overloading

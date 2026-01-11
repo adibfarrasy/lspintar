@@ -45,7 +45,7 @@ async fn get_server() -> TestServer {
 }
 
 #[tokio::test]
-async fn test_goto_definition_simple() {
+async fn test_simple() {
     let server = get_server().await;
 
     let root = env::current_dir().expect("cannot get current dir");
@@ -86,7 +86,7 @@ async fn test_goto_definition_simple() {
 }
 
 #[tokio::test]
-async fn test_goto_definition_static_member() {
+async fn test_static_member() {
     let server = get_server().await;
 
     let root = env::current_dir().expect("cannot get current dir");
@@ -97,7 +97,7 @@ async fn test_goto_definition_static_member() {
                 uri: Url::from_file_path(root.join("tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy"))
                     .expect("cannot parse root URI"),
             },
-            position: Position::new(35, 37),
+            position: Position::new(34, 37),
         },
         work_done_progress_params: WorkDoneProgressParams::default(),
         partial_result_params: PartialResultParams::default(),
@@ -127,7 +127,7 @@ async fn test_goto_definition_static_member() {
 }
 
 #[tokio::test]
-async fn test_goto_definition_this_member() {
+async fn test_this_member() {
     let server = get_server().await;
 
     let root = env::current_dir().expect("cannot get current dir");
@@ -138,7 +138,7 @@ async fn test_goto_definition_this_member() {
                 uri: Url::from_file_path(root.join("tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy"))
                     .expect("cannot parse root URI"),
             },
-            position: Position::new(42, 14),
+            position: Position::new(41, 14),
         },
         work_done_progress_params: WorkDoneProgressParams::default(),
         partial_result_params: PartialResultParams::default(),
@@ -168,7 +168,7 @@ async fn test_goto_definition_this_member() {
 }
 
 #[tokio::test]
-async fn test_goto_definition_this_super_member() {
+async fn test_this_super_member() {
     let server = get_server().await;
 
     let root = env::current_dir().expect("cannot get current dir");
@@ -179,7 +179,7 @@ async fn test_goto_definition_this_super_member() {
                 uri: Url::from_file_path(root.join("tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy"))
                     .expect("cannot parse root URI"),
             },
-            position: Position::new(45, 14),
+            position: Position::new(44, 14),
         },
         work_done_progress_params: WorkDoneProgressParams::default(),
         partial_result_params: PartialResultParams::default(),
@@ -201,6 +201,47 @@ async fn test_goto_definition_this_super_member() {
             end: Position {
                 line: 7,
                 character: 22,
+            },
+        },
+    );
+
+    assert_eq!(result.unwrap(), GotoDefinitionResponse::from(location));
+}
+
+#[tokio::test]
+async fn test_instance_member_access() {
+    let server = get_server().await;
+
+    let root = env::current_dir().expect("cannot get current dir");
+
+    let params = GotoDefinitionParams {
+        text_document_position_params: TextDocumentPositionParams {
+            text_document: TextDocumentIdentifier {
+                uri: Url::from_file_path(root.join("tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy"))
+                    .expect("cannot parse root URI"),
+            },
+            position: Position::new(53, 43),
+        },
+        work_done_progress_params: WorkDoneProgressParams::default(),
+        partial_result_params: PartialResultParams::default(),
+    };
+
+    let result = server.backend.goto_definition(params).await.unwrap();
+    assert!(result.is_some());
+
+    let location = Location::new(
+        Url::from_file_path(root.join(
+            "/Users/adibf/Projects/lspintar-ws/lspintar/server/tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy",
+        ))
+        .unwrap(),
+        Range {
+            start: Position {
+                line: 27,
+                character: 16,
+            },
+            end: Position {
+                line: 27,
+                character: 23,
             },
         },
     );

@@ -25,7 +25,6 @@ class UserController extends BaseService implements DataProcessor {
         process(data)
     }
 
-    @Override
     ApiResponse process(Map<String, Object> data) {
         log("Processing user data: $data")
     }
@@ -62,10 +61,5 @@ class UserController extends BaseService implements DataProcessor {
         // Requires: resolve controller type -> UserController,
         //           resolve getConfig() return type -> DataConfig (from BaseService)
         String env = controller.getConfig().getEnvironment()
-        
-        // Strategy 5: Fallback to qualifier
-        // If someUnknownMethod doesn't exist in database:
-        // Cursor on someUnknownMethod -> should at least jump to UserController definition
-        controller.someUnknownMethod()
     }
 }

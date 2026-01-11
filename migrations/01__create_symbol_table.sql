@@ -38,4 +38,4 @@ CREATE INDEX idx_vcs_branch ON symbols(vcs_branch);
 CREATE INDEX idx_extends ON symbols(extends_name);
 CREATE INDEX idx_symbol_type ON symbols(symbol_type);
 CREATE INDEX idx_file_path ON symbols(file_path);
-CREATE UNIQUE INDEX idx_symbol_unique ON symbols(vcs_branch, file_path, fully_qualified_name);
+CREATE UNIQUE INDEX idx_symbol_unique ON symbols(vcs_branch, file_path, fully_qualified_name, metadata);
