@@ -1,6 +1,11 @@
 use groovy::GroovySupport;
 use lsp_core::{language_support::LanguageSupport, util::capitalize, vcs::get_vcs_handler};
-use std::{collections::HashMap, path::PathBuf, str::FromStr, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+    str::FromStr,
+    sync::Arc,
+};
 use tokio::sync::RwLock;
 use tower_lsp::LanguageServer;
 use tower_lsp::jsonrpc::Result;
@@ -115,18 +120,45 @@ impl Backend {
         tree: &Tree,
         content: &str,
         imports: Vec<String>,
-        package_name: &Option<String>,
         branch: &str,
         position: &Position,
+        package_name: Option<String>,
     ) -> Option<Symbol> {
         let var_type = lang.find_variable_type(tree, content, qualifier, position)?;
 
         let type_fqn = self
-            .resolve_fqn(&var_type, imports, package_name.clone())
+            .resolve_fqn(&var_type, imports.clone(), package_name.clone())
             .await?;
 
+        let mut visited = std::collections::HashSet::new();
+        self.try_member_with_inheritance(
+            &type_fqn,
+            member,
+            branch,
+            &mut visited,
+            imports,
+            &package_name,
+        )
+        .await
+    }
+
+    async fn try_member_with_inheritance(
+        &self,
+        type_fqn: &str,
+        member: &str,
+        branch: &str,
+        visited: &mut HashSet<String>,
+        imports: Vec<String>,
+        package_name: &Option<String>,
+    ) -> Option<Symbol> {
+        if !visited.insert(type_fqn.to_string()) {
+            return None;
+        }
+
+        // Try direct member
         let member_fqn = format!("{}.{}", type_fqn, member);
 
+        println!("I'm here 1 {}", member_fqn);
         if let Ok(Some(found)) = self
             .repo
             .find_symbol_by_fqn_and_branch(&member_fqn, branch)
@@ -135,7 +167,93 @@ impl Backend {
             return Some(found);
         }
 
-        self.try_property_access(&type_fqn, member, branch).await
+        // Try property access
+        if let Some(found) = self.try_property_access(type_fqn, member, branch).await {
+            return Some(found);
+        }
+
+        // Get class/interface info to find parents
+        let type_symbol = self
+            .repo
+            .find_symbol_by_fqn_and_branch(type_fqn, branch)
+            .await
+            .ok()??;
+
+        println!("I'm here 2 {}", type_fqn);
+
+        // Try superclass
+        if let Some(super_name) = type_symbol.extends_name {
+            if let Some(symbol) = self
+                .recurse_try_member_with_inheritance(
+                    &super_name,
+                    member,
+                    branch,
+                    visited,
+                    imports.clone(),
+                    package_name,
+                )
+                .await
+            {
+                return Some(symbol);
+            }
+        }
+
+        println!("I'm here 3 {}", type_fqn);
+        // Try interfaces
+        if !type_symbol.implements_names.0.is_empty() {
+            for super_name in &type_symbol.implements_names.0 {
+                if let Some(symbol) = self
+                    .recurse_try_member_with_inheritance(
+                        &super_name,
+                        member,
+                        branch,
+                        visited,
+                        imports.clone(),
+                        package_name,
+                    )
+                    .await
+                {
+                    return Some(symbol);
+                }
+            }
+        }
+
+        None
+    }
+
+    async fn recurse_try_member_with_inheritance(
+        &self,
+        parent_short_name: &str,
+        member: &str,
+        branch: &str,
+        visited: &mut HashSet<String>,
+        imports: Vec<String>,
+        package_name: &Option<String>,
+    ) -> Option<Symbol> {
+        let fqn = self
+            .resolve_fqn(&parent_short_name, imports.clone(), package_name.clone())
+            .await
+            .unwrap_or_default();
+        if let Some(parent_symbol) = self
+            .repo
+            .find_symbol_by_fqn_and_branch(&fqn, branch)
+            .await
+            .ok()?
+        {
+            if let Some(symbol) = Box::pin(self.try_member_with_inheritance(
+                &parent_symbol.fully_qualified_name,
+                member,
+                branch,
+                visited,
+                imports,
+                package_name,
+            ))
+            .await
+            {
+                return Some(symbol);
+            }
+        }
+        None
     }
 
     async fn symbol_to_response(
@@ -293,9 +411,9 @@ impl LanguageServer for Backend {
                                 &tree,
                                 &content,
                                 imports,
-                                &package_name,
                                 &branch,
                                 &position,
+                                package_name,
                             )
                             .await
                         {

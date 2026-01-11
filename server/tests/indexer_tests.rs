@@ -292,7 +292,7 @@ async fn test_index_groovy_gradle_multi_workspace() {
             symbol_type: "Class".to_string(),
             modifiers: Json(vec!["abstract".to_string()]),
             line_start: 4,
-            line_end: 12,
+            line_end: 14,
             char_start: 0,
             char_end: 1,
             ident_line_start: 4,

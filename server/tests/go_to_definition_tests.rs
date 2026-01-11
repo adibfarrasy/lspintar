@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use pretty_assertions::assert_eq;
 use server::{Repository, server::Backend};
-use tokio::sync::Mutex;
 use tower_lsp::LanguageServer;
 use tower_lsp::lsp_types::{GotoDefinitionResponse, Location, Range};
 use tower_lsp::{
@@ -14,8 +13,6 @@ use tower_lsp::{
     },
 };
 use uuid::Uuid;
-
-static TEST_SERVER: Mutex<Option<TestServer>> = Mutex::const_new(None);
 
 struct TestServer {
     backend: Backend,
@@ -44,7 +41,7 @@ impl TestServer {
 }
 
 async fn get_server() -> TestServer {
-    TestServer::new().await // Creates NEW TempDir each call
+    TestServer::new().await
 }
 
 #[tokio::test]
@@ -193,17 +190,17 @@ async fn test_goto_definition_this_super_member() {
 
     let location = Location::new(
         Url::from_file_path(root.join(
-            "/Users/adibf/Projects/lspintar-ws/lspintar/server/tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy",
+            "/Users/adibf/Projects/lspintar-ws/lspintar/server/tests/fixtures/groovy-gradle-multi/core/src/main/groovy/com/example/core/BaseService.groovy",
         ))
         .unwrap(),
         Range {
             start: Position {
-                line: 18,
-                character: 9,
+                line: 7,
+                character: 11,
             },
             end: Position {
-                line: 18,
-                character: 16,
+                line: 7,
+                character: 22,
             },
         },
     );
