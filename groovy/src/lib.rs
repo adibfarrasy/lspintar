@@ -1,7 +1,7 @@
 mod constants;
 mod definition;
-mod groovy_support;
 mod hover;
 mod implementation;
+mod support;
 
-pub use groovy_support::GroovySupport;
+pub use support::GroovySupport;

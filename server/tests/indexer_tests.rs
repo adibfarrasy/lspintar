@@ -398,4 +398,48 @@ async fn test_index_groovy_gradle_multi_workspace() {
             last_modified: 0,
         }
     );
+
+    let result = repo
+        .find_symbol_by_fqn("com.example.core.DataProcessor.MAX_BATCH_SIZE")
+        .await
+        .expect("Query failed");
+    assert!(result.is_some(), "Symbol should be found");
+
+    let mut symbol = result.unwrap();
+    symbol.id = None;
+    symbol.last_modified = 0;
+
+    assert_eq!(
+        symbol,
+        Symbol {
+            id: None,
+            vcs_branch: "NONE".to_string(),
+            short_name: "MAX_BATCH_SIZE".to_string(),
+            fully_qualified_name: "com.example.core.DataProcessor.MAX_BATCH_SIZE".to_string(),
+            parent_name: Some("com.example.core.DataProcessor".to_string()),
+            file_path:
+                "tests/fixtures/groovy-gradle-multi/core/src/main/groovy/com/example/core/DataProcessor.groovy"
+                    .to_string(),
+            file_type: "Groovy".to_string(),
+            symbol_type: "Field".to_string(),
+            modifiers: Json(vec!["static".to_string(), "final".to_string()]),
+            line_start: 5,
+            line_end: 5,
+            char_start: 4,
+            char_end: 42,
+            ident_line_start: 5,
+            ident_line_end: 5,
+            ident_char_start: 21,
+            ident_char_end: 35,
+            extends_name: None,
+            implements_names: Json(vec![]),
+            metadata: Json(SymbolMetadata {
+                parameters: None,
+                return_type: Some("int".to_string()),
+                documentation: None,
+                annotations: Some(vec![])
+            }),
+            last_modified: 0,
+        }
+    );
 }

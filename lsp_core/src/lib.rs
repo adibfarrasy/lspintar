@@ -4,4 +4,5 @@ pub mod language_support;
 pub mod languages;
 pub mod node_types;
 pub mod ts_helper;
+pub mod util;
 pub mod vcs;

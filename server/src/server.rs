@@ -1,12 +1,13 @@
 use groovy::GroovySupport;
-use lsp_core::{language_support::LanguageSupport, vcs::get_vcs_handler};
+use lsp_core::{language_support::LanguageSupport, util::capitalize, vcs::get_vcs_handler};
 use std::{collections::HashMap, path::PathBuf, str::FromStr, sync::Arc};
 use tokio::sync::RwLock;
 use tower_lsp::LanguageServer;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
+use tree_sitter::Tree;
 
-use crate::{Indexer, Repository};
+use crate::{Indexer, Repository, models::symbol::Symbol};
 
 pub struct Backend {
     pub client: tower_lsp::Client,
@@ -55,6 +56,112 @@ impl Backend {
                 .map(|pkg| format!("{}.{}", pkg, name))
                 .unwrap_or_else(|| name.to_string()),
         )
+    }
+
+    async fn try_static_member(
+        &self,
+        qualifier: &str,
+        ident: &str,
+        imports: &[String],
+        package_name: &Option<String>,
+        branch: &str,
+    ) -> Option<Symbol> {
+        let class_fqn = self
+            .resolve_fqn(qualifier, imports.to_vec(), package_name.clone())
+            .await?;
+        let member_fqn = format!("{}.{}", class_fqn, ident);
+
+        if let Ok(Some(found)) = self
+            .repo
+            .find_symbol_by_fqn_and_branch(&member_fqn, branch)
+            .await
+        {
+            return Some(found);
+        }
+
+        self.try_property_access(&class_fqn, ident, branch).await
+    }
+
+    async fn try_property_access(
+        &self,
+        class_fqn: &str,
+        ident: &str,
+        branch: &str,
+    ) -> Option<Symbol> {
+        // Try getter
+        let getter_fqn = format!("{}.get{}", class_fqn, capitalize(ident));
+        if let Ok(Some(found)) = self
+            .repo
+            .find_symbol_by_fqn_and_branch(&getter_fqn, branch)
+            .await
+        {
+            return Some(found);
+        }
+
+        // Try boolean getter (isX for boolean properties)
+        let is_getter_fqn = format!("{}.is{}", class_fqn, capitalize(ident));
+        self.repo
+            .find_symbol_by_fqn_and_branch(&is_getter_fqn, branch)
+            .await
+            .ok()
+            .flatten()
+    }
+
+    async fn try_this_member(
+        &self,
+        qualifier: &str,
+        member: &str,
+        lang: &Arc<dyn LanguageSupport>,
+        tree: &Tree,
+        content: &str,
+        imports: Vec<String>,
+        package_name: &Option<String>,
+        branch: &str,
+        position: &Position,
+    ) -> Option<Symbol> {
+        let var_type = lang.find_variable_type(tree, content, qualifier, position)?;
+
+        let type_fqn = self
+            .resolve_fqn(&var_type, imports, package_name.clone())
+            .await?;
+
+        let member_fqn = format!("{}.{}", type_fqn, member);
+
+        if let Ok(Some(found)) = self
+            .repo
+            .find_symbol_by_fqn_and_branch(&member_fqn, branch)
+            .await
+        {
+            return Some(found);
+        }
+
+        self.try_property_access(&type_fqn, member, branch).await
+    }
+
+    async fn symbol_to_response(
+        &self,
+        fqn: String,
+        branch: &str,
+    ) -> Result<GotoDefinitionResponse> {
+        let symbol = self
+            .repo
+            .find_symbol_by_fqn_and_branch(&fqn, branch)
+            .await
+            .map_err(|e| {
+                tower_lsp::jsonrpc::Error::invalid_params(format!("Failed to find symbol: {}", e))
+            })?
+            .ok_or_else(|| {
+                tower_lsp::jsonrpc::Error::invalid_params("Symbol not found".to_string())
+            })?;
+
+        symbol
+            .to_lsp_location()
+            .map(GotoDefinitionResponse::from)
+            .ok_or_else(|| {
+                tower_lsp::jsonrpc::Error::invalid_params(
+                    "Failed to convert to location".to_string(),
+                )
+            })
     }
 }
 
@@ -153,72 +260,88 @@ impl LanguageServer for Backend {
             let package_name = lang.get_package_name(&tree, &content);
 
             let position = params.text_document_position_params.position;
-            let name = lang
-                .get_type_at_position(&tree, &content, &position)
-                .or_else(|| {
-                    lang.get_ident_at_position(&tree, &content, &position)
-                        .and_then(|(ident, qualifier)| {
-                            match qualifier {
-                                Some(q) => {
-                                    // if let Some(class_fqn) = self
-                                    //     .resolve_fqn(
-                                    //         &qualifier,
-                                    //         imports.clone(),
-                                    //         package_name.clone(),
-                                    //     )
-                                    //     .await
-                                    // {
-                                    //     let member_fqn = format!("{}.{}", class_fqn, ident);
-                                    //     // Check if this member exists
-                                    //     if self
-                                    //         .repo
-                                    //         .find_symbol_by_fqn_and_branch(&member_fqn, &branch)
-                                    //         .await
-                                    //         .ok()
-                                    //         .flatten()
-                                    //         .is_some()
-                                    //     {
-                                    //         return Some(member_fqn);
-                                    //     }
-                                    // }
-                                    //
-                                    // // Try 2: Resolve qualifier as a variable (instance access)
-                                    // if let Some(var_type) =
-                                    //     lang.find_variable_type(&tree, &content, &qualifier)
-                                    // {
-                                    //     if let Some(type_fqn) = self
-                                    //         .resolve_fqn(
-                                    //             &var_type,
-                                    //             imports.clone(),
-                                    //             package_name.clone(),
-                                    //         )
-                                    //         .await
-                                    //     {
-                                    //         let member_fqn = format!("{}.{}", type_fqn, ident);
-                                    //         if self
-                                    //             .repo
-                                    //             .find_symbol_by_fqn_and_branch(&member_fqn, &branch)
-                                    //             .await
-                                    //             .ok()
-                                    //             .flatten()
-                                    //             .is_some()
-                                    //         {
-                                    //             return Some(member_fqn);
-                                    //         }
-                                    //     }
-                                    // }
+            let name = if let Some(type_name) =
+                lang.get_type_at_position(tree.root_node(), &content, &position)
+            {
+                type_name
+            } else if let Some((ident, qualifier)) =
+                lang.find_ident_at_position(&tree, &content, &position)
+            {
+                match qualifier {
+                    Some(q) => {
+                        if let Some(symbol) = self
+                            .try_static_member(&q, &ident, &imports, &package_name, &branch)
+                            .await
+                        {
+                            return Ok(Some(
+                                symbol
+                                    .to_lsp_location()
+                                    .map(GotoDefinitionResponse::from)
+                                    .ok_or_else(|| {
+                                        tower_lsp::jsonrpc::Error::invalid_params(
+                                            "Failed to convert to location".to_string(),
+                                        )
+                                    })?,
+                            ));
+                        }
 
-                                    None
-                                }
-                                None => Some(ident),
-                            }
-                        })
-                })
-                .ok_or_else(|| {
-                    tower_lsp::jsonrpc::Error::invalid_params(format!(
-                        "Failed to get ident/type name",
-                    ))
-                })?;
+                        if let Some(symbol) = self
+                            .try_this_member(
+                                &q,
+                                &ident,
+                                &lang,
+                                &tree,
+                                &content,
+                                imports,
+                                &package_name,
+                                &branch,
+                                &position,
+                            )
+                            .await
+                        {
+                            return Ok(Some(
+                                symbol
+                                    .to_lsp_location()
+                                    .map(GotoDefinitionResponse::from)
+                                    .ok_or_else(|| {
+                                        tower_lsp::jsonrpc::Error::invalid_params(
+                                            "Failed to convert to location".to_string(),
+                                        )
+                                    })?,
+                            ));
+                        }
+
+                        // Strategy 3: Resolve qualifier as a variable (instance member access)
+                        // Examples: user.getName(), bar.field
+                        // - Use find_variable_type() to get the type of the variable
+                        // - Resolve that type to FQN using imports/package
+                        // - Build member FQN as "VariableType.memberName"
+                        // - Check if member exists
+                        // - If found, return member FQN
+
+                        // Strategy 4: Handle chained calls (advanced - maybe defer)
+                        // Examples: user.getProfile().getName()
+                        // - Would need to evaluate left-to-right
+                        // - Find type of "user", then return type of "getProfile()", etc.
+                        // - This is complex, consider skipping for MVP
+
+                        // Strategy 5: Fallback - try to resolve the qualifier itself
+                        // If we can't find the member, at least try jumping to the qualifier's definition
+                        // Examples: UnknownClass.someMethod() -> jump to UnknownClass
+                        // - Resolve qualifier to FQN
+                        // - Return qualifier FQN instead of member FQN
+
+                        return Err(tower_lsp::jsonrpc::Error::invalid_params(
+                            "Qualifier found but failed to resolve".to_string(),
+                        ));
+                    }
+                    None => ident,
+                }
+            } else {
+                return Err(tower_lsp::jsonrpc::Error::invalid_params(
+                    "Failed to get ident/type name".to_string(),
+                ));
+            };
 
             let fqn = self.resolve_fqn(&name, imports, package_name).await.ok_or(
                 tower_lsp::jsonrpc::Error::invalid_params(format!(
@@ -226,22 +349,7 @@ impl LanguageServer for Backend {
                 )),
             )?;
 
-            let symbol = self
-                .repo
-                .find_symbol_by_fqn_and_branch(&fqn, &branch)
-                .await
-                .map_err(|e| {
-                    tower_lsp::jsonrpc::Error::invalid_params(format!(
-                        "Failed to find symbol by fqn and branch: {}",
-                        e
-                    ))
-                })?;
-
-            tracing::debug!("symbol: {:#?}", symbol);
-
-            return Ok(symbol
-                .and_then(|s| s.to_lsp_location())
-                .map(GotoDefinitionResponse::from));
+            return Ok(Some(self.symbol_to_response(fqn, &branch).await?));
         };
 
         Ok(None)
