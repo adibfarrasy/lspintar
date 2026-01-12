@@ -3,7 +3,7 @@ use lsp_core::vcs::get_vcs_handler;
 use pretty_assertions::assert_eq;
 use server::{
     Indexer, Repository,
-    models::symbol::{Symbol, SymbolMetadata, SymbolParameter},
+    models::symbol::{Symbol, SymbolMetadata},
 };
 use sqlx::types::Json;
 use std::{path::Path, sync::Arc};
@@ -20,7 +20,7 @@ async fn test_index_groovy_class() {
     indexer.index_file(&path).await.expect("Indexing failed");
 
     let result = repo
-        .find_symbol_by_fqn("com.example.User")
+        .find_symbol_by_fqn_and_branch("com.example.User", "NONE")
         .await
         .expect("Query failed");
     assert!(result.is_some(), "Symbol should be found");
@@ -35,6 +35,7 @@ async fn test_index_groovy_class() {
             id: None,
             vcs_branch: "NONE".to_string(),
             short_name: "User".to_string(),
+            package_name: "com.example".to_string(),
             fully_qualified_name: "com.example.User".to_string(),
             parent_name: Some("com.example".to_string()),
             file_path:
@@ -78,7 +79,7 @@ async fn test_index_groovy_gradle_single_workspace() {
         .expect("Indexing failed");
 
     let result = repo
-        .find_symbol_by_fqn("com.example.UserService")
+        .find_symbol_by_fqn_and_branch("com.example.UserService", "NONE")
         .await
         .expect("Query failed");
     assert!(result.is_some(), "Symbol should be found");
@@ -93,6 +94,7 @@ async fn test_index_groovy_gradle_single_workspace() {
             id: None,
             vcs_branch: "NONE".to_string(),
             short_name: "UserService".to_string(),
+            package_name: "com.example".to_string(),
             fully_qualified_name: "com.example.UserService".to_string(),
             parent_name: Some("com.example".to_string()),
             file_path:
@@ -122,7 +124,7 @@ async fn test_index_groovy_gradle_single_workspace() {
     );
 
     let result = repo
-        .find_symbol_by_fqn("com.example.Repository")
+        .find_symbol_by_fqn_and_branch("com.example.Repository", "NONE")
         .await
         .expect("Query failed");
     assert!(result.is_some(), "Symbol should be found");
@@ -137,6 +139,7 @@ async fn test_index_groovy_gradle_single_workspace() {
             id: None,
             vcs_branch: "NONE".to_string(),
             short_name: "Repository".to_string(),
+            package_name: "com.example".to_string(),
             fully_qualified_name: "com.example.Repository".to_string(),
             parent_name: Some("com.example".to_string()),
             file_path:
@@ -166,7 +169,7 @@ async fn test_index_groovy_gradle_single_workspace() {
     );
 
     let result = repo
-        .find_symbol_by_fqn("com.example.User.getDisplayName")
+        .find_symbol_by_fqn_and_branch("com.example.User#getDisplayName", "NONE")
         .await
         .expect("Query failed");
     assert!(result.is_some(), "Symbol should be found");
@@ -181,7 +184,8 @@ async fn test_index_groovy_gradle_single_workspace() {
             id: None,
             vcs_branch: "NONE".to_string(),
             short_name: "getDisplayName".to_string(),
-            fully_qualified_name: "com.example.User.getDisplayName".to_string(),
+            package_name: "com.example".to_string(),
+            fully_qualified_name: "com.example.User#getDisplayName".to_string(),
             parent_name: Some("com.example.User".to_string()),
             file_path:
                 "tests/fixtures/groovy-gradle-single/src/main/groovy/com/example/User.groovy"
@@ -210,7 +214,7 @@ async fn test_index_groovy_gradle_single_workspace() {
     );
 
     let result = repo
-        .find_symbol_by_fqn("com.example.UserService.userVariable")
+        .find_symbol_by_fqn_and_branch("com.example.UserService#userVariable", "NONE")
         .await
         .expect("Query failed");
     assert!(result.is_some(), "Symbol should be found");
@@ -225,7 +229,8 @@ async fn test_index_groovy_gradle_single_workspace() {
             id: None,
             vcs_branch: "NONE".to_string(),
             short_name: "userVariable".to_string(),
-            fully_qualified_name: "com.example.UserService.userVariable".to_string(),
+            package_name: "com.example".to_string(),
+            fully_qualified_name: "com.example.UserService#userVariable".to_string(),
             parent_name: Some("com.example.UserService".to_string()),
             file_path:
                 "tests/fixtures/groovy-gradle-single/src/main/groovy/com/example/UserService.groovy"
@@ -268,7 +273,7 @@ async fn test_index_groovy_gradle_multi_workspace() {
         .expect("Indexing failed");
 
     let result = repo
-        .find_symbol_by_fqn("com.example.core.BaseService")
+        .find_symbol_by_fqn_and_branch("com.example.core.BaseService", "NONE")
         .await
         .expect("Query failed");
     assert!(result.is_some(), "Symbol should be found");
@@ -283,6 +288,7 @@ async fn test_index_groovy_gradle_multi_workspace() {
             id: None,
             vcs_branch: "NONE".to_string(),
             short_name: "BaseService".to_string(),
+            package_name: "com.example.core".to_string(),
             fully_qualified_name: "com.example.core.BaseService".to_string(),
             parent_name: Some("com.example.core".to_string()),
             file_path:
@@ -312,7 +318,7 @@ async fn test_index_groovy_gradle_multi_workspace() {
     );
 
     let result = repo
-        .find_symbol_by_fqn("com.example.api.UserController.execute")
+        .find_symbol_by_fqn_and_branch("com.example.api.UserController#execute", "NONE")
         .await
         .expect("Query failed");
     assert!(result.is_some(), "Symbol should be found");
@@ -327,7 +333,8 @@ async fn test_index_groovy_gradle_multi_workspace() {
             id: None,
             vcs_branch: "NONE".to_string(),
             short_name: "execute".to_string(),
-            fully_qualified_name: "com.example.api.UserController.execute".to_string(),
+            package_name: "com.example.api".to_string(),
+            fully_qualified_name: "com.example.api.UserController#execute".to_string(),
             parent_name: Some("com.example.api.UserController".to_string()),
             file_path:
                 "tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy"
@@ -335,12 +342,12 @@ async fn test_index_groovy_gradle_multi_workspace() {
             file_type: "Groovy".to_string(),
             symbol_type: "Function".to_string(),
             modifiers: Json(vec![]),
-            line_start: 13,
-            line_end: 20,
+            line_start: 14,
+            line_end: 21,
             char_start: 4,
             char_end: 5,
-            ident_line_start: 18,
-            ident_line_end: 18,
+            ident_line_start: 19,
+            ident_line_end: 19,
             ident_char_start: 9,
             ident_char_end: 16,
             extends_name: None,
@@ -356,7 +363,7 @@ async fn test_index_groovy_gradle_multi_workspace() {
     );
 
     let result = repo
-        .find_symbol_by_fqn("com.example.api.UserController$ApiResponse")
+        .find_symbol_by_fqn_and_branch("com.example.api.UserController#ApiResponse", "NONE")
         .await
         .expect("Query failed");
     assert!(result.is_some(), "Symbol should be found");
@@ -371,7 +378,8 @@ async fn test_index_groovy_gradle_multi_workspace() {
             id: None,
             vcs_branch: "NONE".to_string(),
             short_name: "ApiResponse".to_string(),
-            fully_qualified_name: "com.example.api.UserController$ApiResponse".to_string(),
+            package_name: "com.example.api".to_string(),
+            fully_qualified_name: "com.example.api.UserController#ApiResponse".to_string(),
             parent_name: Some("com.example.api.UserController".to_string()),
             file_path:
                 "tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy"
@@ -379,12 +387,12 @@ async fn test_index_groovy_gradle_multi_workspace() {
             file_type: "Groovy".to_string(),
             symbol_type: "Class".to_string(),
             modifiers: Json(vec!["private".to_string(), "static".to_string()]),
-            line_start: 7,
-            line_end: 11,
+            line_start: 8,
+            line_end: 12,
             char_start: 4,
             char_end: 5,
-            ident_line_start: 7,
-            ident_line_end: 7,
+            ident_line_start: 8,
+            ident_line_end: 8,
             ident_char_start: 25,
             ident_char_end: 36,
             extends_name: None,
@@ -400,7 +408,7 @@ async fn test_index_groovy_gradle_multi_workspace() {
     );
 
     let result = repo
-        .find_symbol_by_fqn("com.example.core.DataProcessor.MAX_BATCH_SIZE")
+        .find_symbol_by_fqn_and_branch("com.example.core.DataProcessor#MAX_BATCH_SIZE", "NONE")
         .await
         .expect("Query failed");
     assert!(result.is_some(), "Symbol should be found");
@@ -415,7 +423,8 @@ async fn test_index_groovy_gradle_multi_workspace() {
             id: None,
             vcs_branch: "NONE".to_string(),
             short_name: "MAX_BATCH_SIZE".to_string(),
-            fully_qualified_name: "com.example.core.DataProcessor.MAX_BATCH_SIZE".to_string(),
+            package_name: "com.example.core".to_string(),
+            fully_qualified_name: "com.example.core.DataProcessor#MAX_BATCH_SIZE".to_string(),
             parent_name: Some("com.example.core.DataProcessor".to_string()),
             file_path:
                 "tests/fixtures/groovy-gradle-multi/core/src/main/groovy/com/example/core/DataProcessor.groovy"

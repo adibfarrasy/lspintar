@@ -901,6 +901,7 @@ dependencies = [
  "lsp_core",
  "num_cpus",
  "rayon",
+ "regex",
  "serde",
  "serde_json",
  "sha2",

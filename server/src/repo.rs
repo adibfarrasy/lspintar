@@ -1,5 +1,4 @@
 use sqlx::SqlitePool;
-use tracing::debug;
 
 use crate::models::symbol::Symbol;
 
@@ -19,14 +18,15 @@ impl Repository {
         let mut tx = self.pool.begin().await?;
         for s in symbols {
             sqlx::query(
-                "INSERT INTO symbols (vcs_branch, short_name, fully_qualified_name, parent_name, 
+                "INSERT INTO symbols (vcs_branch, short_name, package_name, fully_qualified_name, parent_name, 
                 file_path, file_type, symbol_type, modifiers, line_start, line_end, 
                 char_start, char_end, ident_line_start, ident_line_end, ident_char_start,
                 ident_char_end, extends_name, implements_names, metadata, last_modified)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(vcs_branch, file_path, fully_qualified_name) DO UPDATE SET
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(vcs_branch, file_path, fully_qualified_name, metadata) DO UPDATE SET
                     vcs_branch = excluded.vcs_branch,
                     short_name = excluded.short_name,
+                    package_name = excluded.package_name,
                     fully_qualified_name = excluded.fully_qualified_name,
                     parent_name = excluded.parent_name,
                     file_type = excluded.file_type,
@@ -45,6 +45,7 @@ impl Repository {
             )
             .bind(&s.vcs_branch)
             .bind(&s.short_name)
+            .bind(&s.package_name)
             .bind(&s.fully_qualified_name)
             .bind(&s.parent_name)
             .bind(&s.file_path)
@@ -71,21 +72,12 @@ impl Repository {
     }
 
     #[tracing::instrument(skip(self))]
-    pub async fn find_symbol_by_fqn(&self, fqn: &str) -> Result<Option<Symbol>, sqlx::Error> {
-        debug!("find_symbol_by_fqn");
-        sqlx::query_as::<_, Symbol>("SELECT * FROM symbols WHERE fully_qualified_name = ?")
-            .bind(fqn)
-            .fetch_optional(&self.pool)
-            .await
-    }
-
-    #[tracing::instrument(skip(self))]
     pub async fn find_symbol_by_fqn_and_branch(
         &self,
         fqn: &str,
         vcs_branch: &str,
     ) -> Result<Option<Symbol>, sqlx::Error> {
-        debug!("find_symbol_by_fqn_and_branch");
+        tracing::info!("find_symbol_by_fqn_and_branch");
         sqlx::query_as::<_, Symbol>(
             "SELECT * FROM symbols WHERE fully_qualified_name = ? AND vcs_branch = ?",
         )

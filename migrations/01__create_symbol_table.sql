@@ -3,6 +3,7 @@ CREATE TABLE symbols (
     vcs_branch TEXT,
     short_name TEXT NOT NULL,
     fully_qualified_name TEXT NOT NULL,
+    package_name TEXT NOT NULL,
     parent_name TEXT,
     file_path TEXT NOT NULL,
     file_type TEXT NOT NULL,

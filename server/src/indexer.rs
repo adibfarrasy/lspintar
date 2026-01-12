@@ -68,17 +68,19 @@ impl Indexer {
         content: &str,
     ) -> Result<Vec<Symbol>> {
         let mut symbols = Vec::new();
-        let parent_name = lang
+        let package_name = lang
             .get_package_name(tree, content)
             .ok_or_else(|| anyhow!("failed to get package name"))?;
+
         self.dfs(
             tree.root_node(),
             lang,
-            &parent_name,
+            &package_name,
             false,
             &mut symbols,
             path,
             content,
+            &package_name,
         )?;
         Ok(symbols)
     }
@@ -92,19 +94,15 @@ impl Indexer {
         symbols: &mut Vec<Symbol>,
         path: &Path,
         content: &str,
+        package_name: &str,
     ) -> Result<()> {
         let node_type = lang.get_type(&node);
         let (new_parent, new_is_type_parent) = if lang.should_index(&node) {
             let short_name = lang
                 .get_short_name(&node, content)
                 .context("Failed to get short name")?;
-            let fqn = match node_type {
-                Some(NodeType::Class | NodeType::Interface | NodeType::Enum) => {
-                    let sep = if is_type_parent { "$" } else { "." };
-                    format!("{}{}{}", parent_name, sep, short_name)
-                }
-                _ => format!("{}.{}", parent_name, short_name),
-            };
+            let sep = if is_type_parent { "#" } else { "." };
+            let fqn = format!("{}{}{}", parent_name, sep, short_name);
 
             let range = lang.get_range(&node).context("Failed to get range")?;
             let ident_range = lang
@@ -157,6 +155,7 @@ impl Indexer {
                 id: None,
                 vcs_branch: self.vcs.get_current_branch().ok().unwrap(),
                 short_name: short_name,
+                package_name: package_name.to_string(),
                 fully_qualified_name: fqn.clone(),
                 parent_name: Some(parent_name.to_string()),
                 file_path: path.to_string_lossy().to_string(),
@@ -181,6 +180,7 @@ impl Indexer {
                 node_type,
                 Some(NodeType::Class | NodeType::Interface | NodeType::Enum)
             );
+
             (fqn, is_next_type)
         } else {
             (parent_name.to_string(), is_type_parent)
@@ -195,6 +195,7 @@ impl Indexer {
                 symbols,
                 path,
                 content,
+                &package_name,
             )?;
         }
 

@@ -1,5 +1,7 @@
 use groovy::GroovySupport;
-use lsp_core::{language_support::LanguageSupport, util::capitalize, vcs::get_vcs_handler};
+use lsp_core::{
+    language_support::LanguageSupport, node_types::NodeType, util::capitalize, vcs::get_vcs_handler,
+};
 use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
@@ -12,7 +14,10 @@ use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tree_sitter::Tree;
 
-use crate::{Indexer, Repository, models::symbol::Symbol};
+use crate::{
+    Indexer, Repository,
+    models::symbol::{self, Symbol},
+};
 
 pub struct Backend {
     pub client: tower_lsp::Client,
@@ -36,11 +41,13 @@ impl Backend {
         }
     }
 
+    #[tracing::instrument(skip_all)]
     async fn resolve_fqn(
         &self,
         name: &str,
         imports: Vec<String>,
         package_name: Option<String>,
+        branch: &str,
     ) -> Option<String> {
         // Direct import match
         if let Some(import) = imports.iter().find(|i| i.split('.').last() == Some(name)) {
@@ -50,43 +57,55 @@ impl Backend {
         // Wildcard import match
         if let Some(import) = imports.iter().find(|i| i.split('.').last() == Some("*")) {
             let tmp_fqn = import.replace("*", name);
-            if let Some(_) = self.repo.find_symbol_by_fqn(&tmp_fqn).await.ok()? {
+            if let Some(_) = self
+                .repo
+                .find_symbol_by_fqn_and_branch(&tmp_fqn, branch)
+                .await
+                .ok()?
+            {
                 return Some(tmp_fqn);
             }
         }
 
         // Package + name fallback
-        Some(
+        return Some(
             package_name
-                .map(|pkg| format!("{}.{}", pkg, name))
+                .map(|pkg| {
+                    if !name.contains(&pkg) {
+                        format!("{}.{}", pkg, name)
+                    } else {
+                        name.to_string()
+                    }
+                })
                 .unwrap_or_else(|| name.to_string()),
-        )
+        );
     }
 
+    #[tracing::instrument(skip_all)]
     async fn try_static_member(
         &self,
         qualifier: &str,
-        ident: &str,
+        member: &str,
         imports: &[String],
-        package_name: &Option<String>,
+        package_name: Option<String>,
         branch: &str,
     ) -> Option<Symbol> {
         let class_fqn = self
-            .resolve_fqn(qualifier, imports.to_vec(), package_name.clone())
+            .resolve_fqn(qualifier, imports.to_vec(), package_name.clone(), branch)
             .await?;
-        let member_fqn = format!("{}.{}", class_fqn, ident);
-
-        if let Ok(Some(found)) = self
-            .repo
-            .find_symbol_by_fqn_and_branch(&member_fqn, branch)
-            .await
-        {
-            return Some(found);
-        }
-
-        self.try_property_access(&class_fqn, ident, branch).await
+        let mut visited = HashSet::new();
+        self.try_member_with_inheritance(
+            &class_fqn,
+            member,
+            branch,
+            &mut visited,
+            imports.to_vec(),
+            package_name,
+        )
+        .await
     }
 
+    #[tracing::instrument(skip_all)]
     async fn try_property_access(
         &self,
         class_fqn: &str,
@@ -94,7 +113,7 @@ impl Backend {
         branch: &str,
     ) -> Option<Symbol> {
         // Try getter
-        let getter_fqn = format!("{}.get{}", class_fqn, capitalize(ident));
+        let getter_fqn = format!("{}#get{}", class_fqn, capitalize(ident));
         if let Ok(Some(found)) = self
             .repo
             .find_symbol_by_fqn_and_branch(&getter_fqn, branch)
@@ -104,7 +123,7 @@ impl Backend {
         }
 
         // Try boolean getter (isX for boolean properties)
-        let is_getter_fqn = format!("{}.is{}", class_fqn, capitalize(ident));
+        let is_getter_fqn = format!("{}#is{}", class_fqn, capitalize(ident));
         self.repo
             .find_symbol_by_fqn_and_branch(&is_getter_fqn, branch)
             .await
@@ -112,6 +131,7 @@ impl Backend {
             .flatten()
     }
 
+    #[tracing::instrument(skip_all)]
     async fn try_instance_member(
         &self,
         qualifier: &str,
@@ -127,7 +147,7 @@ impl Backend {
         let var_type = lang.find_variable_type(tree, content, qualifier, position)?;
 
         let type_fqn = self
-            .resolve_fqn(&var_type, imports.clone(), package_name.clone())
+            .resolve_fqn(&var_type, imports.clone(), package_name.clone(), branch)
             .await?;
 
         let mut visited = HashSet::new();
@@ -137,11 +157,12 @@ impl Backend {
             branch,
             &mut visited,
             imports,
-            &package_name,
+            package_name,
         )
         .await
     }
 
+    #[tracing::instrument(skip(self))]
     async fn try_member_with_inheritance(
         &self,
         type_fqn: &str,
@@ -149,14 +170,14 @@ impl Backend {
         branch: &str,
         visited: &mut HashSet<String>,
         imports: Vec<String>,
-        package_name: &Option<String>,
+        package_name: Option<String>,
     ) -> Option<Symbol> {
         if !visited.insert(type_fqn.to_string()) {
             return None;
         }
 
         // Try direct member
-        let member_fqn = format!("{}.{}", type_fqn, member);
+        let member_fqn = format!("{}#{}", type_fqn, member);
 
         if let Ok(Some(found)) = self
             .repo
@@ -187,7 +208,7 @@ impl Backend {
                     branch,
                     visited,
                     imports.clone(),
-                    package_name,
+                    package_name.clone(),
                 )
                 .await
             {
@@ -205,7 +226,7 @@ impl Backend {
                         branch,
                         visited,
                         imports.clone(),
-                        package_name,
+                        package_name.clone(),
                     )
                     .await
                 {
@@ -217,6 +238,7 @@ impl Backend {
         None
     }
 
+    #[tracing::instrument(skip(self))]
     async fn recurse_try_member_with_inheritance(
         &self,
         parent_short_name: &str,
@@ -224,10 +246,16 @@ impl Backend {
         branch: &str,
         visited: &mut HashSet<String>,
         imports: Vec<String>,
-        package_name: &Option<String>,
+        package_name: Option<String>,
     ) -> Option<Symbol> {
+        tracing::info!("recurse_try_member_with_inheritance");
         let fqn = self
-            .resolve_fqn(&parent_short_name, imports.clone(), package_name.clone())
+            .resolve_fqn(
+                &parent_short_name,
+                imports.clone(),
+                package_name.clone(),
+                branch,
+            )
             .await
             .unwrap_or_default();
         if let Some(parent_symbol) = self
@@ -252,6 +280,7 @@ impl Backend {
         None
     }
 
+    #[tracing::instrument(skip_all)]
     async fn symbol_to_response(
         &self,
         fqn: String,
@@ -276,6 +305,109 @@ impl Backend {
                     "Failed to convert to location".to_string(),
                 )
             })
+    }
+
+    #[tracing::instrument(skip_all)]
+    async fn resolve_member_chain(
+        &self,
+        qualifier: &str,
+        member: &str,
+        lang: &Arc<dyn LanguageSupport>,
+        tree: &Tree,
+        content: &str,
+        imports: Vec<String>,
+        branch: &str,
+        position: &Position,
+        package_name: Option<String>,
+    ) -> Option<Symbol> {
+        tracing::info!("qualifier: {}", qualifier);
+        let mut parts: Vec<&str> = qualifier.split('#').collect();
+
+        if parts.is_empty() {
+            return None;
+        }
+
+        // Resolve base variable to its type name
+        let base_type =
+            if let Some(var_type) = lang.find_variable_type(tree, content, parts[0], position) {
+                var_type
+            } else {
+                parts[0].to_string()
+            };
+
+        // Resolve base type to full FQN
+        let mut current_type_fqn = self
+            .resolve_fqn(&base_type, imports.clone(), package_name.clone(), branch)
+            .await?;
+
+        tracing::info!("base: {} -> {}", parts[0], current_type_fqn);
+
+        if parts.len() > 1 {
+            for part in &parts[1..parts.len() - 1] {
+                tracing::info!("Resolving: {}#{}", current_type_fqn, part);
+
+                // Use full FQN for lookup, no need for package_name anymore
+                let symbol = self
+                    .try_static_member(&current_type_fqn, part, &imports, None, branch)
+                    .await
+                    .or(self
+                        .try_instance_member(
+                            &current_type_fqn,
+                            part,
+                            lang,
+                            tree,
+                            content,
+                            imports.clone(),
+                            branch,
+                            position,
+                            None,
+                        )
+                        .await)?;
+
+                tracing::info!(
+                    "Found: {} (kind: {})",
+                    symbol.fully_qualified_name,
+                    symbol.symbol_type
+                );
+
+                // Get next type FQN
+                current_type_fqn = if let Some(return_type) = &symbol.metadata.return_type {
+                    // For methods/fields, resolve their return/field type
+                    tracing::info!("Return type: {}", return_type);
+
+                    // Extract package from current symbol's FQN to help resolve nested types
+                    let parent_package = symbol.package_name.clone();
+
+                    let fqn = self
+                        .resolve_fqn(return_type, imports.clone(), Some(parent_package), branch)
+                        .await?;
+
+                    tracing::info!("Resolved to: {}", fqn);
+                    fqn
+                } else {
+                    // For types (Class/Interface/Enum), use their FQN directly
+                    symbol.fully_qualified_name.clone()
+                };
+            }
+        }
+
+        // Resolve final member with full FQN
+        tracing::info!("Final: {}#{}", current_type_fqn, member);
+        self.try_static_member(&current_type_fqn, member, &imports, None, branch)
+            .await
+            .or(self
+                .try_instance_member(
+                    &current_type_fqn,
+                    member,
+                    lang,
+                    tree,
+                    content,
+                    imports,
+                    branch,
+                    position,
+                    None,
+                )
+                .await)
     }
 }
 
@@ -379,7 +511,7 @@ impl LanguageServer for Backend {
                 lang.get_type_at_position(tree.root_node(), &content, &position)
             {
                 let fqn = self
-                    .resolve_fqn(&type_name, imports, package_name)
+                    .resolve_fqn(&type_name, imports, package_name, &branch)
                     .await
                     .ok_or(tower_lsp::jsonrpc::Error::invalid_params(format!(
                         "Failed to find FQN by location",
@@ -394,23 +526,7 @@ impl LanguageServer for Backend {
                 match qualifier {
                     Some(q) => {
                         if let Some(symbol) = self
-                            .try_static_member(&q, &ident, &imports, &package_name, &branch)
-                            .await
-                        {
-                            return Ok(Some(
-                                symbol
-                                    .to_lsp_location()
-                                    .map(GotoDefinitionResponse::from)
-                                    .ok_or_else(|| {
-                                        tower_lsp::jsonrpc::Error::invalid_params(
-                                            "Failed to convert to location".to_string(),
-                                        )
-                                    })?,
-                            ));
-                        }
-
-                        if let Some(symbol) = self
-                            .try_instance_member(
+                            .resolve_member_chain(
                                 &q,
                                 &ident,
                                 &lang,
@@ -435,45 +551,13 @@ impl LanguageServer for Backend {
                             ));
                         }
 
-                        if let Some(symbol) = self
-                            .try_instance_member(
-                                &q,
-                                &ident,
-                                &lang,
-                                &tree,
-                                &content,
-                                imports,
-                                &branch,
-                                &position,
-                                package_name,
-                            )
-                            .await
-                        {
-                            return Ok(Some(
-                                symbol
-                                    .to_lsp_location()
-                                    .map(GotoDefinitionResponse::from)
-                                    .ok_or_else(|| {
-                                        tower_lsp::jsonrpc::Error::invalid_params(
-                                            "Failed to convert to location".to_string(),
-                                        )
-                                    })?,
-                            ));
-                        }
-
-                        // Strategy 4: Handle chained calls (advanced - maybe defer)
-                        // Examples: user.getProfile().getName()
-                        // - Would need to evaluate left-to-right
-                        // - Find type of "user", then return type of "getProfile()", etc.
-                        // - This is complex, consider skipping for MVP
-
                         return Err(tower_lsp::jsonrpc::Error::invalid_params(
                             "Qualifier found but failed to resolve".to_string(),
                         ));
                     }
                     None => {
                         let fqn = self
-                            .resolve_fqn(&ident, imports, package_name)
+                            .resolve_fqn(&ident, imports, package_name, &branch)
                             .await
                             .ok_or(tower_lsp::jsonrpc::Error::invalid_params(format!(
                                 "Failed to find FQN by location",

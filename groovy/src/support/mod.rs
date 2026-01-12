@@ -82,14 +82,18 @@ impl GroovySupport {
                     .iter()
                     .find(|c| Some(c.index) == qual_idx)
                     .and_then(|cap| cap.node.utf8_text(content.as_bytes()).ok())
-                    .map(|s| s.replace("()", "").to_string())
+                    .map(|s| {
+                        // Remove (...) including contents, then replace . with #
+                        let re = regex::Regex::new(r"\([^)]*\)").unwrap();
+                        re.replace_all(s, "").replace(".", "#").to_string()
+                    })
             } else {
                 None
             };
             return Some((ident, qualifier));
         }
 
-        // Check if position is on the name
+        // Check if position is on the qualifier
         if let Some(qual_name) = qual {
             let qual_idx = query.capture_index_for_name(qual_name);
             if let Some(qual_cap) = match_.captures.iter().find(|c| Some(c.index) == qual_idx) {
@@ -222,12 +226,6 @@ impl GroovySupport {
             if child.start_byte() >= reference_byte {
                 break;
             }
-
-            println!(
-                "Kind '{}', text: '{}'",
-                child.kind(),
-                child.utf8_text(content.as_bytes()).unwrap()
-            );
 
             match child.kind() {
                 "variable_declaration" | "field_declaration" | "parameter" => {

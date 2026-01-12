@@ -2,6 +2,7 @@ package com.example.api
 
 import com.example.core.BaseService
 import com.example.core.DataProcessor
+import com.example.core.DataProcessResult
 
 class UserController extends BaseService implements DataProcessor {
     
@@ -21,11 +22,11 @@ class UserController extends BaseService implements DataProcessor {
     }
     
     @Override
-    void process(Map<String, Object> data) {
+    DataProcessResult process(Map<String, Object> data) {
         process(data)
     }
 
-    ApiResponse process(Map<String, Object> data) {
+    void process(Map<String, Object> data) {
         log("Processing user data: $data")
     }
 
@@ -51,15 +52,12 @@ class UserController extends BaseService implements DataProcessor {
         UserController controller = new UserController()
         
         // Cursor on process -> should go to UserController.process()
-        ApiResponse response = controller.process([key: 'value'])
+        DataProcessResult response = controller.process([key: 'value'])
         
         // Cursor on status -> should go to ApiResponse.status field
         String status = response.status
         
         // Strategy 4: Chained calls (complex)
-        // Cursor on getEnvironment -> should go to DataConfig.getEnvironment()
-        // Requires: resolve controller type -> UserController,
-        //           resolve getConfig() return type -> DataConfig (from BaseService)
-        String env = controller.getConfig().getEnvironment()
+        controller.process([key: 'value']).message
     }
 }

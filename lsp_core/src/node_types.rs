@@ -20,3 +20,16 @@ impl Display for NodeType {
         }
     }
 }
+
+impl NodeType {
+    pub fn from_string(name: &str) -> Option<Self> {
+        match name {
+            "Class" => Some(NodeType::Class),
+            "Interface" => Some(NodeType::Interface),
+            "Function" => Some(NodeType::Function),
+            "Field" => Some(NodeType::Field),
+            "Enum" => Some(NodeType::Enum),
+            _ => None,
+        }
+    }
+}
