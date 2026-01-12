@@ -26,7 +26,7 @@ class UserController extends BaseService implements DataProcessor {
         process(data)
     }
 
-    void process(Map<String, Object> data) {
+    private void process(Map<String, Object> data) {
         log("Processing user data: $data")
     }
 
@@ -59,5 +59,7 @@ class UserController extends BaseService implements DataProcessor {
         
         // Strategy 4: Chained calls (complex)
         controller.process([key: 'value']).message
+
+        new UserController().process([key: 'value']).message
     }
 }

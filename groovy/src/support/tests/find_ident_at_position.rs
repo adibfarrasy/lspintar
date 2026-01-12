@@ -131,7 +131,7 @@ fn test_chained_method_invocation() {
     let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
     assert_eq!(
         ident,
-        Some(("getName".to_string(), Some("user.getProfile".to_string())))
+        Some(("getName".to_string(), Some("user#getProfile".to_string())))
     );
 }
 
@@ -167,7 +167,7 @@ fn test_chained_field_access() {
     let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
     assert_eq!(
         ident,
-        Some(("name".to_string(), Some("user.profile".to_string())))
+        Some(("name".to_string(), Some("user#profile".to_string())))
     );
 }
 
@@ -310,6 +310,83 @@ fn test_nested_qualifier_in_chain() {
     let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
     assert_eq!(
         ident,
-        Some(("name".to_string(), Some("user.getProfile".to_string())))
+        Some(("name".to_string(), Some("user#getProfile".to_string())))
+    );
+}
+
+#[test]
+fn test_simple_constructor_in_chain() {
+    let support = GroovySupport::new();
+    let content = r#"
+        class Foo {
+            void test() {
+                new Class().process([key: 'value']).message
+            }
+        }"#;
+    let parsed = support.parse_str(&content).expect("cannot parse content");
+
+    // constructor type
+    let pos = find_position(content, "Class");
+    let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
+    assert_eq!(ident, Some(("Class".to_string(), None)));
+
+    // method on constructor
+    let pos = find_position(content, "process");
+    let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
+    assert_eq!(
+        ident,
+        Some(("process".to_string(), Some("Class".to_string())))
+    );
+
+    // field at end of chain
+    let pos = find_position(content, "message");
+    let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
+    assert_eq!(
+        ident,
+        Some(("message".to_string(), Some("Class#process".to_string())))
+    );
+}
+
+#[test]
+fn test_scoped_constructor_in_chain() {
+    let support = GroovySupport::new();
+    let content = r#"
+        class Foo {
+            void test() {
+                new Outer.Inner().process([key: 'value']).message
+            }
+        }"#;
+    let parsed = support.parse_str(&content).expect("cannot parse content");
+
+    // outer qualifier
+    let pos = find_position(content, "Outer");
+    let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
+    assert_eq!(ident, Some(("Outer".to_string(), None)));
+
+    // inner constructor type
+    let pos = find_position(content, "Inner");
+    let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
+    assert_eq!(
+        ident,
+        Some(("Inner".to_string(), Some("Outer".to_string())))
+    );
+
+    // method on constructor
+    let pos = find_position(content, "process");
+    let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
+    assert_eq!(
+        ident,
+        Some(("process".to_string(), Some("Outer#Inner".to_string())))
+    );
+
+    // field at end of chain
+    let pos = find_position(content, "message");
+    let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
+    assert_eq!(
+        ident,
+        Some((
+            "message".to_string(),
+            Some("Outer#Inner#process".to_string())
+        ))
     );
 }

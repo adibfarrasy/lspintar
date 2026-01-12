@@ -33,6 +33,15 @@ const IDENT_QUERY: &str = r#"
             type: (type_identifier) @constructor_type)
         (object_creation_expression
             type: (generic_type (type_identifier) @constructor_type))
+        (object_creation_expression
+            type: (scoped_type_identifier
+                (_) @scoped_constructor_qualifier
+                (type_identifier) @scoped_constructor_type))
+        (object_creation_expression
+            type: (generic_type
+                (scoped_type_identifier
+                    (_) @scoped_constructor_qualifier
+                    (type_identifier) @scoped_constructor_type)))
     ]
     (type_arguments (type_identifier) @type_arg)
     (cast_expression type: (type_identifier) @cast_type)
@@ -85,7 +94,8 @@ impl GroovySupport {
                     .map(|s| {
                         // Remove (...) including contents, then replace . with #
                         let re = regex::Regex::new(r"\([^)]*\)").unwrap();
-                        re.replace_all(s, "").replace(".", "#").to_string()
+                        let s = re.replace_all(s, "").replace(".", "#").to_string();
+                        s.replace("new ", "")
                     })
             } else {
                 None
@@ -98,8 +108,9 @@ impl GroovySupport {
             let qual_idx = query.capture_index_for_name(qual_name);
             if let Some(qual_cap) = match_.captures.iter().find(|c| Some(c.index) == qual_idx) {
                 if node_contains_position(&qual_cap.node, position) {
-                    // If qualifier is a simple identifier, return it directly
-                    if qual_cap.node.kind() == "identifier" {
+                    if qual_cap.node.kind() == "identifier"
+                        || qual_cap.node.kind() == "type_identifier"
+                    {
                         let qual_text = qual_cap
                             .node
                             .utf8_text(content.as_bytes())
@@ -156,6 +167,10 @@ impl GroovySupport {
                     ("interface_name", None),
                     ("function_name", None),
                     ("field_decl_name", None),
+                    (
+                        "scoped_constructor_type",
+                        Some("scoped_constructor_qualifier"),
+                    ),
                 ]
                 .into_iter()
                 .for_each(|(name, qual)| {

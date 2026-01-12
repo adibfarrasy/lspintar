@@ -82,7 +82,7 @@ impl Backend {
     }
 
     #[tracing::instrument(skip_all)]
-    async fn try_static_member(
+    async fn try_type_member(
         &self,
         qualifier: &str,
         member: &str,
@@ -129,37 +129,6 @@ impl Backend {
             .await
             .ok()
             .flatten()
-    }
-
-    #[tracing::instrument(skip_all)]
-    async fn try_instance_member(
-        &self,
-        qualifier: &str,
-        member: &str,
-        lang: &Arc<dyn LanguageSupport>,
-        tree: &Tree,
-        content: &str,
-        imports: Vec<String>,
-        branch: &str,
-        position: &Position,
-        package_name: Option<String>,
-    ) -> Option<Symbol> {
-        let var_type = lang.find_variable_type(tree, content, qualifier, position)?;
-
-        let type_fqn = self
-            .resolve_fqn(&var_type, imports.clone(), package_name.clone(), branch)
-            .await?;
-
-        let mut visited = HashSet::new();
-        self.try_member_with_inheritance(
-            &type_fqn,
-            member,
-            branch,
-            &mut visited,
-            imports,
-            package_name,
-        )
-        .await
     }
 
     #[tracing::instrument(skip(self))]
@@ -320,8 +289,7 @@ impl Backend {
         position: &Position,
         package_name: Option<String>,
     ) -> Option<Symbol> {
-        tracing::info!("qualifier: {}", qualifier);
-        let mut parts: Vec<&str> = qualifier.split('#').collect();
+        let parts: Vec<&str> = qualifier.split('#').collect();
 
         if parts.is_empty() {
             return None;
@@ -340,49 +308,22 @@ impl Backend {
             .resolve_fqn(&base_type, imports.clone(), package_name.clone(), branch)
             .await?;
 
-        tracing::info!("base: {} -> {}", parts[0], current_type_fqn);
-
         if parts.len() > 1 {
-            for part in &parts[1..parts.len() - 1] {
-                tracing::info!("Resolving: {}#{}", current_type_fqn, part);
-
+            for part in &parts[1..] {
                 // Use full FQN for lookup, no need for package_name anymore
                 let symbol = self
-                    .try_static_member(&current_type_fqn, part, &imports, None, branch)
-                    .await
-                    .or(self
-                        .try_instance_member(
-                            &current_type_fqn,
-                            part,
-                            lang,
-                            tree,
-                            content,
-                            imports.clone(),
-                            branch,
-                            position,
-                            None,
-                        )
-                        .await)?;
-
-                tracing::info!(
-                    "Found: {} (kind: {})",
-                    symbol.fully_qualified_name,
-                    symbol.symbol_type
-                );
+                    .try_type_member(&current_type_fqn, part, &imports, None, branch)
+                    .await?;
 
                 // Get next type FQN
                 current_type_fqn = if let Some(return_type) = &symbol.metadata.return_type {
                     // For methods/fields, resolve their return/field type
-                    tracing::info!("Return type: {}", return_type);
-
-                    // Extract package from current symbol's FQN to help resolve nested types
                     let parent_package = symbol.package_name.clone();
 
                     let fqn = self
                         .resolve_fqn(return_type, imports.clone(), Some(parent_package), branch)
                         .await?;
 
-                    tracing::info!("Resolved to: {}", fqn);
                     fqn
                 } else {
                     // For types (Class/Interface/Enum), use their FQN directly
@@ -392,22 +333,8 @@ impl Backend {
         }
 
         // Resolve final member with full FQN
-        tracing::info!("Final: {}#{}", current_type_fqn, member);
-        self.try_static_member(&current_type_fqn, member, &imports, None, branch)
+        self.try_type_member(&current_type_fqn, member, &imports, None, branch)
             .await
-            .or(self
-                .try_instance_member(
-                    &current_type_fqn,
-                    member,
-                    lang,
-                    tree,
-                    content,
-                    imports,
-                    branch,
-                    position,
-                    None,
-                )
-                .await)
     }
 }
 

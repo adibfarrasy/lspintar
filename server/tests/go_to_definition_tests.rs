@@ -210,10 +210,6 @@ async fn test_this_super_member() {
 
 #[tokio::test]
 async fn test_instance_member_access() {
-    let _ = tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
-        .try_init();
-
     let server = get_server().await;
 
     let root = env::current_dir().expect("cannot get current dir");
@@ -253,47 +249,81 @@ async fn test_instance_member_access() {
     assert_eq!(result.unwrap(), GotoDefinitionResponse::from(location));
 }
 
-// #[tokio::test]
-// async fn test_resolve_chain() {
-//     let _ = tracing_subscriber::fmt()
-//         .with_max_level(tracing::Level::INFO)
-//         .try_init();
-//
-//     let server = get_server().await;
-//
-//     let root = env::current_dir().expect("cannot get current dir");
-//
-//     let params = GotoDefinitionParams {
-//         text_document_position_params: TextDocumentPositionParams {
-//             text_document: TextDocumentIdentifier {
-//                 uri: Url::from_file_path(root.join("tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy"))
-//                     .expect("cannot parse root URI"),
-//             },
-//             position: Position::new(60, 44),
-//         },
-//         work_done_progress_params: WorkDoneProgressParams::default(),
-//         partial_result_params: PartialResultParams::default(),
-//     };
-//
-//     let result = server.backend.goto_definition(params).await.unwrap();
-//     assert!(result.is_some());
-//
-//     let location = Location::new(
-//         Url::from_file_path(root.join(
-//             "/Users/adibf/Projects/lspintar-ws/lspintar/server/tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/core/DataProcessResult.groovy",
-//         ))
-//         .unwrap(),
-//         Range {
-//             start: Position {
-//                 line: 24,
-//                 character: 9,
-//             },
-//             end: Position {
-//                 line: 24,
-//                 character: 16,
-//             },
-//         },
-//     );
-//
-//     assert_eq!(result.unwrap(), GotoDefinitionResponse::from(location));
-// }
+#[tokio::test]
+async fn test_resolve_chain() {
+    let _ = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .try_init();
+
+    let server = get_server().await;
+
+    let root = env::current_dir().expect("cannot get current dir");
+
+    let params = GotoDefinitionParams {
+        text_document_position_params: TextDocumentPositionParams {
+            text_document: TextDocumentIdentifier {
+                uri: Url::from_file_path(root.join("tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy"))
+                    .expect("cannot parse root URI"),
+            },
+            position: Position::new(60, 44),
+        },
+        work_done_progress_params: WorkDoneProgressParams::default(),
+        partial_result_params: PartialResultParams::default(),
+    };
+
+    let result = server.backend.goto_definition(params).await.unwrap();
+    assert!(result.is_some());
+
+    let location = Location::new(
+        Url::from_file_path(root.join(
+            "/Users/adibf/Projects/lspintar-ws/lspintar/server/tests/fixtures/groovy-gradle-multi/core/src/main/groovy/com/example/core/DataProcessResult.groovy",
+        ))
+        .unwrap(),
+        Range {
+            start: Position {
+                line: 8,
+                character: 11,
+            },
+            end: Position {
+                line: 8,
+                character: 18,
+            },
+        },
+    );
+
+    assert_eq!(result.unwrap(), GotoDefinitionResponse::from(location));
+
+    let params = GotoDefinitionParams {
+        text_document_position_params: TextDocumentPositionParams {
+            text_document: TextDocumentIdentifier {
+                uri: Url::from_file_path(root.join("tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy"))
+                    .expect("cannot parse root URI"),
+            },
+            position: Position::new(62, 54),
+        },
+        work_done_progress_params: WorkDoneProgressParams::default(),
+        partial_result_params: PartialResultParams::default(),
+    };
+
+    let result = server.backend.goto_definition(params).await.unwrap();
+    assert!(result.is_some());
+
+    let location = Location::new(
+        Url::from_file_path(root.join(
+            "/Users/adibf/Projects/lspintar-ws/lspintar/server/tests/fixtures/groovy-gradle-multi/core/src/main/groovy/com/example/core/DataProcessResult.groovy",
+        ))
+        .unwrap(),
+        Range {
+            start: Position {
+                line: 8,
+                character: 11,
+            },
+            end: Position {
+                line: 8,
+                character: 18,
+            },
+        },
+    );
+
+    assert_eq!(result.unwrap(), GotoDefinitionResponse::from(location));
+}
