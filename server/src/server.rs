@@ -12,10 +12,7 @@ use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tree_sitter::Tree;
 
-use crate::{
-    Indexer, Repository,
-    models::symbol::{self, Symbol},
-};
+use crate::{Indexer, Repository, models::symbol::Symbol};
 
 pub struct Backend {
     pub client: tower_lsp::Client,
@@ -308,7 +305,6 @@ impl Backend {
             return vec![];
         }
 
-        // Resolve base variable to its type name
         let base_type =
             if let Some(var_type) = lang.find_variable_type(tree, content, parts[0], position) {
                 var_type
@@ -316,7 +312,6 @@ impl Backend {
                 parts[0].to_string()
             };
 
-        // Resolve base type to full FQN
         let mut current_type_fqn = match self
             .resolve_fqn(&base_type, imports.clone(), package_name.clone(), branch)
             .await
@@ -327,7 +322,6 @@ impl Backend {
 
         if parts.len() > 1 {
             for part in &parts[1..] {
-                // Use full FQN for lookup, no need for package_name anymore
                 let symbols = self
                     .try_type_member(&current_type_fqn, part, &imports, None, branch)
                     .await;
@@ -391,7 +385,6 @@ impl Backend {
             return None;
         }
 
-        // Resolve call argument types to FQNs
         let mut arg_fqns = Vec::new();
         for (arg, position) in &call_args {
             let arg_type =
@@ -441,7 +434,6 @@ impl Backend {
                         if let Some(param_type) = &param.type_name {
                             let mut param_type = param_type.to_string();
 
-                            // TODO: handle generics properly
                             if let Some(top_generic_type) = param_type.split_once('<') {
                                 let new_val = top_generic_type.0;
                                 param_type = new_val.to_string();
