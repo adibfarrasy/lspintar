@@ -53,12 +53,14 @@ pub trait LanguageSupport: Send + Sync {
         content: &str,
         position: &Position,
     ) -> Option<String>;
+
     fn find_ident_at_position(
         &self,
         tree: &Tree,
         content: &str,
         position: &Position,
     ) -> Option<IdentResult>;
+
     fn find_variable_type(
         &self,
         tree: &Tree,
@@ -66,4 +68,13 @@ pub trait LanguageSupport: Send + Sync {
         var_name: &str,
         position: &Position,
     ) -> Option<String>;
+
+    fn extract_call_arguments(
+        &self,
+        tree: &Tree,
+        content: &str,
+        position: &Position,
+    ) -> Option<Vec<(String, Position)>>;
+
+    fn get_literal_type(&self, tree: &Tree, content: &str, position: &Position) -> Option<String>;
 }

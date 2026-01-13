@@ -23,22 +23,34 @@ class UserController extends BaseService implements DataProcessor {
     
     @Override
     DataProcessResult process(Map<String, Object> data) {
-        process(data)
+        processInternal(data, "default")
     }
 
-    private void process(Map<String, Object> data) {
+    private void processInternal(Map<String, Object> data, String label) {
+        log("Processing user data: $data [$label]")
+    }
+    
+    private void processInternal(Map<String, Object> data, String label, int priority) {
+        log("Processing user data: $data [$label] with priority $priority")
+    }
+
+    private void processInternal(List<String> data) {
+        log("Processing user data: $data")
+    }
+
+    private void processInternal(Map<String, Object> data) {
         log("Processing user data: $data")
     }
 
     void demoGoToDefinition() {
-        // Strategy 1: Static member access
+        // 1: Static member access
         // Cursor on MAX_BATCH_SIZE -> should go to DataProcessor.MAX_BATCH_SIZE
         int maxSize = DataProcessor.MAX_BATCH_SIZE
         
         // Cursor on processInBatches -> should go to DataProcessor.processInBatches()
         def items = DataProcessor.processInBatches(['a', 'b', 'c'])
         
-        // Strategy 2: "this" qualifier
+        // 2: "this" qualifier
         // Cursor on execute -> should go to UserController.execute()
         this.execute()
         
@@ -48,7 +60,7 @@ class UserController extends BaseService implements DataProcessor {
         // Cursor on log -> should go to BaseService.log() (inherited method)
         this.log("test message")
         
-        // Strategy 3: Instance member access (variable)
+        // 3: Instance member access (variable)
         UserController controller = new UserController()
         
         // Cursor on process -> should go to UserController.process()
@@ -57,9 +69,19 @@ class UserController extends BaseService implements DataProcessor {
         // Cursor on status -> should go to ApiResponse.status field
         String status = response.status
         
-        // Strategy 4: Chained calls (complex)
+        // 4: Chained calls
         controller.process([key: 'value']).message
 
         new UserController().process([key: 'value']).message
+
+         // Method overloading - different arity
+        this.processInternal([user: 'john'], "test")
+        
+        this.processInternal([user: 'jane'], "urgent", 1)
+
+        // Method overloading - different parameter types, same arity
+        this.processInternal(['john', 'jane'])
+        
+        this.processInternal([user: 'john'])
     }
 }

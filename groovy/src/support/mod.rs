@@ -7,7 +7,7 @@ use lsp_core::{
 use std::{fs, path::Path, sync::Mutex};
 
 use tower_lsp::lsp_types::{Position, Range};
-use tree_sitter::{Node, Parser, Query, QueryCursor, QueryMatch, StreamingIterator, Tree};
+use tree_sitter::{Node, Parser, Point, Query, QueryCursor, QueryMatch, StreamingIterator, Tree};
 
 use crate::constants::GROOVY_IMPLICIT_IMPORTS;
 
@@ -286,6 +286,26 @@ impl GroovySupport {
 
         let names = ts_helper::get_many(self.get_ts_language(), &node, content, query_str);
         names.iter().any(|name| name == var_name)
+    }
+
+    fn parse_argument_list(&self, arg_list_node: &Node, content: &str) -> Vec<(String, Position)> {
+        let mut args = Vec::new();
+        let mut cursor = arg_list_node.walk();
+
+        for child in arg_list_node.children(&mut cursor) {
+            if child.is_named() {
+                if let Ok(arg_text) = child.utf8_text(content.as_bytes()) {
+                    let arg_name = arg_text.to_string();
+                    let position = Position {
+                        line: child.start_position().row as u32,
+                        character: child.start_position().column as u32,
+                    };
+                    args.push((arg_name, position));
+                }
+            }
+        }
+
+        args
     }
 }
 
@@ -614,11 +634,124 @@ impl LanguageSupport for GroovySupport {
 
         None
     }
+
+    fn extract_call_arguments(
+        &self,
+        tree: &Tree,
+        content: &str,
+        position: &Position,
+    ) -> Option<Vec<(String, Position)>> {
+        let point = Point::new(position.line as usize, position.character as usize);
+        let node = tree.root_node().descendant_for_point_range(point, point)?;
+
+        let mut current = node;
+        loop {
+            let kind = current.kind();
+
+            if kind == "method_invocation" {
+                let mut cursor = current.walk();
+                for child in current.children(&mut cursor) {
+                    if child.kind() == "argument_list" {
+                        return Some(self.parse_argument_list(&child, content));
+                    }
+                }
+
+                // TODO: handle closures and object method invocation
+                return Some(vec![]);
+            }
+
+            current = match current.parent() {
+                Some(p) => p,
+                None => return None,
+            };
+        }
+    }
+
+    fn get_literal_type(&self, tree: &Tree, content: &str, position: &Position) -> Option<String> {
+        let point = Point::new(position.line as usize, position.character as usize);
+        let mut node = tree.root_node().descendant_for_point_range(point, point)?;
+
+        loop {
+            match node.kind() {
+                "map_literal" => return Some("Map".to_string()),
+                "array_literal" => return Some("List".to_string()),
+
+                // Numeric literals
+                "decimal_integer_literal"
+                | "hex_integer_literal"
+                | "octal_integer_literal"
+                | "binary_integer_literal" => {
+                    // Check for long suffix (l or L)
+                    if let Ok(text) = node.utf8_text(content.as_bytes()) {
+                        if text.ends_with('l') || text.ends_with('L') {
+                            return Some("Long".to_string());
+                        }
+                    }
+                    return Some("Integer".to_string());
+                }
+
+                "decimal_floating_point_literal" | "hex_floating_point_literal" => {
+                    if let Ok(text) = node.utf8_text(content.as_bytes()) {
+                        let lower = text.to_lowercase();
+                        if lower.ends_with('f') {
+                            return Some("Float".to_string());
+                        }
+                    }
+                    return Some("Double".to_string());
+                }
+
+                "true" | "false" => return Some("Boolean".to_string()),
+
+                "string_literal" | "text_block" => return Some("String".to_string()),
+
+                "null_literal" => return None,
+
+                "regex_literal" => return Some("Pattern".to_string()),
+
+                _ => {}
+            }
+
+            node = match node.parent() {
+                Some(p) => p,
+                None => return None,
+            };
+        }
+    }
 }
 
+#[allow(dead_code)]
 mod tests {
+    use tower_lsp::lsp_types::Position;
+    use tree_sitter::Node;
+
+    mod extract_call_arguments;
     mod find_ident_at_position;
     mod find_variable_type;
     mod get_imports;
     mod get_indexer_data;
+    mod get_literal_type;
+
+    fn find_position(content: &str, marker: &str) -> Position {
+        content
+            .lines()
+            .enumerate()
+            .find_map(|(line_num, line)| {
+                line.find(marker)
+                    .map(|col| Position::new(line_num as u32, col as u32))
+            })
+            .expect(&format!("Marker '{}' not found", marker))
+    }
+
+    fn find_node_by_kind<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {
+        if node.kind() == kind {
+            return Some(node);
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if let Some(found) = find_node_by_kind(child, kind) {
+                return Some(found);
+            }
+        }
+        None
+    }
 }

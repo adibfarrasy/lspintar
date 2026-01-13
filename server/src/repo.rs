@@ -86,4 +86,20 @@ impl Repository {
         .fetch_optional(&self.pool)
         .await
     }
+
+    #[tracing::instrument(skip(self))]
+    pub async fn find_symbols_by_fqn_and_branch(
+        &self,
+        fqn: &str,
+        vcs_branch: &str,
+    ) -> Result<Vec<Symbol>, sqlx::Error> {
+        tracing::info!("find_symbols_by_fqn_and_branch");
+        sqlx::query_as::<_, Symbol>(
+            "SELECT * FROM symbols WHERE fully_qualified_name = ? AND vcs_branch = ?",
+        )
+        .bind(fqn)
+        .bind(vcs_branch)
+        .fetch_all(&self.pool)
+        .await
+    }
 }

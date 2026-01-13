@@ -5,17 +5,7 @@ use tower_lsp::lsp_types::Position;
 use crate::GroovySupport;
 use lsp_core::language_support::LanguageSupport;
 
-#[allow(dead_code)]
-fn find_position(content: &str, marker: &str) -> Position {
-    content
-        .lines()
-        .enumerate()
-        .find_map(|(line_num, line)| {
-            line.find(marker)
-                .map(|col| Position::new(line_num as u32, col as u32))
-        })
-        .expect(&format!("Marker '{}' not found", marker))
-}
+use super::*;
 
 #[test]
 fn test_find_variable_type() {

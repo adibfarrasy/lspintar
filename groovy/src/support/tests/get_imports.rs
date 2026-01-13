@@ -5,6 +5,8 @@ use lsp_core::language_support::LanguageSupport;
 
 use crate::constants::GROOVY_IMPLICIT_IMPORTS;
 
+use super::*;
+
 #[test]
 fn test_get_imports() {
     let support = GroovySupport::new();

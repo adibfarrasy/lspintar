@@ -6,19 +6,7 @@ use lsp_core::{language_support::LanguageSupport, node_types::NodeType};
 use tower_lsp::lsp_types::{Position, Range};
 use tree_sitter::Node;
 
-#[allow(dead_code)]
-fn find_node_by_kind<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {
-    if node.kind() == kind {
-        return Some(node);
-    }
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        if let Some(found) = find_node_by_kind(child, kind) {
-            return Some(found);
-        }
-    }
-    None
-}
+use super::*;
 
 #[test]
 fn test_get_ident_range() {

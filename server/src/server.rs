@@ -1,7 +1,5 @@
 use groovy::GroovySupport;
-use lsp_core::{
-    language_support::LanguageSupport, node_types::NodeType, util::capitalize, vcs::get_vcs_handler,
-};
+use lsp_core::{language_support::LanguageSupport, util::capitalize, vcs::get_vcs_handler};
 use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
@@ -89,12 +87,17 @@ impl Backend {
         imports: &[String],
         package_name: Option<String>,
         branch: &str,
-    ) -> Option<Symbol> {
-        let class_fqn = self
+    ) -> Vec<Symbol> {
+        let class_fqn = match self
             .resolve_fqn(qualifier, imports.to_vec(), package_name.clone(), branch)
-            .await?;
+            .await
+        {
+            Some(fqn) => fqn,
+            None => return vec![],
+        };
+
         let mut visited = HashSet::new();
-        self.try_member_with_inheritance(
+        self.try_members_with_inheritance(
             &class_fqn,
             member,
             branch,
@@ -132,7 +135,7 @@ impl Backend {
     }
 
     #[tracing::instrument(skip(self))]
-    async fn try_member_with_inheritance(
+    async fn try_members_with_inheritance(
         &self,
         type_fqn: &str,
         member: &str,
@@ -140,38 +143,47 @@ impl Backend {
         visited: &mut HashSet<String>,
         imports: Vec<String>,
         package_name: Option<String>,
-    ) -> Option<Symbol> {
+    ) -> Vec<Symbol> {
         if !visited.insert(type_fqn.to_string()) {
-            return None;
+            return vec![];
         }
 
         // Try direct member
         let member_fqn = format!("{}#{}", type_fqn, member);
-
-        if let Ok(Some(found)) = self
+        if let Ok(found) = self
             .repo
-            .find_symbol_by_fqn_and_branch(&member_fqn, branch)
+            .find_symbols_by_fqn_and_branch(&member_fqn, branch)
             .await
         {
-            return Some(found);
+            if !found.is_empty() {
+                return found;
+            }
         }
 
         // Try property access
         if let Some(found) = self.try_property_access(type_fqn, member, branch).await {
-            return Some(found);
+            return vec![found];
         }
 
         // Get class/interface info to find parents
-        let type_symbol = self
+        let type_symbol = match self
             .repo
             .find_symbol_by_fqn_and_branch(type_fqn, branch)
             .await
-            .ok()??;
+        {
+            Ok(symbols) => symbols.into_iter().next(),
+            Err(_) => None,
+        };
+
+        let type_symbol = match type_symbol {
+            Some(s) => s,
+            None => return vec![],
+        };
 
         // Try superclass
         if let Some(super_name) = type_symbol.extends_name {
-            if let Some(symbol) = self
-                .recurse_try_member_with_inheritance(
+            let results = self
+                .recurse_try_members_with_inheritance(
                     &super_name,
                     member,
                     branch,
@@ -179,36 +191,34 @@ impl Backend {
                     imports.clone(),
                     package_name.clone(),
                 )
-                .await
-            {
-                return Some(symbol);
+                .await;
+            if !results.is_empty() {
+                return results;
             }
         }
 
         // Try interfaces
-        if !type_symbol.implements_names.0.is_empty() {
-            for super_name in &type_symbol.implements_names.0 {
-                if let Some(symbol) = self
-                    .recurse_try_member_with_inheritance(
-                        &super_name,
-                        member,
-                        branch,
-                        visited,
-                        imports.clone(),
-                        package_name.clone(),
-                    )
-                    .await
-                {
-                    return Some(symbol);
-                }
+        for super_name in &type_symbol.implements_names.0 {
+            let results = self
+                .recurse_try_members_with_inheritance(
+                    super_name,
+                    member,
+                    branch,
+                    visited,
+                    imports.clone(),
+                    package_name.clone(),
+                )
+                .await;
+            if !results.is_empty() {
+                return results;
             }
         }
 
-        None
+        vec![]
     }
 
     #[tracing::instrument(skip(self))]
-    async fn recurse_try_member_with_inheritance(
+    async fn recurse_try_members_with_inheritance(
         &self,
         parent_short_name: &str,
         member: &str,
@@ -216,9 +226,9 @@ impl Backend {
         visited: &mut HashSet<String>,
         imports: Vec<String>,
         package_name: Option<String>,
-    ) -> Option<Symbol> {
-        tracing::info!("recurse_try_member_with_inheritance");
-        let fqn = self
+    ) -> Vec<Symbol> {
+        tracing::info!("recurse_try_members_with_inheritance");
+        let fqn = match self
             .resolve_fqn(
                 &parent_short_name,
                 imports.clone(),
@@ -226,27 +236,30 @@ impl Backend {
                 branch,
             )
             .await
-            .unwrap_or_default();
-        if let Some(parent_symbol) = self
-            .repo
-            .find_symbol_by_fqn_and_branch(&fqn, branch)
-            .await
-            .ok()?
         {
-            if let Some(symbol) = Box::pin(self.try_member_with_inheritance(
-                &parent_symbol.fully_qualified_name,
-                member,
-                branch,
-                visited,
-                imports,
-                package_name,
-            ))
-            .await
-            {
-                return Some(symbol);
+            Some(fqn) => fqn,
+            None => return vec![],
+        };
+
+        let parent_symbol = match self.repo.find_symbols_by_fqn_and_branch(&fqn, branch).await {
+            Ok(symbols) => symbols.into_iter().next(),
+            Err(_) => return vec![],
+        };
+
+        match parent_symbol {
+            Some(parent) => {
+                Box::pin(self.try_members_with_inheritance(
+                    &parent.fully_qualified_name,
+                    member,
+                    branch,
+                    visited,
+                    imports,
+                    package_name,
+                ))
+                .await
             }
+            None => vec![],
         }
-        None
     }
 
     #[tracing::instrument(skip_all)]
@@ -277,7 +290,7 @@ impl Backend {
     }
 
     #[tracing::instrument(skip_all)]
-    async fn resolve_member_chain(
+    async fn resolve_type_member_chain(
         &self,
         qualifier: &str,
         member: &str,
@@ -288,11 +301,11 @@ impl Backend {
         branch: &str,
         position: &Position,
         package_name: Option<String>,
-    ) -> Option<Symbol> {
+    ) -> Vec<Symbol> {
         let parts: Vec<&str> = qualifier.split('#').collect();
 
         if parts.is_empty() {
-            return None;
+            return vec![];
         }
 
         // Resolve base variable to its type name
@@ -304,27 +317,37 @@ impl Backend {
             };
 
         // Resolve base type to full FQN
-        let mut current_type_fqn = self
+        let mut current_type_fqn = match self
             .resolve_fqn(&base_type, imports.clone(), package_name.clone(), branch)
-            .await?;
+            .await
+        {
+            Some(fqn) => fqn,
+            None => return vec![],
+        };
 
         if parts.len() > 1 {
             for part in &parts[1..] {
                 // Use full FQN for lookup, no need for package_name anymore
-                let symbol = self
+                let symbols = self
                     .try_type_member(&current_type_fqn, part, &imports, None, branch)
-                    .await?;
+                    .await;
 
-                // Get next type FQN
+                let symbol = match symbols.into_iter().next() {
+                    Some(s) => s,
+                    None => return vec![],
+                };
+
                 current_type_fqn = if let Some(return_type) = &symbol.metadata.return_type {
                     // For methods/fields, resolve their return/field type
                     let parent_package = symbol.package_name.clone();
 
-                    let fqn = self
+                    match self
                         .resolve_fqn(return_type, imports.clone(), Some(parent_package), branch)
-                        .await?;
-
-                    fqn
+                        .await
+                    {
+                        Some(fqn) => fqn,
+                        None => return vec![],
+                    }
                 } else {
                     // For types (Class/Interface/Enum), use their FQN directly
                     symbol.fully_qualified_name.clone()
@@ -332,9 +355,127 @@ impl Backend {
             }
         }
 
-        // Resolve final member with full FQN
+        // Returns all overloads
         self.try_type_member(&current_type_fqn, member, &imports, None, branch)
             .await
+    }
+
+    async fn select_best_overload(
+        &self,
+        symbols: Vec<Symbol>,
+        call_args: Vec<(String, Position)>,
+        lang: &Arc<dyn LanguageSupport>,
+        tree: &Tree,
+        content: &str,
+        imports: &[String],
+        package_name: Option<String>,
+        branch: &str,
+    ) -> Option<Symbol> {
+        let arg_count = call_args.len();
+
+        let arity_matches: Vec<Symbol> = symbols
+            .into_iter()
+            .filter(|s| {
+                s.metadata
+                    .parameters
+                    .as_ref()
+                    .map_or(false, |params| params.len() == arg_count)
+            })
+            .collect();
+
+        if arity_matches.len() == 1 {
+            return arity_matches.into_iter().next();
+        }
+
+        if arity_matches.is_empty() {
+            return None;
+        }
+
+        // Resolve call argument types to FQNs
+        let mut arg_fqns = Vec::new();
+        for (arg, position) in &call_args {
+            let arg_type =
+                if let Some(literal_type) = lang.get_literal_type(tree, content, &position) {
+                    literal_type
+                } else {
+                    lang.find_variable_type(tree, content, arg, &position)
+                        .unwrap_or_else(|| arg.clone())
+                };
+
+            let arg_fqn = self
+                .resolve_fqn(&arg_type, imports.to_vec(), package_name.clone(), branch)
+                .await
+                .unwrap_or(arg_type);
+
+            arg_fqns.push(arg_fqn);
+        }
+
+        for symbol in arity_matches {
+            let path = PathBuf::from_str(&symbol.file_path).unwrap();
+
+            if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                let symbol_lang = match self.languages.get(ext) {
+                    Some(l) => l,
+                    None => {
+                        tracing::info!(
+                            "failed to get language support for {}. path: {:#?}",
+                            ext,
+                            path
+                        );
+                        continue;
+                    }
+                };
+
+                let (symbol_tree, symbol_content) = match symbol_lang.parse(&path) {
+                    Some(p) => p,
+                    None => {
+                        tracing::info!("failed to parse file {:#?}", path);
+                        continue;
+                    }
+                };
+
+                if let Some(params) = &symbol.metadata.parameters {
+                    let mut all_match = true;
+
+                    for (i, param) in params.iter().enumerate() {
+                        if let Some(param_type) = &param.type_name {
+                            let mut param_type = param_type.to_string();
+
+                            // TODO: handle generics properly
+                            if let Some(top_generic_type) = param_type.split_once('<') {
+                                let new_val = top_generic_type.0;
+                                param_type = new_val.to_string();
+                            }
+
+                            let imports = symbol_lang.get_imports(&symbol_tree, &symbol_content);
+                            let param_fqn = self
+                                .resolve_fqn(
+                                    &param_type,
+                                    imports.clone(),
+                                    Some(symbol.package_name.clone()),
+                                    branch,
+                                )
+                                .await
+                                .unwrap_or(param_type.to_string());
+
+                            if param_fqn != arg_fqns[i] {
+                                all_match = false;
+                                break;
+                            }
+                        } else {
+                            all_match = false;
+                            break;
+                        }
+                    }
+
+                    if all_match {
+                        return Some(symbol);
+                    }
+                }
+            }
+        }
+
+        None
     }
 }
 
@@ -452,8 +593,8 @@ impl LanguageServer for Backend {
             {
                 match qualifier {
                     Some(q) => {
-                        if let Some(symbol) = self
-                            .resolve_member_chain(
+                        let symbols = self
+                            .resolve_type_member_chain(
                                 &q,
                                 &ident,
                                 &lang,
@@ -464,18 +605,60 @@ impl LanguageServer for Backend {
                                 &position,
                                 package_name.clone(),
                             )
-                            .await
-                        {
-                            return Ok(Some(
-                                symbol
-                                    .to_lsp_location()
-                                    .map(GotoDefinitionResponse::from)
-                                    .ok_or_else(|| {
-                                        tower_lsp::jsonrpc::Error::invalid_params(
-                                            "Failed to convert to location".to_string(),
-                                        )
-                                    })?,
-                            ));
+                            .await;
+
+                        if !symbols.is_empty() {
+                            if symbols.len() == 1 {
+                                let symbol = symbols.iter().next().unwrap();
+                                return Ok(Some(
+                                    symbol
+                                        .to_lsp_location()
+                                        .map(GotoDefinitionResponse::from)
+                                        .ok_or_else(|| {
+                                            tower_lsp::jsonrpc::Error::invalid_params(
+                                                "Failed to convert to location".to_string(),
+                                            )
+                                        })?,
+                                ));
+                            }
+
+                            let call_args = lang.extract_call_arguments(&tree, &content, &position);
+                            if let Some(args) = call_args {
+                                if let Some(symbol) = self
+                                    .select_best_overload(
+                                        symbols.clone(),
+                                        args,
+                                        lang,
+                                        &tree,
+                                        &content,
+                                        &imports,
+                                        package_name,
+                                        &branch,
+                                    )
+                                    .await
+                                {
+                                    return Ok(Some(
+                                        symbol
+                                            .to_lsp_location()
+                                            .map(GotoDefinitionResponse::from)
+                                            .ok_or_else(|| {
+                                                tower_lsp::jsonrpc::Error::invalid_params(
+                                                    "Failed to convert to location".to_string(),
+                                                )
+                                            })?,
+                                    ));
+                                }
+                            }
+
+                            // No call context, return all overloads
+                            let locations: Vec<Location> = symbols
+                                .into_iter()
+                                .filter_map(|s| s.to_lsp_location())
+                                .collect();
+
+                            if !locations.is_empty() {
+                                return Ok(Some(GotoDefinitionResponse::Array(locations)));
+                            }
                         }
 
                         return Err(tower_lsp::jsonrpc::Error::invalid_params(
