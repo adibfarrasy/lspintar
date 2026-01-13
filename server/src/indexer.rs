@@ -1,8 +1,14 @@
-use lsp_core::{language_support::LanguageSupport, node_types::NodeType, vcs::handler::VcsHandler};
+use lsp_core::{
+    language_support::LanguageSupport, node_types::NodeType, util::naive_resolve_fqn,
+    vcs::handler::VcsHandler,
+};
 use std::{collections::HashMap, path::Path, sync::Arc};
 
 use crate::{
-    models::symbol::{Symbol, SymbolMetadata, SymbolParameter},
+    models::{
+        symbol::{Symbol, SymbolMetadata, SymbolParameter},
+        symbol_interface_mapping::SymbolInterfaceMapping,
+    },
     repo::Repository,
 };
 
@@ -16,11 +22,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub struct Indexer {
     languages: HashMap<String, Arc<dyn LanguageSupport>>,
     repo: Arc<Repository>,
-    vcs: Box<dyn VcsHandler>,
+    vcs: Arc<dyn VcsHandler>,
 }
 
 impl Indexer {
-    pub fn new(repo: Arc<Repository>, vcs: Box<dyn VcsHandler>) -> Self {
+    pub fn new(repo: Arc<Repository>, vcs: Arc<dyn VcsHandler>) -> Self {
         Self {
             languages: HashMap::new(),
             repo,
@@ -52,9 +58,25 @@ impl Indexer {
                 let parsed = lang
                     .parse(&path)
                     .ok_or_else(|| anyhow!("failed to parse file: {}", path.display()))?;
-                let symbols =
+                let data =
                     self.get_symbols_from_tree(&parsed.0, lang.as_ref(), &path, &parsed.1)?;
-                self.repo.insert_symbols(&symbols).await?;
+                self.repo.insert_symbols(&data.0).await?;
+
+                if !data.1.is_empty() {
+                    let mappings = data
+                        .1
+                        .iter()
+                        .map(|mapping| {
+                            (
+                                &*mapping.symbol_fqn,
+                                &*mapping.interface_short_name,
+                                mapping.interface_fqn.as_deref(),
+                            )
+                        })
+                        .collect();
+
+                    self.repo.insert_symbol_interface_mappings(mappings).await?;
+                }
             }
         }
         Ok(())
@@ -66,11 +88,14 @@ impl Indexer {
         lang: &dyn LanguageSupport,
         path: &Path,
         content: &str,
-    ) -> Result<Vec<Symbol>> {
+    ) -> Result<(Vec<Symbol>, Vec<SymbolInterfaceMapping>)> {
         let mut symbols = Vec::new();
+        let mut symbol_interface_mappings = Vec::new();
         let package_name = lang
             .get_package_name(tree, content)
             .ok_or_else(|| anyhow!("failed to get package name"))?;
+
+        let imports = lang.get_imports(tree, content);
 
         self.dfs(
             tree.root_node(),
@@ -81,8 +106,10 @@ impl Indexer {
             path,
             content,
             &package_name,
+            &mut symbol_interface_mappings,
+            imports,
         )?;
-        Ok(symbols)
+        Ok((symbols, symbol_interface_mappings))
     }
 
     fn dfs(
@@ -95,6 +122,8 @@ impl Indexer {
         path: &Path,
         content: &str,
         package_name: &str,
+        symbol_interface_mappings: &mut Vec<SymbolInterfaceMapping>,
+        imports: Vec<String>,
     ) -> Result<()> {
         let node_type = lang.get_type(&node);
         let (new_parent, new_is_type_parent) = if lang.should_index(&node) {
@@ -114,6 +143,17 @@ impl Indexer {
                 .as_secs();
             let modifiers = lang.get_modifiers(&node, content);
             let implements = lang.get_implements(&node, content);
+
+            for interface_short_name in implements {
+                let interface_fqn = naive_resolve_fqn(&interface_short_name, imports.clone());
+
+                symbol_interface_mappings.push(SymbolInterfaceMapping {
+                    id: None,
+                    symbol_fqn: fqn.clone(),
+                    interface_short_name,
+                    interface_fqn,
+                });
+            }
 
             let documentation = lang.get_documentation(&node, content);
             let annotations = lang.get_annotations(&node, content);
@@ -171,7 +211,6 @@ impl Indexer {
                 ident_char_start: ident_range.start.character as i64,
                 ident_char_end: ident_range.end.character as i64,
                 extends_name: lang.get_extends(&node, content),
-                implements_names: Json::from(implements),
                 metadata: Json::from(metadata),
                 last_modified: now as i64,
             });
@@ -196,6 +235,8 @@ impl Indexer {
                 path,
                 content,
                 &package_name,
+                symbol_interface_mappings,
+                imports.clone(),
             )?;
         }
 

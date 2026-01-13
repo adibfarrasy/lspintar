@@ -15,7 +15,7 @@ async fn test_index_groovy_class() {
         Path::new("tests/fixtures/groovy-gradle-single/src/main/groovy/com/example/User.groovy");
 
     let vcs = get_vcs_handler(&path);
-    let mut indexer = Indexer::new(Arc::clone(&repo), vcs);
+    let mut indexer = Indexer::new(Arc::clone(&repo), Arc::clone(&vcs));
     indexer.register_language("groovy", Arc::new(GroovySupport::new()));
     indexer.index_file(&path).await.expect("Indexing failed");
 
@@ -53,7 +53,6 @@ async fn test_index_groovy_class() {
             ident_char_start: 6,
             ident_char_end: 10,
             extends_name: None,
-            implements_names: Json(vec![]),
             metadata: Json(SymbolMetadata {
                 parameters: None,
                 return_type: None,
@@ -71,7 +70,7 @@ async fn test_index_groovy_gradle_single_workspace() {
     let path = Path::new("tests/fixtures/groovy-gradle-single");
 
     let vcs = get_vcs_handler(&path);
-    let mut indexer = Indexer::new(Arc::clone(&repo), vcs);
+    let mut indexer = Indexer::new(Arc::clone(&repo), Arc::clone(&vcs));
     indexer.register_language("groovy", Arc::new(GroovySupport::new()));
     indexer
         .index_workspace(&path)
@@ -112,7 +111,6 @@ async fn test_index_groovy_gradle_single_workspace() {
             ident_char_start: 6,
             ident_char_end: 17,
             extends_name: Some("BaseService".to_string()),
-            implements_names: Json(vec!["Serializable".to_string()]),
             metadata: Json(SymbolMetadata {
                 parameters: None,
                 return_type: None,
@@ -157,7 +155,6 @@ async fn test_index_groovy_gradle_single_workspace() {
             ident_char_start: 10,
             ident_char_end: 20,
             extends_name: None,
-            implements_names: Json(vec![]),
             metadata: Json(SymbolMetadata {
                 parameters: None,
                 return_type: None,
@@ -202,7 +199,6 @@ async fn test_index_groovy_gradle_single_workspace() {
             ident_char_start: 11,
             ident_char_end: 25,
             extends_name: None,
-            implements_names: Json(vec![]),
             metadata: Json(SymbolMetadata {
                 parameters: Some(vec![]),
                 return_type: Some("String".to_string()),
@@ -247,7 +243,6 @@ async fn test_index_groovy_gradle_single_workspace() {
             ident_char_start: 19,
             ident_char_end: 31,
             extends_name: None,
-            implements_names: Json(vec![]),
             metadata: Json(SymbolMetadata {
                 parameters: None,
                 return_type: Some("String".to_string()),
@@ -265,7 +260,7 @@ async fn test_index_groovy_gradle_multi_workspace() {
     let path = Path::new("tests/fixtures/groovy-gradle-multi");
 
     let vcs = get_vcs_handler(&path);
-    let mut indexer = Indexer::new(Arc::clone(&repo), vcs);
+    let mut indexer = Indexer::new(Arc::clone(&repo), Arc::clone(&vcs));
     indexer.register_language("groovy", Arc::new(GroovySupport::new()));
     indexer
         .index_workspace(&path)
@@ -306,7 +301,6 @@ async fn test_index_groovy_gradle_multi_workspace() {
             ident_char_start: 15,
             ident_char_end: 26,
             extends_name: None,
-            implements_names: Json(vec!["Serializable".to_string()]),
             metadata: Json(SymbolMetadata {
                 parameters: None,
                 return_type: None,
@@ -351,7 +345,6 @@ async fn test_index_groovy_gradle_multi_workspace() {
             ident_char_start: 9,
             ident_char_end: 16,
             extends_name: None,
-            implements_names: Json(vec![]),
             metadata: Json(SymbolMetadata {
                 parameters: Some(vec![]),
                 return_type: None,
@@ -396,7 +389,6 @@ async fn test_index_groovy_gradle_multi_workspace() {
             ident_char_start: 25,
             ident_char_end: 36,
             extends_name: None,
-            implements_names: Json(vec![]),
             metadata: Json(SymbolMetadata {
                 parameters: None,
                 return_type: None,
@@ -441,7 +433,6 @@ async fn test_index_groovy_gradle_multi_workspace() {
             ident_char_start: 21,
             ident_char_end: 35,
             extends_name: None,
-            implements_names: Json(vec![]),
             metadata: Json(SymbolMetadata {
                 parameters: None,
                 return_type: Some("int".to_string()),

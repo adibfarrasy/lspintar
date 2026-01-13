@@ -23,7 +23,6 @@ CREATE TABLE symbols (
     
     -- Relationships
     extends_name TEXT,
-    implements_names TEXT NOT NULL DEFAULT '[]', -- JSON array
     
     -- Metadata
     metadata TEXT NOT NULL DEFAULT '{}', -- JSON object SymbolMetadata

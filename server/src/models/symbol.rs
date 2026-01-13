@@ -30,9 +30,6 @@ pub struct Symbol {
     pub extends_name: Option<String>,
 
     #[sqlx(json)]
-    pub implements_names: Json<Vec<String>>,
-
-    #[sqlx(json)]
     pub metadata: Json<SymbolMetadata>,
     pub last_modified: i64,
 }

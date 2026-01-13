@@ -1,2 +1,1 @@
 - didChange doesn't reindex
-- haven't handled method overloading

@@ -11,9 +11,12 @@ use std::{
     sync::Arc,
 };
 use tokio::sync::RwLock;
+use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
-use tower_lsp::{LanguageServer, lsp_types::request::GotoImplementationParams};
-use tower_lsp::{jsonrpc::Result, lsp_types::request::GotoImplementationResponse};
+use tower_lsp::{
+    LanguageServer,
+    lsp_types::request::{GotoImplementation, GotoImplementationParams},
+};
 use tree_sitter::Tree;
 
 use crate::{Indexer, Repository, models::symbol::Symbol};
@@ -50,10 +53,6 @@ impl Backend {
         package_name: Option<String>,
         branch: &str,
     ) -> Option<String> {
-        if name.contains('.') {
-            return Some(name.to_string());
-        }
-
         // Direct import match
         if let Some(import) = imports.iter().find(|i| i.split('.').last() == Some(name)) {
             return Some(import.clone());
@@ -188,10 +187,10 @@ impl Backend {
         };
 
         // Try superclass
-        if let Some(super_name) = &type_symbol.extends_name {
+        if let Some(super_name) = type_symbol.extends_name {
             let results = self
                 .recurse_try_members_with_inheritance(
-                    super_name,
+                    &super_name,
                     member,
                     branch,
                     visited,
@@ -205,16 +204,7 @@ impl Backend {
         }
 
         // Try interfaces
-        let interfaces = match self
-            .repo
-            .get_interfaces_by_symbol_fqn_and_branch(&type_symbol.fully_qualified_name, &branch)
-            .await
-        {
-            Ok(symbols) => symbols,
-            Err(_) => return vec![],
-        };
-
-        for super_name in interfaces.iter().map(|symbol| &symbol.fully_qualified_name) {
+        for super_name in &type_symbol.implements_names.0 {
             let results = self
                 .recurse_try_members_with_inheritance(
                     super_name,
@@ -551,19 +541,20 @@ impl LanguageServer for Backend {
         &self,
         params: GotoDefinitionParams,
     ) -> Result<Option<GotoDefinitionResponse>> {
-        let branch = self
-            .vcs_handler
+        let root = self
+            .workspace_root
             .read()
             .await
-            .as_ref()
-            .ok_or_else(|| tower_lsp::jsonrpc::Error::invalid_params("VCS handler not available"))?
-            .get_current_branch()
-            .map_err(|e| {
-                tower_lsp::jsonrpc::Error::invalid_params(format!(
-                    "Failed to get current branch: {}",
-                    e
-                ))
-            })?;
+            .clone()
+            .ok_or(tower_lsp::jsonrpc::Error::invalid_request())?;
+
+        let vcs = get_vcs_handler(&root);
+        let branch = vcs.get_current_branch().map_err(|e| {
+            tower_lsp::jsonrpc::Error::invalid_params(format!(
+                "Failed to get current branch: {}",
+                e
+            ))
+        })?;
 
         let path = PathBuf::from_str(
             params
@@ -704,110 +695,59 @@ impl LanguageServer for Backend {
     async fn goto_implementation(
         &self,
         params: GotoImplementationParams,
-    ) -> Result<Option<GotoImplementationResponse>> {
-        let branch = self
-            .vcs_handler
-            .read()
-            .await
-            .as_ref()
-            .ok_or_else(|| tower_lsp::jsonrpc::Error::invalid_params("VCS handler not available"))?
-            .get_current_branch()
-            .map_err(|e| {
-                tower_lsp::jsonrpc::Error::invalid_params(format!(
-                    "Failed to get current branch: {}",
-                    e
-                ))
-            })?;
-
-        let path = PathBuf::from_str(
-            params
-                .text_document_position_params
-                .text_document
-                .uri
-                .path(),
-        )
-        .unwrap();
-
-        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-            let lang = self.languages.get(ext).ok_or_else(|| {
-                tower_lsp::jsonrpc::Error::invalid_params(
-                    format!("Failed to get language support",),
-                )
-            })?;
-
-            let (tree, content) = lang.parse(&path).ok_or_else(|| {
-                tower_lsp::jsonrpc::Error::invalid_params(format!("Failed to parse file"))
-            })?;
-
-            let imports = lang.get_imports(&tree, &content);
-            let package_name = lang.get_package_name(&tree, &content);
-
-            let position = params.text_document_position_params.position;
-
-            if let Some(type_name) =
-                lang.get_type_at_position(tree.root_node(), &content, &position)
-            {
-                let fqn = self
-                    .resolve_fqn(&type_name, imports, package_name, &branch)
-                    .await
-                    .ok_or(tower_lsp::jsonrpc::Error::invalid_params(format!(
-                        "Failed to find FQN by location",
-                    )))?;
-
-                let implementations = self
-                    .repo
-                    .get_interface_impls_by_fqn_and_branch(&fqn, &branch)
-                    .await
-                    .map_err(|e| {
-                        tower_lsp::jsonrpc::Error::invalid_params(format!(
-                            "Failed to find interface implementations by FQN: {}",
-                            e,
-                        ))
-                    })?;
-
-                let implementations = if implementations.is_empty() {
-                    // Best effort
-                    self.repo
-                        .get_interface_impls_by_short_name_and_branch(&type_name, &branch)
-                        .await
-                        .map_err(|e| {
-                            tower_lsp::jsonrpc::Error::invalid_params(format!(
-                                "Failed to find interface implementations by short name: {}",
-                                e,
-                            ))
-                        })?
-                } else {
-                    implementations
-                };
-
-                let locations: Vec<Location> = implementations
-                    .into_iter()
-                    .map(|sym| Location {
-                        uri: Url::from_file_path(&sym.file_path).unwrap(),
-                        range: Range {
-                            start: Position {
-                                line: sym.ident_line_start as u32,
-                                character: sym.ident_char_start as u32,
-                            },
-                            end: Position {
-                                line: sym.ident_line_end as u32,
-                                character: sym.ident_char_end as u32,
-                            },
-                        },
-                    })
-                    .collect();
-
-                let response = match locations.len() {
-                    0 => None,
-                    1 => Some(GotoImplementationResponse::Scalar(
-                        locations.first().unwrap().clone(),
-                    )),
-                    _ => Some(GotoImplementationResponse::Array(locations)),
-                };
-
-                return Ok(response);
-            };
-        }
+    ) -> Result<Option<GotoImplementation>> {
+        // let uri = params.text_document_position_params.text_document.uri;
+        // let position = params.text_document_position_params.position;
+        //
+        // let file_path = uri.to_file_path().ok();
+        // if file_path.is_none() {
+        //     return Ok(None);
+        // }
+        //
+        // let branch = self.vcs.get_current_branch().ok().unwrap_or_default();
+        //
+        // // Find implementations
+        // let implementations = self
+        //     .repo
+        //     .find_implementations_at_position(
+        //         &uri.path(),
+        //         position.line as i64,
+        //         position.character as i64,
+        //         &branch,
+        //     )
+        //     .await
+        //     .ok()?;
+        //
+        // if implementations.is_empty() {
+        //     return Ok(None);
+        // }
+        //
+        // // Convert to LSP Location
+        // let locations: Vec<Location> = implementations
+        //     .iter()
+        //     .filter_map(|sym| {
+        //         let uri = Url::from_file_path(&sym.file_path).ok()?;
+        //         Some(Location {
+        //             uri,
+        //             range: Range {
+        //                 start: Position {
+        //                     line: sym.ident_line_start as u32,
+        //                     character: sym.ident_char_start as u32,
+        //                 },
+        //                 end: Position {
+        //                     line: sym.ident_line_end as u32,
+        //                     character: sym.ident_char_end as u32,
+        //                 },
+        //             },
+        //         })
+        //     })
+        //     .collect();
+        //
+        // if locations.is_empty() {
+        //     Ok(None)
+        // } else {
+        //     Ok(Some(GotoImplementationResponse::Array(locations)))
+        // }
 
         Ok(None)
     }

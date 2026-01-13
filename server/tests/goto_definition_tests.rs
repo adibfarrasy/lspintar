@@ -3,13 +3,12 @@ use std::sync::Arc;
 
 use pretty_assertions::assert_eq;
 use server::{Repository, server::Backend};
-use tower_lsp::LanguageServer;
-use tower_lsp::lsp_types::{GotoDefinitionResponse, Location, Range};
 use tower_lsp::{
-    LspService,
+    LanguageServer, LspService,
     lsp_types::{
-        GotoDefinitionParams, InitializeParams, InitializedParams, PartialResultParams, Position,
-        TextDocumentIdentifier, TextDocumentPositionParams, Url, WorkDoneProgressParams,
+        GotoDefinitionParams, GotoDefinitionResponse, InitializeParams, InitializedParams,
+        Location, PartialResultParams, Position, Range, TextDocumentIdentifier,
+        TextDocumentPositionParams, Url, WorkDoneProgressParams,
     },
 };
 use uuid::Uuid;
@@ -40,13 +39,9 @@ impl TestServer {
     }
 }
 
-async fn get_server() -> TestServer {
-    TestServer::new().await
-}
-
 #[tokio::test]
 async fn test_simple() {
-    let server = get_server().await;
+    let server = TestServer::new().await;
 
     let root = env::current_dir().expect("cannot get current dir");
 
@@ -87,7 +82,7 @@ async fn test_simple() {
 
 #[tokio::test]
 async fn test_static_member() {
-    let server = get_server().await;
+    let server = TestServer::new().await;
 
     let root = env::current_dir().expect("cannot get current dir");
 
@@ -128,7 +123,7 @@ async fn test_static_member() {
 
 #[tokio::test]
 async fn test_this_member() {
-    let server = get_server().await;
+    let server = TestServer::new().await;
 
     let root = env::current_dir().expect("cannot get current dir");
 
@@ -169,7 +164,7 @@ async fn test_this_member() {
 
 #[tokio::test]
 async fn test_this_super_member() {
-    let server = get_server().await;
+    let server = TestServer::new().await;
 
     let root = env::current_dir().expect("cannot get current dir");
 
@@ -210,7 +205,7 @@ async fn test_this_super_member() {
 
 #[tokio::test]
 async fn test_instance_member_access() {
-    let server = get_server().await;
+    let server = TestServer::new().await;
 
     let root = env::current_dir().expect("cannot get current dir");
 
@@ -251,7 +246,7 @@ async fn test_instance_member_access() {
 
 #[tokio::test]
 async fn test_resolve_chain() {
-    let server = get_server().await;
+    let server = TestServer::new().await;
 
     let root = env::current_dir().expect("cannot get current dir");
 
@@ -326,7 +321,7 @@ async fn test_resolve_chain() {
 
 #[tokio::test]
 async fn test_method_overloading() {
-    let server = get_server().await;
+    let server = TestServer::new().await;
 
     let root = env::current_dir().expect("cannot get current dir");
 

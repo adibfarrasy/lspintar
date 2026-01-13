@@ -552,6 +552,9 @@ impl LanguageSupport for GroovySupport {
           (variable_declaration type: (generic_type) @identifier)
           (parameter type: (type_identifier) @identifier)
           (parameter type: (generic_type) @identifier)
+          (interface_declaration name: (identifier) @identifier)
+          (class_declaration name: (identifier) @identifier)
+          (enum_declaration name: (identifier) @identifier)
         ]
         "#;
         let query = Query::new(&self.get_ts_language(), query_text).ok()?;
