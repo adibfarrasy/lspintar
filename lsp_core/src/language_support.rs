@@ -77,4 +77,11 @@ pub trait LanguageSupport: Send + Sync {
     ) -> Option<Vec<(String, Position)>>;
 
     fn get_literal_type(&self, tree: &Tree, content: &str, position: &Position) -> Option<String>;
+
+    fn get_method_receiver_and_params(
+        &self,
+        node: Node,
+        content: &str,
+        position: &Position,
+    ) -> Option<(String, Vec<String>)>;
 }

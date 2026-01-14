@@ -279,7 +279,7 @@ impl Backend {
     }
 
     #[tracing::instrument(skip_all)]
-    async fn symbol_to_response(
+    async fn symbol_to_defn_response(
         &self,
         fqn: String,
         branch: &str,
@@ -303,6 +303,38 @@ impl Backend {
                     "Failed to convert to location".to_string(),
                 )
             })
+    }
+
+    fn symbols_to_impl_response(
+        &self,
+        implementations: Vec<Symbol>,
+    ) -> Option<GotoImplementationResponse> {
+        let locations: Vec<Location> = implementations
+            .into_iter()
+            .map(|sym| Location {
+                uri: Url::from_file_path(&sym.file_path).unwrap(),
+                range: Range {
+                    start: Position {
+                        line: sym.ident_line_start as u32,
+                        character: sym.ident_char_start as u32,
+                    },
+                    end: Position {
+                        line: sym.ident_line_end as u32,
+                        character: sym.ident_char_end as u32,
+                    },
+                },
+            })
+            .collect();
+
+        let response = match locations.len() {
+            0 => None,
+            1 => Some(GotoImplementationResponse::Scalar(
+                locations.first().unwrap().clone(),
+            )),
+            _ => Some(GotoImplementationResponse::Array(locations)),
+        };
+
+        return response;
     }
 
     #[tracing::instrument(skip_all)]
@@ -488,6 +520,21 @@ impl Backend {
 
         None
     }
+
+    /**
+     For cases where matching exact parameter types is impractical/overkill.
+    */
+    fn filter_by_arity(&self, symbols: Vec<Symbol>, expected_param_count: usize) -> Vec<Symbol> {
+        symbols
+            .into_iter()
+            .filter(|s| {
+                s.metadata
+                    .parameters
+                    .as_ref()
+                    .map_or(false, |params| params.len() == expected_param_count)
+            })
+            .collect()
+    }
 }
 
 #[tower_lsp::async_trait]
@@ -600,7 +647,7 @@ impl LanguageServer for Backend {
                         "Failed to find FQN by location",
                     )))?;
 
-                return Ok(Some(self.symbol_to_response(fqn, &branch).await?));
+                return Ok(Some(self.symbol_to_defn_response(fqn, &branch).await?));
             };
 
             if let Some((ident, qualifier)) =
@@ -688,7 +735,7 @@ impl LanguageServer for Backend {
                                 "Failed to find FQN by location",
                             )))?;
 
-                        return Ok(Some(self.symbol_to_response(fqn, &branch).await?));
+                        return Ok(Some(self.symbol_to_defn_response(fqn, &branch).await?));
                     }
                 }
             } else {
@@ -744,69 +791,85 @@ impl LanguageServer for Backend {
 
             let position = params.text_document_position_params.position;
 
-            if let Some(type_name) =
-                lang.get_type_at_position(tree.root_node(), &content, &position)
-            {
-                let fqn = self
-                    .resolve_fqn(&type_name, imports, package_name, &branch)
-                    .await
-                    .ok_or(tower_lsp::jsonrpc::Error::invalid_params(format!(
-                        "Failed to find FQN by location",
-                    )))?;
+            if let Some((ident, _)) = lang.find_ident_at_position(&tree, &content, &position) {
+                if let Some(type_name) =
+                    lang.get_type_at_position(tree.root_node(), &content, &position)
+                {
+                    let fqn = self
+                        .resolve_fqn(&type_name, imports, package_name, &branch)
+                        .await
+                        .ok_or(tower_lsp::jsonrpc::Error::invalid_params(format!(
+                            "Failed to find FQN by location",
+                        )))?;
 
-                let implementations = self
-                    .repo
-                    .get_interface_impls_by_fqn_and_branch(&fqn, &branch)
-                    .await
-                    .map_err(|e| {
-                        tower_lsp::jsonrpc::Error::invalid_params(format!(
-                            "Failed to find interface implementations by FQN: {}",
-                            e,
-                        ))
-                    })?;
-
-                let implementations = if implementations.is_empty() {
-                    // Best effort
-                    self.repo
-                        .get_interface_impls_by_short_name_and_branch(&type_name, &branch)
+                    let implementations = self
+                        .repo
+                        .get_interface_impls_by_fqn_and_branch(&fqn, &branch)
                         .await
                         .map_err(|e| {
                             tower_lsp::jsonrpc::Error::invalid_params(format!(
-                                "Failed to find interface implementations by short name: {}",
+                                "Failed to find parent implementations by FQN: {}",
                                 e,
                             ))
-                        })?
-                } else {
-                    implementations
+                        })?;
+
+                    let implementations = if implementations.is_empty() {
+                        // Best effort
+                        self.repo
+                            .get_interface_impls_by_short_name_and_branch(&type_name, &branch)
+                            .await
+                            .map_err(|e| {
+                                tower_lsp::jsonrpc::Error::invalid_params(format!(
+                                    "Failed to find parent implementations by short name: {}",
+                                    e,
+                                ))
+                            })?
+                    } else {
+                        implementations
+                    };
+
+                    return Ok(self.symbols_to_impl_response(implementations));
                 };
 
-                let locations: Vec<Location> = implementations
-                    .into_iter()
-                    .map(|sym| Location {
-                        uri: Url::from_file_path(&sym.file_path).unwrap(),
-                        range: Range {
-                            start: Position {
-                                line: sym.ident_line_start as u32,
-                                character: sym.ident_char_start as u32,
-                            },
-                            end: Position {
-                                line: sym.ident_line_end as u32,
-                                character: sym.ident_char_end as u32,
-                            },
-                        },
-                    })
-                    .collect();
+                if let Some((receiver_type, params)) =
+                    lang.get_method_receiver_and_params(tree.root_node(), &content, &position)
+                {
+                    let parent_fqn = self
+                        .resolve_fqn(&receiver_type, imports, package_name, &branch)
+                        .await
+                        .ok_or_else(|| {
+                            tower_lsp::jsonrpc::Error::invalid_params("Failed to resolve FQN")
+                        })?;
 
-                let response = match locations.len() {
-                    0 => None,
-                    1 => Some(GotoImplementationResponse::Scalar(
-                        locations.first().unwrap().clone(),
-                    )),
-                    _ => Some(GotoImplementationResponse::Array(locations)),
-                };
+                    let implementations = self
+                        .repo
+                        .get_interface_impls_by_fqn_and_branch(&parent_fqn, &branch)
+                        .await
+                        .map_err(|e| {
+                            tower_lsp::jsonrpc::Error::invalid_params(format!(
+                                "Failed to find parent implementations by FQN: {}",
+                                e,
+                            ))
+                        })?;
 
-                return Ok(response);
-            };
+                    let mut method_symbols = Vec::new();
+                    for impl_symbol in &implementations {
+                        let method_fqn = format!("{}#{}", impl_symbol.fully_qualified_name, &ident);
+
+                        if let Ok(symbols) = self
+                            .repo
+                            .find_symbols_by_fqn_and_branch(&method_fqn, &branch)
+                            .await
+                        {
+                            method_symbols.extend(symbols);
+                        }
+                    }
+
+                    method_symbols = self.filter_by_arity(method_symbols, params.len());
+
+                    return Ok(self.symbols_to_impl_response(method_symbols));
+                }
+            }
         }
 
         Ok(None)

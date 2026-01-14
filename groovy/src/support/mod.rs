@@ -307,6 +307,31 @@ impl GroovySupport {
 
         args
     }
+
+    fn extract_method_parameters(&self, method_node: &Node, content: &str) -> Vec<String> {
+        let mut cursor = method_node.walk();
+        for child in method_node.children(&mut cursor) {
+            if child.kind() == "parameters" {
+                return self.parse_parameter_list(&child, content);
+            }
+        }
+        vec![]
+    }
+
+    fn parse_parameter_list(&self, params_node: &Node, content: &str) -> Vec<String> {
+        let mut params = Vec::new();
+        let mut cursor = params_node.walk();
+        for child in params_node.children(&mut cursor) {
+            if child.kind() == "parameter" {
+                if let Some(type_node) = child.child_by_field_name("type") {
+                    if let Ok(type_name) = type_node.utf8_text(content.as_bytes()) {
+                        params.push(type_name.to_string());
+                    }
+                }
+            }
+        }
+        params
+    }
 }
 
 impl LanguageSupport for GroovySupport {
@@ -720,6 +745,64 @@ impl LanguageSupport for GroovySupport {
             };
         }
     }
+
+    fn get_method_receiver_and_params(
+        &self,
+        node: Node,
+        content: &str,
+        position: &Position,
+    ) -> Option<(String, Vec<String>)> {
+        let query_text = r#"
+        [
+           (class_declaration 
+            name: (identifier) @receiver
+            body: (class_body (function_declaration) @method))
+          (interface_declaration 
+            name: (identifier) @receiver
+            body: (interface_body (function_declaration) @method))
+          (enum_declaration 
+            name: (identifier) @receiver
+            body: (enum_body (function_declaration) @method))
+        ]
+        "#;
+        let query = Query::new(&self.get_ts_language(), query_text).ok()?;
+
+        let method_idx = query.capture_index_for_name("method");
+        let receiver_idx = query.capture_index_for_name("receiver");
+
+        if method_idx.is_none() || receiver_idx.is_none() {
+            return None;
+        }
+
+        let method_idx = method_idx.unwrap();
+        let receiver_idx = receiver_idx.unwrap();
+        let mut result = None;
+        let mut cursor = QueryCursor::new();
+        cursor
+            .matches(&query, node, content.as_bytes())
+            .find(|match_| {
+                let Some(method_capture) = match_.captures.iter().find(|c| c.index == method_idx)
+                else {
+                    return false;
+                };
+
+                if node_contains_position(&method_capture.node, position) {
+                    let Some(receiver_capture) =
+                        match_.captures.iter().find(|c| c.index == receiver_idx)
+                    else {
+                        return false;
+                    };
+                    if let Ok(text) = receiver_capture.node.utf8_text(content.as_bytes()) {
+                        let params = self.extract_method_parameters(&method_capture.node, content);
+                        result = Some((text.to_string(), params));
+                        return true;
+                    }
+                }
+                false
+            });
+
+        result
+    }
 }
 
 #[allow(dead_code)]
@@ -733,6 +816,7 @@ mod tests {
     mod get_imports;
     mod get_indexer_data;
     mod get_literal_type;
+    mod get_method_receiver_and_params;
 
     fn find_position(content: &str, marker: &str) -> Position {
         content
