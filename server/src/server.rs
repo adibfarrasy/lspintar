@@ -879,7 +879,7 @@ impl LanguageServer for Backend {
         Ok(())
     }
 
-    async fn did_change(&self, params: DidChangeTextDocumentParams) {
+    async fn did_save(&self, params: DidSaveTextDocumentParams) {
         let file_path = match params.text_document.uri.to_file_path() {
             Ok(path) => path,
             Err(_) => return,
@@ -887,10 +887,7 @@ impl LanguageServer for Backend {
 
         if let Some(indexer) = self.indexer.read().await.as_ref() {
             if let Err(e) = indexer.index_file(&file_path).await {
-                tower_lsp::jsonrpc::Error::invalid_params(format!(
-                    "Failed to index file {:?}: {}",
-                    &file_path, e
-                ));
+                tracing::error!("Failed to index file {:?}: {}", &file_path, e);
             }
         }
     }

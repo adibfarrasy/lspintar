@@ -15,7 +15,20 @@ impl Repository {
     }
 
     pub async fn insert_symbols(&self, symbols: &[Symbol]) -> Result<(), sqlx::Error> {
+        if symbols.is_empty() {
+            return Ok(());
+        }
+
         let mut tx = self.pool.begin().await?;
+
+        let file_path = &symbols[0].file_path;
+        let branch = &symbols[0].vcs_branch;
+        sqlx::query("DELETE FROM symbols WHERE file_path = ? AND vcs_branch = ?")
+            .bind(file_path)
+            .bind(branch)
+            .execute(&mut *tx)
+            .await?;
+
         for s in symbols {
             sqlx::query(
                 "INSERT INTO symbols (vcs_branch, short_name, package_name, fully_qualified_name, parent_name, 
