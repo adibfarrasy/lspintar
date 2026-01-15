@@ -52,6 +52,8 @@ const IDENT_QUERY: &str = r#"
     (interface_declaration name: (identifier) @interface_name)
     (function_declaration name: (identifier) @function_name)
     (field_declaration (variable_declarator name: (identifier) @field_decl_name))
+    (super_interfaces (type_list (type_identifier) @super_interfaces))
+    (superclass (type_identifier) @superclass)
 "#;
 
 impl GroovySupport {
@@ -171,6 +173,8 @@ impl GroovySupport {
                         "scoped_constructor_type",
                         Some("scoped_constructor_qualifier"),
                     ),
+                    ("super_interfaces", None),
+                    ("superclass", None),
                 ]
                 .into_iter()
                 .for_each(|(name, qual)| {

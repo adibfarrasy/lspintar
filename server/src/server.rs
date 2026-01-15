@@ -647,6 +647,8 @@ impl LanguageServer for Backend {
                         "Failed to find FQN by location",
                     )))?;
 
+                println!("fqn: {}", fqn);
+
                 return Ok(Some(self.symbol_to_defn_response(fqn, &branch).await?));
             };
 
