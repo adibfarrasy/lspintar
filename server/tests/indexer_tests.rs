@@ -52,7 +52,6 @@ async fn test_index_groovy_class() {
             ident_line_end: 3,
             ident_char_start: 6,
             ident_char_end: 10,
-            extends_name: None,
             metadata: Json(SymbolMetadata {
                 parameters: None,
                 return_type: None,
@@ -110,7 +109,6 @@ async fn test_index_groovy_gradle_single_workspace() {
             ident_line_end: 4,
             ident_char_start: 6,
             ident_char_end: 17,
-            extends_name: Some("BaseService".to_string()),
             metadata: Json(SymbolMetadata {
                 parameters: None,
                 return_type: None,
@@ -154,7 +152,6 @@ async fn test_index_groovy_gradle_single_workspace() {
             ident_line_end: 6,
             ident_char_start: 10,
             ident_char_end: 20,
-            extends_name: None,
             metadata: Json(SymbolMetadata {
                 parameters: None,
                 return_type: None,
@@ -198,7 +195,6 @@ async fn test_index_groovy_gradle_single_workspace() {
             ident_line_end: 7,
             ident_char_start: 11,
             ident_char_end: 25,
-            extends_name: None,
             metadata: Json(SymbolMetadata {
                 parameters: Some(vec![]),
                 return_type: Some("String".to_string()),
@@ -242,7 +238,6 @@ async fn test_index_groovy_gradle_single_workspace() {
             ident_line_end: 9,
             ident_char_start: 19,
             ident_char_end: 31,
-            extends_name: None,
             metadata: Json(SymbolMetadata {
                 parameters: None,
                 return_type: Some("String".to_string()),
@@ -300,7 +295,6 @@ async fn test_index_groovy_gradle_multi_workspace() {
             ident_line_end: 4,
             ident_char_start: 15,
             ident_char_end: 26,
-            extends_name: None,
             metadata: Json(SymbolMetadata {
                 parameters: None,
                 return_type: None,
@@ -344,7 +338,6 @@ async fn test_index_groovy_gradle_multi_workspace() {
             ident_line_end: 19,
             ident_char_start: 9,
             ident_char_end: 16,
-            extends_name: None,
             metadata: Json(SymbolMetadata {
                 parameters: Some(vec![]),
                 return_type: None,
@@ -388,7 +381,6 @@ async fn test_index_groovy_gradle_multi_workspace() {
             ident_line_end: 8,
             ident_char_start: 25,
             ident_char_end: 36,
-            extends_name: None,
             metadata: Json(SymbolMetadata {
                 parameters: None,
                 return_type: None,
@@ -432,7 +424,6 @@ async fn test_index_groovy_gradle_multi_workspace() {
             ident_line_end: 5,
             ident_char_start: 21,
             ident_char_end: 35,
-            extends_name: None,
             metadata: Json(SymbolMetadata {
                 parameters: None,
                 return_type: Some("int".to_string()),

@@ -1,6 +1,6 @@
 use sqlx::SqlitePool;
 
-use crate::models::{symbol::Symbol, symbol_interface_mapping::SymbolInterfaceMapping};
+use crate::models::symbol::Symbol;
 
 #[derive(Debug)]
 pub struct Repository {
@@ -21,8 +21,8 @@ impl Repository {
                 "INSERT INTO symbols (vcs_branch, short_name, package_name, fully_qualified_name, parent_name, 
                 file_path, file_type, symbol_type, modifiers, line_start, line_end, 
                 char_start, char_end, ident_line_start, ident_line_end, ident_char_start,
-                ident_char_end, extends_name, metadata, last_modified)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ident_char_end, metadata, last_modified)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(vcs_branch, file_path, fully_qualified_name, metadata) DO UPDATE SET
                     vcs_branch = excluded.vcs_branch,
                     short_name = excluded.short_name,
@@ -38,7 +38,6 @@ impl Repository {
                     ident_line_end = excluded.ident_line_end,
                     ident_char_start = excluded.ident_char_start,
                     ident_char_end = excluded.ident_char_end,
-                    extends_name = excluded.extends_name,
                     metadata = excluded.metadata,
                     last_modified = excluded.last_modified",
             )
@@ -59,7 +58,6 @@ impl Repository {
             .bind(s.ident_line_end)
             .bind(s.ident_char_start)
             .bind(s.ident_char_end)
-            .bind(&s.extends_name)
             .bind(&s.metadata)
             .bind(s.last_modified)
             .execute(&mut *tx)
@@ -101,20 +99,20 @@ impl Repository {
         .await
     }
 
-    pub async fn insert_symbol_interface_mappings(
+    pub async fn insert_symbol_super_mappings(
         &self,
         mappings: Vec<(&str, &str, Option<&str>)>,
     ) -> Result<(), sqlx::Error> {
         let mut tx = self.pool.begin().await?;
 
-        for (symbol_fqn, interface_short_name, interface_fqn) in mappings {
+        for (symbol_fqn, super_short_name, super_fqn) in mappings {
             sqlx::query(
-                "INSERT INTO symbol_interface_mapping (symbol_fqn, interface_short_name, interface_fqn) 
+                "INSERT INTO symbol_super_mapping (symbol_fqn, super_short_name, super_fqn) 
              VALUES (?, ?, ?)",
             )
             .bind(symbol_fqn)
-            .bind(interface_short_name)
-            .bind(interface_fqn)
+            .bind(super_short_name)
+            .bind(super_fqn)
             .execute(&mut *tx)
             .await?;
         }
@@ -123,9 +121,9 @@ impl Repository {
         Ok(())
     }
 
-    pub async fn get_interface_impls_by_fqn_and_branch(
+    pub async fn get_super_impls_by_fqn_and_branch(
         &self,
-        interface_fqn: &str,
+        super_fqn: &str,
         branch: &str,
     ) -> Result<Vec<Symbol>, sqlx::Error> {
         let symbols = sqlx::query_as::<_, Symbol>(
@@ -136,12 +134,12 @@ impl Repository {
                 s.ident_line_end, s.ident_char_start, s.ident_char_end,
                 s.extends_name, s.metadata, s.last_modified
                 FROM symbols s
-                INNER JOIN symbol_interface_mapping sim 
-                    ON s.fully_qualified_name = sim.symbol_fqn
-                WHERE sim.interface_fqn = ? 
+                INNER JOIN symbol_super_mapping ssm 
+                    ON s.fully_qualified_name = ssm.symbol_fqn
+                WHERE ssm.super_fqn = ? 
                 AND s.vcs_branch = ?",
         )
-        .bind(interface_fqn)
+        .bind(super_fqn)
         .bind(branch)
         .fetch_all(&self.pool)
         .await?;
@@ -149,9 +147,9 @@ impl Repository {
         Ok(symbols)
     }
 
-    pub async fn get_interface_impls_by_short_name_and_branch(
+    pub async fn get_super_impls_by_short_name_and_branch(
         &self,
-        interface_short_name: &str,
+        super_short_name: &str,
         branch: &str,
     ) -> Result<Vec<Symbol>, sqlx::Error> {
         let symbols = sqlx::query_as::<_, Symbol>(
@@ -162,12 +160,12 @@ impl Repository {
                 s.ident_line_end, s.ident_char_start, s.ident_char_end,
                 s.extends_name, s.metadata, s.last_modified
                 FROM symbols s
-                INNER JOIN symbol_interface_mapping sim 
-                    ON s.fully_qualified_name = sim.symbol_fqn
-                WHERE sim.interface_short_name = ? 
+                INNER JOIN symbol_super_mapping ssm 
+                    ON s.fully_qualified_name = ssm.symbol_fqn
+                WHERE ssm.interface_short_name = ? 
                 AND s.vcs_branch = ?",
         )
-        .bind(interface_short_name)
+        .bind(super_short_name)
         .bind(branch)
         .fetch_all(&self.pool)
         .await?;
@@ -175,7 +173,7 @@ impl Repository {
         Ok(symbols)
     }
 
-    pub async fn get_interfaces_by_symbol_fqn_and_branch(
+    pub async fn get_supers_by_symbol_fqn_and_branch(
         &self,
         symbol_fqn: &str,
         branch: &str,
@@ -188,9 +186,9 @@ impl Repository {
                 s.ident_line_end, s.ident_char_start, s.ident_char_end,
                 s.extends_name, s.metadata, s.last_modified
                 FROM symbols s
-                INNER JOIN symbol_interface_mapping sim 
-                    ON s.fully_qualified_name = sim.symbol_fqn
-                WHERE sim.symbol_fqn = ? 
+                INNER JOIN symbol_super_mapping ssm 
+                    ON s.fully_qualified_name = ssm.super_fqn
+                WHERE ssm.symbol_fqn = ? 
                 AND s.vcs_branch = ?",
         )
         .bind(symbol_fqn)

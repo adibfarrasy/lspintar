@@ -81,6 +81,47 @@ async fn test_interface_impl() {
 }
 
 #[tokio::test]
+async fn test_superclass_extends() {
+    let server = TestServer::new().await;
+
+    let root = env::current_dir().expect("cannot get current dir");
+
+    let params = GotoImplementationParams {
+        text_document_position_params: TextDocumentPositionParams {
+            text_document: TextDocumentIdentifier {
+                uri: Url::from_file_path(root.join("tests/fixtures/groovy-gradle-multi/core/src/main/groovy/com/example/core/BaseService.groovy"))
+                    .expect("cannot parse root URI"),
+            },
+            position: Position::new(4, 16),
+        },
+        work_done_progress_params: WorkDoneProgressParams::default(),
+        partial_result_params: PartialResultParams::default(),
+    };
+
+    let result = server.backend.goto_implementation(params).await.unwrap();
+    assert!(result.is_some());
+
+    let location = Location::new(
+        Url::from_file_path(root.join(
+            "tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy",
+        ))
+        .unwrap(),
+        Range {
+            start: Position {
+                line: 6,
+                character: 6,
+            },
+            end: Position {
+                line: 6,
+                character: 20,
+            },
+        },
+    );
+
+    assert_eq!(result.unwrap(), GotoImplementationResponse::from(location));
+}
+
+#[tokio::test]
 async fn test_method_implementation() {
     let server = TestServer::new().await;
 

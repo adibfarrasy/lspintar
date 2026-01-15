@@ -187,8 +187,17 @@ impl Backend {
             None => return vec![],
         };
 
-        // Try superclass
-        if let Some(super_name) = &type_symbol.extends_name {
+        // Try superclass/interfaces
+        let supers = match self
+            .repo
+            .get_supers_by_symbol_fqn_and_branch(&type_symbol.fully_qualified_name, &branch)
+            .await
+        {
+            Ok(symbols) => symbols,
+            Err(_) => return vec![],
+        };
+
+        for super_name in supers.iter().map(|symbol| &symbol.fully_qualified_name) {
             let results = self
                 .recurse_try_members_with_inheritance(
                     super_name,
@@ -204,17 +213,8 @@ impl Backend {
             }
         }
 
-        // Try interfaces
-        let interfaces = match self
-            .repo
-            .get_interfaces_by_symbol_fqn_and_branch(&type_symbol.fully_qualified_name, &branch)
-            .await
-        {
-            Ok(symbols) => symbols,
-            Err(_) => return vec![],
-        };
-
-        for super_name in interfaces.iter().map(|symbol| &symbol.fully_qualified_name) {
+        println!("supers: {:#?}", supers);
+        for super_name in supers.iter().map(|symbol| &symbol.fully_qualified_name) {
             let results = self
                 .recurse_try_members_with_inheritance(
                     super_name,
@@ -804,7 +804,7 @@ impl LanguageServer for Backend {
 
                     let implementations = self
                         .repo
-                        .get_interface_impls_by_fqn_and_branch(&fqn, &branch)
+                        .get_super_impls_by_fqn_and_branch(&fqn, &branch)
                         .await
                         .map_err(|e| {
                             tower_lsp::jsonrpc::Error::invalid_params(format!(
@@ -816,7 +816,7 @@ impl LanguageServer for Backend {
                     let implementations = if implementations.is_empty() {
                         // Best effort
                         self.repo
-                            .get_interface_impls_by_short_name_and_branch(&type_name, &branch)
+                            .get_super_impls_by_short_name_and_branch(&type_name, &branch)
                             .await
                             .map_err(|e| {
                                 tower_lsp::jsonrpc::Error::invalid_params(format!(
@@ -843,7 +843,7 @@ impl LanguageServer for Backend {
 
                     let implementations = self
                         .repo
-                        .get_interface_impls_by_fqn_and_branch(&parent_fqn, &branch)
+                        .get_super_impls_by_fqn_and_branch(&parent_fqn, &branch)
                         .await
                         .map_err(|e| {
                             tower_lsp::jsonrpc::Error::invalid_params(format!(

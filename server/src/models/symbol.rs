@@ -27,8 +27,6 @@ pub struct Symbol {
     pub ident_char_start: i64,
     pub ident_char_end: i64,
 
-    pub extends_name: Option<String>,
-
     #[sqlx(json)]
     pub metadata: Json<SymbolMetadata>,
     pub last_modified: i64,

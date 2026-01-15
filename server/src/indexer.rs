@@ -7,7 +7,7 @@ use std::{collections::HashMap, path::Path, sync::Arc};
 use crate::{
     models::{
         symbol::{Symbol, SymbolMetadata, SymbolParameter},
-        symbol_interface_mapping::SymbolInterfaceMapping,
+        symbol_super_mapping::SymbolSuperMapping,
     },
     repo::Repository,
 };
@@ -69,13 +69,13 @@ impl Indexer {
                         .map(|mapping| {
                             (
                                 &*mapping.symbol_fqn,
-                                &*mapping.interface_short_name,
-                                mapping.interface_fqn.as_deref(),
+                                &*mapping.super_short_name,
+                                mapping.super_fqn.as_deref(),
                             )
                         })
                         .collect();
 
-                    self.repo.insert_symbol_interface_mappings(mappings).await?;
+                    self.repo.insert_symbol_super_mappings(mappings).await?;
                 }
             }
         }
@@ -88,9 +88,9 @@ impl Indexer {
         lang: &dyn LanguageSupport,
         path: &Path,
         content: &str,
-    ) -> Result<(Vec<Symbol>, Vec<SymbolInterfaceMapping>)> {
+    ) -> Result<(Vec<Symbol>, Vec<SymbolSuperMapping>)> {
         let mut symbols = Vec::new();
-        let mut symbol_interface_mappings = Vec::new();
+        let mut symbol_super_mappings = Vec::new();
         let package_name = lang
             .get_package_name(tree, content)
             .ok_or_else(|| anyhow!("failed to get package name"))?;
@@ -106,10 +106,10 @@ impl Indexer {
             path,
             content,
             &package_name,
-            &mut symbol_interface_mappings,
+            &mut symbol_super_mappings,
             imports,
         )?;
-        Ok((symbols, symbol_interface_mappings))
+        Ok((symbols, symbol_super_mappings))
     }
 
     fn dfs(
@@ -122,7 +122,7 @@ impl Indexer {
         path: &Path,
         content: &str,
         package_name: &str,
-        symbol_interface_mappings: &mut Vec<SymbolInterfaceMapping>,
+        symbol_super_mappings: &mut Vec<SymbolSuperMapping>,
         imports: Vec<String>,
     ) -> Result<()> {
         let node_type = lang.get_type(&node);
@@ -144,14 +144,25 @@ impl Indexer {
             let modifiers = lang.get_modifiers(&node, content);
             let implements = lang.get_implements(&node, content);
 
+            if let Some(superclass_short_name) = lang.get_extends(&node, content) {
+                let superclass_fqn = naive_resolve_fqn(&superclass_short_name, imports.clone());
+
+                symbol_super_mappings.push(SymbolSuperMapping {
+                    id: None,
+                    symbol_fqn: fqn.clone(),
+                    super_short_name: superclass_short_name,
+                    super_fqn: superclass_fqn,
+                });
+            }
+
             for interface_short_name in implements {
                 let interface_fqn = naive_resolve_fqn(&interface_short_name, imports.clone());
 
-                symbol_interface_mappings.push(SymbolInterfaceMapping {
+                symbol_super_mappings.push(SymbolSuperMapping {
                     id: None,
                     symbol_fqn: fqn.clone(),
-                    interface_short_name,
-                    interface_fqn,
+                    super_short_name: interface_short_name,
+                    super_fqn: interface_fqn,
                 });
             }
 
@@ -210,7 +221,6 @@ impl Indexer {
                 ident_line_end: ident_range.end.line as i64,
                 ident_char_start: ident_range.start.character as i64,
                 ident_char_end: ident_range.end.character as i64,
-                extends_name: lang.get_extends(&node, content),
                 metadata: Json::from(metadata),
                 last_modified: now as i64,
             });
@@ -235,7 +245,7 @@ impl Indexer {
                 path,
                 content,
                 &package_name,
-                symbol_interface_mappings,
+                symbol_super_mappings,
                 imports.clone(),
             )?;
         }
