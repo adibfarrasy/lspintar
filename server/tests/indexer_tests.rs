@@ -250,7 +250,7 @@ async fn test_index_groovy_gradle_single_workspace() {
 }
 
 #[tokio::test]
-async fn test_index_groovy_gradle_multi_workspace() {
+async fn test_index_groovy_class_multi_project() {
     let repo = Arc::new(Repository::new(":memory:").await.unwrap());
     let path = Path::new("tests/fixtures/groovy-gradle-multi");
 
@@ -281,9 +281,232 @@ async fn test_index_groovy_gradle_multi_workspace() {
             package_name: "com.example.core".to_string(),
             fully_qualified_name: "com.example.core.BaseService".to_string(),
             parent_name: Some("com.example.core".to_string()),
-            file_path:
-                "tests/fixtures/groovy-gradle-multi/core/src/main/groovy/com/example/core/BaseService.groovy"
-                    .to_string(),
+            file_path: "tests/fixtures/groovy-gradle-multi/core/src/main/groovy/com/example/core/BaseService.groovy".to_string(),
+            file_type: "Groovy".to_string(),
+            symbol_type: "Class".to_string(),
+            modifiers: Json(vec!["abstract".to_string()]),
+            line_start: 4,
+            line_end: 14,
+            char_start: 0,
+            char_end: 1,
+            ident_line_start: 4,
+            ident_line_end: 4,
+            ident_char_start: 15,
+            ident_char_end: 26,
+            metadata: Json(SymbolMetadata {
+                parameters: None,
+                return_type: None,
+                documentation: None,
+                annotations: Some(vec![])
+            }),
+            last_modified: 0,
+        }
+    );
+}
+
+#[tokio::test]
+async fn test_index_groovy_method() {
+    let repo = Arc::new(Repository::new(":memory:").await.unwrap());
+    let path = Path::new("tests/fixtures/groovy-gradle-multi");
+
+    let vcs = get_vcs_handler(&path);
+    let mut indexer = Indexer::new(Arc::clone(&repo), Arc::clone(&vcs));
+    indexer.register_language("groovy", Arc::new(GroovySupport::new()));
+    indexer
+        .index_workspace(&path)
+        .await
+        .expect("Indexing failed");
+
+    let result = repo
+        .find_symbol_by_fqn_and_branch("com.example.api.UserController#execute", "NONE")
+        .await
+        .expect("Query failed");
+    assert!(result.is_some(), "Symbol should be found");
+
+    let mut symbol = result.unwrap();
+    symbol.id = None;
+    symbol.last_modified = 0;
+
+    assert_eq!(
+        symbol,
+        Symbol {
+            id: None,
+            vcs_branch: "NONE".to_string(),
+            short_name: "execute".to_string(),
+            package_name: "com.example.api".to_string(),
+            fully_qualified_name: "com.example.api.UserController#execute".to_string(),
+            parent_name: Some("com.example.api.UserController".to_string()),
+            file_path: "tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy".to_string(),
+            file_type: "Groovy".to_string(),
+            symbol_type: "Function".to_string(),
+            modifiers: Json(vec![]),
+            line_start: 14,
+            line_end: 21,
+            char_start: 4,
+            char_end: 5,
+            ident_line_start: 19,
+            ident_line_end: 19,
+            ident_char_start: 9,
+            ident_char_end: 16,
+            metadata: Json(SymbolMetadata {
+                parameters: Some(vec![]),
+                return_type: None,
+                documentation: Some("/**\n    * lorem ipsum\n    * dolor sit amet\n    */".to_string()),
+                annotations: Some(vec!["Override".to_string()])
+            }),
+            last_modified: 0,
+        }
+    );
+}
+
+#[tokio::test]
+async fn test_index_groovy_nested_class() {
+    let repo = Arc::new(Repository::new(":memory:").await.unwrap());
+    let path = Path::new("tests/fixtures/groovy-gradle-multi");
+
+    let vcs = get_vcs_handler(&path);
+    let mut indexer = Indexer::new(Arc::clone(&repo), Arc::clone(&vcs));
+    indexer.register_language("groovy", Arc::new(GroovySupport::new()));
+    indexer
+        .index_workspace(&path)
+        .await
+        .expect("Indexing failed");
+
+    let result = repo
+        .find_symbol_by_fqn_and_branch("com.example.api.UserController#ApiResponse", "NONE")
+        .await
+        .expect("Query failed");
+    assert!(result.is_some(), "Symbol should be found");
+
+    let mut symbol = result.unwrap();
+    symbol.id = None;
+    symbol.last_modified = 0;
+
+    assert_eq!(
+        symbol,
+        Symbol {
+            id: None,
+            vcs_branch: "NONE".to_string(),
+            short_name: "ApiResponse".to_string(),
+            package_name: "com.example.api".to_string(),
+            fully_qualified_name: "com.example.api.UserController#ApiResponse".to_string(),
+            parent_name: Some("com.example.api.UserController".to_string()),
+            file_path: "tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy".to_string(),
+            file_type: "Groovy".to_string(),
+            symbol_type: "Class".to_string(),
+            modifiers: Json(vec!["private".to_string(), "static".to_string()]),
+            line_start: 8,
+            line_end: 12,
+            char_start: 4,
+            char_end: 5,
+            ident_line_start: 8,
+            ident_line_end: 8,
+            ident_char_start: 25,
+            ident_char_end: 36,
+            metadata: Json(SymbolMetadata {
+                parameters: None,
+                return_type: None,
+                documentation: None,
+                annotations: Some(vec![])
+            }),
+            last_modified: 0,
+        }
+    );
+}
+
+#[tokio::test]
+async fn test_index_groovy_field() {
+    let repo = Arc::new(Repository::new(":memory:").await.unwrap());
+    let path = Path::new("tests/fixtures/groovy-gradle-multi");
+
+    let vcs = get_vcs_handler(&path);
+    let mut indexer = Indexer::new(Arc::clone(&repo), Arc::clone(&vcs));
+    indexer.register_language("groovy", Arc::new(GroovySupport::new()));
+    indexer
+        .index_workspace(&path)
+        .await
+        .expect("Indexing failed");
+
+    let result = repo
+        .find_symbol_by_fqn_and_branch("com.example.core.DataProcessor#MAX_BATCH_SIZE", "NONE")
+        .await
+        .expect("Query failed");
+    assert!(result.is_some(), "Symbol should be found");
+
+    let mut symbol = result.unwrap();
+    symbol.id = None;
+    symbol.last_modified = 0;
+
+    assert_eq!(
+        symbol,
+        Symbol {
+            id: None,
+            vcs_branch: "NONE".to_string(),
+            short_name: "MAX_BATCH_SIZE".to_string(),
+            package_name: "com.example.core".to_string(),
+            fully_qualified_name: "com.example.core.DataProcessor#MAX_BATCH_SIZE".to_string(),
+            parent_name: Some("com.example.core.DataProcessor".to_string()),
+            file_path: "tests/fixtures/groovy-gradle-multi/core/src/main/groovy/com/example/core/DataProcessor.groovy".to_string(),
+            file_type: "Groovy".to_string(),
+            symbol_type: "Field".to_string(),
+            modifiers: Json(vec!["static".to_string(), "final".to_string()]),
+            line_start: 5,
+            line_end: 5,
+            char_start: 4,
+            char_end: 42,
+            ident_line_start: 5,
+            ident_line_end: 5,
+            ident_char_start: 21,
+            ident_char_end: 35,
+            metadata: Json(SymbolMetadata {
+                parameters: None,
+                return_type: Some("int".to_string()),
+                documentation: None,
+                annotations: Some(vec![])
+            }),
+            last_modified: 0,
+        }
+    );
+}
+
+#[tokio::test]
+async fn test_index_groovy_inheritance() {
+    let repo = Arc::new(Repository::new(":memory:").await.unwrap());
+    let path = Path::new("tests/fixtures/groovy-gradle-multi");
+
+    let vcs = get_vcs_handler(&path);
+    let mut indexer = Indexer::new(Arc::clone(&repo), Arc::clone(&vcs));
+    indexer.register_language("groovy", Arc::new(GroovySupport::new()));
+    indexer
+        .index_workspace(&path)
+        .await
+        .expect("Indexing failed");
+
+    let results = repo
+        .find_supers_by_symbol_fqn_and_branch("com.example.api.UserController", "NONE")
+        .await
+        .expect("Query failed")
+        .into_iter()
+        .map(|mut symbol| {
+            symbol.id = None;
+            symbol.last_modified = 0;
+            symbol
+        })
+        .collect::<Vec<Symbol>>();
+
+    assert_eq!(results.len(), 2, "Should find superclass and interface");
+
+    let superclass = &results[0];
+    assert_eq!(
+        superclass,
+        &Symbol {
+            id: None,
+            vcs_branch: "NONE".to_string(),
+            short_name: "BaseService".to_string(),
+            package_name: "com.example.core".to_string(),
+            fully_qualified_name: "com.example.core.BaseService".to_string(),
+            parent_name: Some("com.example.core".to_string()),
+            file_path: "tests/fixtures/groovy-gradle-multi/core/src/main/groovy/com/example/core/BaseService.groovy".to_string(),
             file_type: "Groovy".to_string(),
             symbol_type: "Class".to_string(),
             modifiers: Json(vec!["abstract".to_string()]),
@@ -305,128 +528,31 @@ async fn test_index_groovy_gradle_multi_workspace() {
         }
     );
 
-    let result = repo
-        .find_symbol_by_fqn_and_branch("com.example.api.UserController#execute", "NONE")
-        .await
-        .expect("Query failed");
-    assert!(result.is_some(), "Symbol should be found");
-
-    let mut symbol = result.unwrap();
-    symbol.id = None;
-    symbol.last_modified = 0;
-
+    let super_interface = &results[1];
     assert_eq!(
-        symbol,
-        Symbol {
+        super_interface,
+        &Symbol {
             id: None,
             vcs_branch: "NONE".to_string(),
-            short_name: "execute".to_string(),
-            package_name: "com.example.api".to_string(),
-            fully_qualified_name: "com.example.api.UserController#execute".to_string(),
-            parent_name: Some("com.example.api.UserController".to_string()),
-            file_path:
-                "tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy"
-                    .to_string(),
-            file_type: "Groovy".to_string(),
-            symbol_type: "Function".to_string(),
-            modifiers: Json(vec![]),
-            line_start: 14,
-            line_end: 21,
-            char_start: 4,
-            char_end: 5,
-            ident_line_start: 19,
-            ident_line_end: 19,
-            ident_char_start: 9,
-            ident_char_end: 16,
-            metadata: Json(SymbolMetadata {
-                parameters: Some(vec![]),
-                return_type: None,
-                documentation: Some("/**\n    * lorem ipsum\n    * dolor sit amet\n    */".to_string()),
-                annotations: Some(vec!["Override".to_string()])
-            }),
-            last_modified: 0,
-        }
-    );
-
-    let result = repo
-        .find_symbol_by_fqn_and_branch("com.example.api.UserController#ApiResponse", "NONE")
-        .await
-        .expect("Query failed");
-    assert!(result.is_some(), "Symbol should be found");
-
-    let mut symbol = result.unwrap();
-    symbol.id = None;
-    symbol.last_modified = 0;
-
-    assert_eq!(
-        symbol,
-        Symbol {
-            id: None,
-            vcs_branch: "NONE".to_string(),
-            short_name: "ApiResponse".to_string(),
-            package_name: "com.example.api".to_string(),
-            fully_qualified_name: "com.example.api.UserController#ApiResponse".to_string(),
-            parent_name: Some("com.example.api.UserController".to_string()),
-            file_path:
-                "tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy"
-                    .to_string(),
-            file_type: "Groovy".to_string(),
-            symbol_type: "Class".to_string(),
-            modifiers: Json(vec!["private".to_string(), "static".to_string()]),
-            line_start: 8,
-            line_end: 12,
-            char_start: 4,
-            char_end: 5,
-            ident_line_start: 8,
-            ident_line_end: 8,
-            ident_char_start: 25,
-            ident_char_end: 36,
-            metadata: Json(SymbolMetadata {
-                parameters: None,
-                return_type: None,
-                documentation: None,
-                annotations: Some(vec![])
-            }),
-            last_modified: 0,
-        }
-    );
-
-    let result = repo
-        .find_symbol_by_fqn_and_branch("com.example.core.DataProcessor#MAX_BATCH_SIZE", "NONE")
-        .await
-        .expect("Query failed");
-    assert!(result.is_some(), "Symbol should be found");
-
-    let mut symbol = result.unwrap();
-    symbol.id = None;
-    symbol.last_modified = 0;
-
-    assert_eq!(
-        symbol,
-        Symbol {
-            id: None,
-            vcs_branch: "NONE".to_string(),
-            short_name: "MAX_BATCH_SIZE".to_string(),
+            short_name: "DataProcessor".to_string(),
             package_name: "com.example.core".to_string(),
-            fully_qualified_name: "com.example.core.DataProcessor#MAX_BATCH_SIZE".to_string(),
-            parent_name: Some("com.example.core.DataProcessor".to_string()),
-            file_path:
-                "tests/fixtures/groovy-gradle-multi/core/src/main/groovy/com/example/core/DataProcessor.groovy"
-                    .to_string(),
+            fully_qualified_name: "com.example.core.DataProcessor".to_string(),
+            parent_name: Some("com.example.core".to_string()),
+            file_path: "tests/fixtures/groovy-gradle-multi/core/src/main/groovy/com/example/core/DataProcessor.groovy".to_string(),
             file_type: "Groovy".to_string(),
-            symbol_type: "Field".to_string(),
-            modifiers: Json(vec!["static".to_string(), "final".to_string()]),
-            line_start: 5,
-            line_end: 5,
-            char_start: 4,
-            char_end: 42,
-            ident_line_start: 5,
-            ident_line_end: 5,
-            ident_char_start: 21,
-            ident_char_end: 35,
+            symbol_type: "Interface".to_string(),
+            modifiers: Json(vec![]),
+            line_start: 4,
+            line_end: 13,
+            char_start: 0,
+            char_end: 1,
+            ident_line_start: 4,
+            ident_line_end: 4,
+            ident_char_start: 10,
+            ident_char_end: 23,
             metadata: Json(SymbolMetadata {
                 parameters: None,
-                return_type: Some("int".to_string()),
+                return_type: None,
                 documentation: None,
                 annotations: Some(vec![])
             }),

@@ -134,7 +134,7 @@ impl Repository {
         Ok(())
     }
 
-    pub async fn get_super_impls_by_fqn_and_branch(
+    pub async fn find_super_impls_by_fqn_and_branch(
         &self,
         super_fqn: &str,
         branch: &str,
@@ -160,7 +160,7 @@ impl Repository {
         Ok(symbols)
     }
 
-    pub async fn get_super_impls_by_short_name_and_branch(
+    pub async fn find_super_impls_by_short_name_and_branch(
         &self,
         super_short_name: &str,
         branch: &str,
@@ -186,7 +186,7 @@ impl Repository {
         Ok(symbols)
     }
 
-    pub async fn get_supers_by_symbol_fqn_and_branch(
+    pub async fn find_supers_by_symbol_fqn_and_branch(
         &self,
         symbol_fqn: &str,
         branch: &str,

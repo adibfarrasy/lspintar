@@ -190,7 +190,7 @@ impl Backend {
         // Try superclass/interfaces
         let supers = match self
             .repo
-            .get_supers_by_symbol_fqn_and_branch(&type_symbol.fully_qualified_name, &branch)
+            .find_supers_by_symbol_fqn_and_branch(&type_symbol.fully_qualified_name, &branch)
             .await
         {
             Ok(symbols) => symbols,
@@ -806,7 +806,7 @@ impl LanguageServer for Backend {
 
                     let implementations = self
                         .repo
-                        .get_super_impls_by_fqn_and_branch(&fqn, &branch)
+                        .find_super_impls_by_fqn_and_branch(&fqn, &branch)
                         .await
                         .map_err(|e| {
                             tower_lsp::jsonrpc::Error::invalid_params(format!(
@@ -818,7 +818,7 @@ impl LanguageServer for Backend {
                     let implementations = if implementations.is_empty() {
                         // Best effort
                         self.repo
-                            .get_super_impls_by_short_name_and_branch(&type_name, &branch)
+                            .find_super_impls_by_short_name_and_branch(&type_name, &branch)
                             .await
                             .map_err(|e| {
                                 tower_lsp::jsonrpc::Error::invalid_params(format!(
@@ -845,7 +845,7 @@ impl LanguageServer for Backend {
 
                     let implementations = self
                         .repo
-                        .get_super_impls_by_fqn_and_branch(&parent_fqn, &branch)
+                        .find_super_impls_by_fqn_and_branch(&parent_fqn, &branch)
                         .await
                         .map_err(|e| {
                             tower_lsp::jsonrpc::Error::invalid_params(format!(
