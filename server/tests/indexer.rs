@@ -1,12 +1,22 @@
 use groovy::GroovySupport;
-use lsp_core::vcs::get_vcs_handler;
+use java::JavaSupport;
+use lsp_core::{
+    build_tools::{BuildToolHandler, gradle::GradleHandler},
+    vcs::get_vcs_handler,
+};
 use pretty_assertions::assert_eq;
 use server::{
     Indexer, Repository,
-    models::symbol::{Symbol, SymbolMetadata},
+    models::{
+        external_symbol::ExternalSymbol,
+        symbol::{Symbol, SymbolMetadata},
+    },
 };
 use sqlx::types::Json;
-use std::{path::Path, sync::Arc};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 #[tokio::test]
 async fn test_index_groovy_class() {
@@ -561,58 +571,78 @@ async fn test_index_groovy_inheritance() {
     );
 }
 
-// TODO: implement java lang support first
-// #[tokio::test]
-// async fn test_index_external_dep_jar() {
-//     let repo = Arc::new(Repository::new(":memory:").await.unwrap());
-//     let path = Path::new("tests/fixtures/groovy-gradle-multi");
-//
-//     let vcs = get_vcs_handler(&path);
-//     let mut indexer = Indexer::new(Arc::clone(&repo), Arc::clone(&vcs));
-//     indexer.register_language("groovy", Arc::new(GroovySupport::new()));
-//     indexer
-//         .index_workspace(&path)
-//         .await
-//         .expect("Indexing failed");
-//
-//     let result = repo
-//         .find_symbol_by_fqn_and_branch("com.example.api.UserController#ApiResponse", "NONE")
-//         .await
-//         .expect("Query failed");
-//     assert!(result.is_some(), "Symbol should be found");
-//
-//     let mut symbol = result.unwrap();
-//     symbol.id = None;
-//     symbol.last_modified = 0;
-//
-//     assert_eq!(
-//         symbol,
-//         Symbol {
-//             id: None,
-//             vcs_branch: "NONE".to_string(),
-//             short_name: "ApiResponse".to_string(),
-//             package_name: "com.example.api".to_string(),
-//             fully_qualified_name: "com.example.api.UserController#ApiResponse".to_string(),
-//             parent_name: Some("com.example.api.UserController".to_string()),
-//             file_path: "tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy".to_string(),
-//             file_type: "Groovy".to_string(),
-//             symbol_type: "Class".to_string(),
-//             modifiers: Json(vec!["private".to_string(), "static".to_string()]),
-//             line_start: 8,
-//             line_end: 12,
-//             char_start: 4,
-//             char_end: 5,
-//             ident_line_start: 8,
-//             ident_line_end: 8,
-//             ident_char_start: 25,
-//             ident_char_end: 36,
-//             metadata: Json(SymbolMetadata {
-//                 parameters: None,
-//                 return_type: None,
-//                 documentation: None,
-//                 annotations: Some(vec![])
-//             }),
-//             last_modified: 0,
-//         }
-//     );
-// }
+#[tokio::test]
+async fn test_index_external_dep_jar() {
+    let repo = Arc::new(Repository::new(":memory:").await.unwrap());
+    let path = Path::new("tests/fixtures/groovy-gradle-single");
+
+    let gradle_handler = GradleHandler;
+    let dep_jars = gradle_handler.get_dependency_paths(&path).unwrap();
+
+    let jar_path = dep_jars
+        .iter()
+        .map(|p| p.clone().1)
+        .find(|p| {
+            if let Some(source_jar) = p {
+                source_jar.to_string_lossy().contains("groovy-json")
+                    && source_jar.to_string_lossy().contains("-sources.jar")
+            } else {
+                false
+            }
+        })
+        .expect("groovy-json sources.jar not found")
+        .expect("groovy-json is empty");
+
+    let vcs = get_vcs_handler(&path);
+    let mut indexer = Indexer::new(Arc::clone(&repo), Arc::clone(&vcs));
+    indexer.register_language("groovy", Arc::new(GroovySupport::new()));
+    indexer.register_language("java", Arc::new(JavaSupport::new()));
+    indexer
+        .index_jar(&jar_path)
+        .await
+        .expect("JAR indexing failed");
+
+    let result = repo
+        .find_external_symbol_by_fqn("groovy.json.JsonBuilder")
+        .await
+        .expect("Query failed");
+    assert!(result.is_some(), "External symbol should be found");
+
+    let mut symbol = result.unwrap();
+    symbol.id = None;
+    symbol.last_modified = 0;
+    symbol.jar_path = String::new();
+
+    let doc_string = "/**\n * A builder for creating JSON payloads.\n * <p>\n * This builder supports the usual builder syntax made of nested method calls and closures,\n * but also some specific aspects of JSON data structures, such as list of values, etc.\n * Please make sure to have a look at the various methods provided by this builder\n * to be able to learn about the various possibilities of usage.\n * <p>\n * Example:\n * <pre><code class=\"groovyTestCase\">\n *       def builder = new groovy.json.JsonBuilder()\n *       def root = builder.people {\n *           person {\n *               firstName 'Guillaume'\n *               lastName 'Laforge'\n *               // Named arguments are valid values for objects too\n *               address(\n *                       city: 'Paris',\n *                       country: 'France',\n *                       zip: 12345,\n *               )\n *               married true\n *               // a list of values\n *               conferences 'JavaOne', 'Gr8conf'\n *           }\n *       }\n *\n *       // creates a data structure made of maps (Json object) and lists (Json array)\n *       assert root instanceof Map\n *\n *       assert builder.toString() == '{\"people\":{\"person\":{\"firstName\":\"Guillaume\",\"lastName\":\"Laforge\",\"address\":{\"city\":\"Paris\",\"country\":\"France\",\"zip\":12345},\"married\":true,\"conferences\":[\"JavaOne\",\"Gr8conf\"]}}}'\n * </code></pre>\n *\n * @since 1.8.0\n */";
+
+    assert_eq!(
+        symbol,
+        ExternalSymbol {
+            id: None,
+            jar_path: String::new(),
+            source_file_path: "groovy/json/JsonBuilder.java".to_string(),
+            short_name: "JsonBuilder".to_string(),
+            fully_qualified_name: "groovy.json.JsonBuilder".to_string(),
+            package_name: "groovy.json".to_string(),
+            parent_name: Some("groovy.json".to_string()),
+            symbol_type: "Class".to_string(),
+            modifiers: Json(vec!["public".to_string()]),
+            line_start: 35,
+            line_end: 421,
+            char_start: 0,
+            char_end: 1,
+            ident_line_start: 70,
+            ident_line_end: 70,
+            ident_char_start: 13,
+            ident_char_end: 24,
+            is_decompiled: false,
+            metadata: Json(SymbolMetadata {
+                parameters: None,
+                return_type: None,
+                documentation: Some(doc_string.to_string()),
+                annotations: Some(vec![]),
+            },),
+            last_modified: 0,
+        }
+    );
+}

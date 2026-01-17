@@ -1182,6 +1182,7 @@ dependencies = [
  "lsp_core",
  "num_cpus",
  "rayon",
+ "regex",
  "serde",
  "serde_json",
  "sha2",
@@ -2906,7 +2907,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-java"
 version = "0.23.5"
-source = "git+https://github.com/adibfarrasy/tree-sitter-java#9d3c3342eca1194b8cde6d0ae73b83b4551e648c"
+source = "git+https://github.com/adibfarrasy/tree-sitter-java#25de3bd1856c6c66f0c08ed8d8029a30f1fc88cd"
 dependencies = [
  "cc",
  "tree-sitter-language",

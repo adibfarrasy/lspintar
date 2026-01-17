@@ -274,18 +274,22 @@ impl Indexer {
                 self.index_jar_source_content(&content, &entry_name, jar_path, false)
                     .await?;
             } else if entry_name.ends_with(".class") {
-                // let mut entry = archive.by_index(i)?;
-                // let mut buffer = Vec::new();
-                // entry.read_to_end(&mut buffer)?;
-                //
-                // let content = decompile_class(&buffer)?;
-                //
-                // self.index_jar_source_content(&content, &entry_name, jar_path, true)
-                //     .await?;
+                let mut entry = archive.by_index(i)?;
+                let mut buffer = Vec::new();
+                entry.read_to_end(&mut buffer)?;
+
+                let content = self.decompile_class(buffer).await?;
+
+                self.index_jar_source_content(&content, &entry_name, jar_path, true)
+                    .await?;
             }
         }
 
         Ok(())
+    }
+
+    async fn decompile_class(&self, buffer: Vec<u8>) -> Result<String> {
+        todo!()
     }
 
     async fn index_jar_source_content(

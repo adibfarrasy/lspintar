@@ -1,19 +1,20 @@
 #![allow(unused_imports)]
 
-use tower_lsp::lsp_types::Position;
+use crate::JavaSupport;
+use lsp_core::{language_support::LanguageSupport, node_types::NodeType};
 
-use crate::GroovySupport;
-use lsp_core::language_support::LanguageSupport;
+use tower_lsp::lsp_types::{Position, Range};
+use tree_sitter::Node;
 
 use super::*;
 
 #[test]
 fn test_simple_identifier() {
-    let support = GroovySupport::new();
+    let support = JavaSupport::new();
     let content = r#"
         class Foo {
             void test() {
-                def bar = new Bar()
+                Bar bar = new Bar();
                 bar;
             }
         }
@@ -26,12 +27,12 @@ fn test_simple_identifier() {
 
 #[test]
 fn test_method_invocation_with_qualifier() {
-    let support = GroovySupport::new();
+    let support = JavaSupport::new();
     let content = r#"
         class Foo {
             void test() {
-                def bar = new Bar()
-                bar.baz() 
+                Bar bar = new Bar();
+                bar.baz();
             }
         }
         "#;
@@ -43,12 +44,12 @@ fn test_method_invocation_with_qualifier() {
 
 #[test]
 fn test_field_access_with_qualifier() {
-    let support = GroovySupport::new();
+    let support = JavaSupport::new();
     let content = r#"
         class Foo {
             void test() {
-                def bar = new Bar()
-                bar.name 
+                Bar bar = new Bar();
+                bar.name;
             }
         }
         "#;
@@ -60,12 +61,12 @@ fn test_field_access_with_qualifier() {
 
 #[test]
 fn test_identifier_in_argument_list() {
-    let support = GroovySupport::new();
+    let support = JavaSupport::new();
     let content = r#"
         class Foo {
             void test() {
-                def bar = new Bar()
-                println(bar)
+                Bar bar = new Bar();
+                System.out.println(bar);
             }
         }"#;
     let parsed = support.parse_str(&content).expect("cannot parse content");
@@ -76,11 +77,11 @@ fn test_identifier_in_argument_list() {
 
 #[test]
 fn test_identifier_in_variable_declarator() {
-    let support = GroovySupport::new();
+    let support = JavaSupport::new();
     let content = r#"
         class Foo {
             void test() {
-                Bar myBar = someOtherVar
+                Bar myBar = someOtherVar;
             }
         }"#;
     let parsed = support.parse_str(&content).expect("cannot parse content");
@@ -91,11 +92,11 @@ fn test_identifier_in_variable_declarator() {
 
 #[test]
 fn test_this_qualified_method_invocation() {
-    let support = GroovySupport::new();
+    let support = JavaSupport::new();
     let content = r#"
         class Foo {
             void test() {
-                this.doSomething()
+                this.doSomething();
             }
         }"#;
     let parsed = support.parse_str(&content).expect("cannot parse content");
@@ -109,11 +110,11 @@ fn test_this_qualified_method_invocation() {
 
 #[test]
 fn test_chained_method_invocation() {
-    let support = GroovySupport::new();
+    let support = JavaSupport::new();
     let content = r#"
         class Foo {
             void test() {
-                user.getProfile().getName()
+                user.getProfile().getName();
             }
         }"#;
     let parsed = support.parse_str(&content).expect("cannot parse content");
@@ -127,11 +128,11 @@ fn test_chained_method_invocation() {
 
 #[test]
 fn test_static_method_invocation() {
-    let support = GroovySupport::new();
+    let support = JavaSupport::new();
     let content = r#"
         class Foo {
             void test() {
-                UserService.createUser()
+                UserService.createUser();
             }
         }"#;
     let parsed = support.parse_str(&content).expect("cannot parse content");
@@ -145,11 +146,11 @@ fn test_static_method_invocation() {
 
 #[test]
 fn test_chained_field_access() {
-    let support = GroovySupport::new();
+    let support = JavaSupport::new();
     let content = r#"
         class Foo {
             void test() {
-                user.profile.name
+                user.profile.name;
             }
         }"#;
     let parsed = support.parse_str(&content).expect("cannot parse content");
@@ -163,7 +164,7 @@ fn test_chained_field_access() {
 
 #[test]
 fn test_method_parameter_identifier() {
-    let support = GroovySupport::new();
+    let support = JavaSupport::new();
     let content = r#"
         class Foo {
             void test(User user) {
@@ -177,15 +178,15 @@ fn test_method_parameter_identifier() {
 }
 
 #[test]
-fn test_closure_parameter_identifier() {
-    let support = GroovySupport::new();
+fn test_lambda_parameter_identifier() {
+    let support = JavaSupport::new();
     let content = r#"
         class Foo {
             void test() {
-                def list = [1, 2, 3]
-                list.each { item -> 
-                    println(item)
-                }
+                List<Integer> list = Arrays.asList(1, 2, 3);
+                list.forEach(item -> {
+                    System.out.println(item);
+                });
             }
         }"#;
     let parsed = support.parse_str(&content).expect("cannot parse content");
@@ -196,26 +197,26 @@ fn test_closure_parameter_identifier() {
 
 #[test]
 fn test_constructor_type_in_new_expression() {
-    let support = GroovySupport::new();
+    let support = JavaSupport::new();
     let content = r#"
         class Foo {
             void test() {
-                def list = new ArrayList<String>()
+                ArrayList<String> list = new ArrayList<String>();
             }
         }"#;
     let parsed = support.parse_str(&content).expect("cannot parse content");
-    let pos = find_position(content, "ArrayList");
+    let pos = find_position(content, "ArrayList<String>()");
     let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
     assert_eq!(ident, Some(("ArrayList".to_string(), None)));
 }
 
 #[test]
 fn test_type_argument_in_generics() {
-    let support = GroovySupport::new();
+    let support = JavaSupport::new();
     let content = r#"
         class Foo {
             void test() {
-                List<MyClass> list
+                List<MyClass> list;
             }
         }"#;
     let parsed = support.parse_str(&content).expect("cannot parse content");
@@ -226,11 +227,11 @@ fn test_type_argument_in_generics() {
 
 #[test]
 fn test_nested_type_arguments_in_generics() {
-    let support = GroovySupport::new();
+    let support = JavaSupport::new();
     let content = r#"
         class Foo {
             void test() {
-                Map<String, UserProfile> map
+                Map<String, UserProfile> map;
             }
         }"#;
     let parsed = support.parse_str(&content).expect("cannot parse content");
@@ -241,24 +242,25 @@ fn test_nested_type_arguments_in_generics() {
 
 #[test]
 fn test_cast_expression_type() {
-    let support = GroovySupport::new();
+    let support = JavaSupport::new();
     let content = r#"
         class Foo {
             void test() {
-                def result = (MyClass) obj
+                Object obj = new Object();
+                MyClass result = (MyClass) obj;
             }
         }"#;
     let parsed = support.parse_str(&content).expect("cannot parse content");
-    let pos = find_position(content, "MyClass");
+    let pos = find_position(content, "MyClass)");
     let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
     assert_eq!(ident, Some(("MyClass".to_string(), None)));
 }
 
 #[test]
 fn test_import_statement_type() {
-    let support = GroovySupport::new();
+    let support = JavaSupport::new();
     let content = r#"
-        import com.example.Bar
+        import com.example.Bar;
 
         class Foo {
         }"#;
@@ -273,11 +275,11 @@ fn test_import_statement_type() {
 
 #[test]
 fn test_nested_qualifier_in_chain() {
-    let support = GroovySupport::new();
+    let support = JavaSupport::new();
     let content = r#"
         class Foo {
             void test() {
-                user.getProfile().name
+                user.getProfile().name;
             }
         }"#;
     let parsed = support.parse_str(&content).expect("cannot parse content");
@@ -306,26 +308,26 @@ fn test_nested_qualifier_in_chain() {
 
 #[test]
 fn test_simple_constructor_in_chain() {
-    let support = GroovySupport::new();
+    let support = JavaSupport::new();
     let content = r#"
         class Foo {
             void test() {
-                new Class().process([key: 'value']).message
+                new MyClass().process(new HashMap<>()).message;
             }
         }"#;
     let parsed = support.parse_str(&content).expect("cannot parse content");
 
     // constructor type
-    let pos = find_position(content, "Class");
+    let pos = find_position(content, "MyClass");
     let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
-    assert_eq!(ident, Some(("Class".to_string(), None)));
+    assert_eq!(ident, Some(("MyClass".to_string(), None)));
 
     // method on constructor
     let pos = find_position(content, "process");
     let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
     assert_eq!(
         ident,
-        Some(("process".to_string(), Some("Class".to_string())))
+        Some(("process".to_string(), Some("MyClass".to_string())))
     );
 
     // field at end of chain
@@ -333,17 +335,17 @@ fn test_simple_constructor_in_chain() {
     let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
     assert_eq!(
         ident,
-        Some(("message".to_string(), Some("Class#process".to_string())))
+        Some(("message".to_string(), Some("MyClass#process".to_string())))
     );
 }
 
 #[test]
 fn test_scoped_constructor_in_chain() {
-    let support = GroovySupport::new();
+    let support = JavaSupport::new();
     let content = r#"
         class Foo {
             void test() {
-                new Outer.Inner().process([key: 'value']).message
+                new Outer.Inner().process(new HashMap<>()).message;
             }
         }"#;
     let parsed = support.parse_str(&content).expect("cannot parse content");
@@ -378,23 +380,5 @@ fn test_scoped_constructor_in_chain() {
             "message".to_string(),
             Some("Outer#Inner#process".to_string())
         ))
-    );
-}
-
-#[test]
-fn test_nested_method_calls() {
-    let support = GroovySupport::new();
-    let content = r#"
-        class Foo {
-            void test() {
-                new MyClass().process(new HashMap()).message
-            }
-        }"#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
-    let pos = find_position(content, "message");
-    let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
-    assert_eq!(
-        ident,
-        Some(("message".to_string(), Some("MyClass#process".to_string())))
     );
 }

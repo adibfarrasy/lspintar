@@ -9,9 +9,9 @@ use std::{fs, path::Path, sync::Mutex};
 use tower_lsp::lsp_types::{Position, Range};
 use tree_sitter::{Node, Parser, Point, Query, QueryCursor, QueryMatch, StreamingIterator, Tree};
 
-use crate::constants::GROOVY_IMPLICIT_IMPORTS;
+use crate::constants::JAVA_IMPLICIT_IMPORTS;
 
-pub struct GroovySupport {
+pub struct JavaSupport {
     parser: Mutex<Parser>,
 }
 
@@ -56,11 +56,11 @@ const IDENT_QUERY: &str = r#"
     (superclass (type_identifier) @superclass)
 "#;
 
-impl GroovySupport {
+impl JavaSupport {
     pub fn new() -> Self {
         let mut parser = Parser::new();
         parser
-            .set_language(&tree_sitter_groovy::language())
+            .set_language(&tree_sitter_java::LANGUAGE.into())
             .unwrap();
         Self {
             parser: Mutex::new(parser),
@@ -346,13 +346,13 @@ impl GroovySupport {
     }
 }
 
-impl LanguageSupport for GroovySupport {
+impl LanguageSupport for JavaSupport {
     fn get_language(&self) -> Language {
-        Language::Groovy
+        Language::Java
     }
 
     fn get_ts_language(&self) -> tree_sitter::Language {
-        tree_sitter_groovy::language()
+        tree_sitter_java::LANGUAGE.into()
     }
 
     fn parse(&self, file_path: &Path) -> Option<ParseResult> {
@@ -524,7 +524,7 @@ impl LanguageSupport for GroovySupport {
     }
 
     fn get_documentation(&self, node: &Node, source: &str) -> Option<String> {
-        let query_str = "(groovydoc_comment) @doc";
+        let query_str = "(javadoc_comment) @doc";
         ts_helper::get_one(self.get_ts_language(), node, source, query_str)
     }
 
@@ -565,10 +565,16 @@ impl LanguageSupport for GroovySupport {
         let explicit_imports =
             ts_helper::get_many(self.get_ts_language(), &tree.root_node(), source, query_str)
                 .into_iter()
-                .map(|i| i.strip_prefix("import ").unwrap_or_default().to_string())
+                .map(|i| {
+                    i.strip_prefix("import ")
+                        .unwrap_or_default()
+                        .trim_end_matches(';')
+                        .trim()
+                        .to_string()
+                })
                 .collect::<Vec<String>>();
 
-        GROOVY_IMPLICIT_IMPORTS
+        JAVA_IMPLICIT_IMPORTS
             .iter()
             .map(|s| s.to_string())
             .chain(explicit_imports)
@@ -774,11 +780,12 @@ impl LanguageSupport for GroovySupport {
             body: (interface_body (function_declaration) @method))
           (enum_declaration 
             name: (identifier) @receiver
-            body: (enum_body (function_declaration) @method))
+            body: (enum_body (enum_body_declarations (function_declaration) @method)))
         ]
         "#;
         let query = Query::new(&self.get_ts_language(), query_text).ok()?;
 
+        println!("I'm here");
         let method_idx = query.capture_index_for_name("method");
         let receiver_idx = query.capture_index_for_name("receiver");
 
