@@ -1,6 +1,6 @@
 use sqlx::SqlitePool;
 
-use crate::models::symbol::Symbol;
+use crate::models::{external_symbol::ExternalSymbol, symbol::Symbol};
 
 #[derive(Debug)]
 pub struct Repository {
@@ -145,7 +145,7 @@ impl Repository {
                 s.file_type, s.symbol_type, s.modifiers, s.line_start, 
                 s.line_end, s.char_start, s.char_end, s.ident_line_start,
                 s.ident_line_end, s.ident_char_start, s.ident_char_end,
-                s.extends_name, s.metadata, s.last_modified
+                s.metadata, s.last_modified
                 FROM symbols s
                 INNER JOIN symbol_super_mapping ssm 
                     ON s.fully_qualified_name = ssm.symbol_fqn
@@ -171,7 +171,7 @@ impl Repository {
                 s.file_type, s.symbol_type, s.modifiers, s.line_start, 
                 s.line_end, s.char_start, s.char_end, s.ident_line_start,
                 s.ident_line_end, s.ident_char_start, s.ident_char_end,
-                s.extends_name, s.metadata, s.last_modified
+                s.metadata, s.last_modified
                 FROM symbols s
                 INNER JOIN symbol_super_mapping ssm 
                     ON s.fully_qualified_name = ssm.symbol_fqn
@@ -197,7 +197,7 @@ impl Repository {
                 s.file_type, s.symbol_type, s.modifiers, s.line_start, 
                 s.line_end, s.char_start, s.char_end, s.ident_line_start,
                 s.ident_line_end, s.ident_char_start, s.ident_char_end,
-                s.extends_name, s.metadata, s.last_modified
+                s.metadata, s.last_modified
                 FROM symbols s
                 INNER JOIN symbol_super_mapping ssm 
                     ON s.fully_qualified_name = ssm.super_fqn
@@ -210,5 +210,87 @@ impl Repository {
         .await?;
 
         Ok(symbols)
+    }
+
+    pub async fn insert_external_symbols(
+        &self,
+        symbols: &[ExternalSymbol],
+    ) -> Result<(), sqlx::Error> {
+        if symbols.is_empty() {
+            return Ok(());
+        }
+
+        let mut tx = self.pool.begin().await?;
+        let jar_path = &symbols[0].jar_path;
+        let source_file_path = &symbols[0].source_file_path;
+
+        sqlx::query("DELETE FROM external_symbols WHERE jar_path = ? AND source_file_path = ?")
+            .bind(jar_path)
+            .bind(source_file_path)
+            .execute(&mut *tx)
+            .await?;
+
+        for s in symbols {
+            sqlx::query(
+            "INSERT INTO external_symbols (jar_path, source_file_path, short_name, package_name, 
+            fully_qualified_name, parent_name, symbol_type, modifiers, line_start, line_end, 
+            char_start, char_end, ident_line_start, ident_line_end, ident_char_start,
+            ident_char_end, is_decompiled, metadata, last_modified)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(jar_path, source_file_path, fully_qualified_name) DO UPDATE SET
+                short_name = excluded.short_name,
+                package_name = excluded.package_name,
+                parent_name = excluded.parent_name,
+                symbol_type = excluded.symbol_type,
+                modifiers = excluded.modifiers,
+                line_start = excluded.line_start,
+                line_end = excluded.line_end,
+                char_start = excluded.char_start,
+                char_end = excluded.char_end,
+                ident_line_start = excluded.ident_line_start,
+                ident_line_end = excluded.ident_line_end,
+                ident_char_start = excluded.ident_char_start,
+                ident_char_end = excluded.ident_char_end,
+                is_decompiled = excluded.is_decompiled,
+                metadata = excluded.metadata,
+                last_modified = excluded.last_modified",
+        )
+        .bind(&s.jar_path)
+        .bind(&s.source_file_path)
+        .bind(&s.short_name)
+        .bind(&s.package_name)
+        .bind(&s.fully_qualified_name)
+        .bind(&s.parent_name)
+        .bind(&s.symbol_type)
+        .bind(&s.modifiers)
+        .bind(s.line_start)
+        .bind(s.line_end)
+        .bind(s.char_start)
+        .bind(s.char_end)
+        .bind(s.ident_line_start)
+        .bind(s.ident_line_end)
+        .bind(s.ident_char_start)
+        .bind(s.ident_char_end)
+        .bind(s.is_decompiled)
+        .bind(&s.metadata)
+        .bind(s.last_modified)
+        .execute(&mut *tx)
+        .await?;
+        }
+
+        tx.commit().await?;
+        Ok(())
+    }
+
+    pub async fn find_external_symbol_by_fqn(
+        &self,
+        fqn: &str,
+    ) -> Result<Option<ExternalSymbol>, sqlx::Error> {
+        sqlx::query_as::<_, ExternalSymbol>(
+            "SELECT * FROM external_symbols WHERE fully_qualified_name = ? LIMIT 1",
+        )
+        .bind(fqn)
+        .fetch_optional(&self.pool)
+        .await
     }
 }

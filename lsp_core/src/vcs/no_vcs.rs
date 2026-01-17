@@ -1,8 +1,8 @@
 use std::path::Path;
 
-use crate::vcs::handler::VcsHandler;
-
 use anyhow::Result;
+
+use crate::vcs::VcsHandler;
 
 pub struct NoVcs;
 

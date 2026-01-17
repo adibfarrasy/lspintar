@@ -1,7 +1,8 @@
-use crate::vcs::handler::VcsHandler;
 use anyhow::{Context, Result};
 use std::path::Path;
 use std::process::Command;
+
+use crate::vcs::VcsHandler;
 
 pub struct GitHandler;
 

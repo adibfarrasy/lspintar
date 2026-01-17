@@ -1,11 +1,13 @@
 use lsp_core::{
     language_support::LanguageSupport, node_types::NodeType, util::naive_resolve_fqn,
-    vcs::handler::VcsHandler,
+    vcs::VcsHandler,
 };
-use std::{collections::HashMap, path::Path, sync::Arc};
+use std::{collections::HashMap, fs::File, io::Read, path::Path, sync::Arc};
+use zip::ZipArchive;
 
 use crate::{
     models::{
+        external_symbol::ExternalSymbol,
         symbol::{Symbol, SymbolMetadata, SymbolParameter},
         symbol_super_mapping::SymbolSuperMapping,
     },
@@ -251,5 +253,116 @@ impl Indexer {
         }
 
         Ok(())
+    }
+
+    pub async fn index_jar(&self, jar_path: &Path) -> Result<()> {
+        let file = File::open(jar_path)?;
+        let mut archive = ZipArchive::new(file)?;
+
+        for i in 0..archive.len() {
+            let entry_name = {
+                let entry = archive.by_index(i)?;
+                entry.name().to_string()
+            };
+
+            if entry_name.ends_with(".java") || entry_name.ends_with(".groovy") {
+                let mut entry = archive.by_index(i)?;
+                let mut buffer = Vec::new();
+                entry.read_to_end(&mut buffer)?;
+                let content = String::from_utf8(buffer)?;
+
+                self.index_jar_source_content(&content, &entry_name, jar_path, false)
+                    .await?;
+            } else if entry_name.ends_with(".class") {
+                // let mut entry = archive.by_index(i)?;
+                // let mut buffer = Vec::new();
+                // entry.read_to_end(&mut buffer)?;
+                //
+                // let content = decompile_class(&buffer)?;
+                //
+                // self.index_jar_source_content(&content, &entry_name, jar_path, true)
+                //     .await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn index_jar_source_content(
+        &self,
+        content: &str,
+        entry_name: &str,
+        jar_path: &Path,
+        is_decompiled: bool,
+    ) -> Result<()> {
+        let ext = Path::new(entry_name)
+            .extension()
+            .and_then(|e| e.to_str())
+            .ok_or_else(|| anyhow!("No extension"))?;
+
+        if let Some(lang) = self.languages.get(ext) {
+            let parsed = lang.parse_str(content).expect("cannot parse content");
+
+            let (external_symbols, mappings) = self.get_external_symbols_from_tree(
+                &parsed.0,
+                lang.as_ref(),
+                jar_path,
+                entry_name,
+                &parsed.1,
+                is_decompiled,
+            )?;
+
+            self.repo.insert_external_symbols(&external_symbols).await?;
+
+            if !mappings.is_empty() {
+                let mapping_refs = mappings
+                    .iter()
+                    .map(|m| (&*m.symbol_fqn, &*m.super_short_name, m.super_fqn.as_deref()))
+                    .collect();
+                self.repo.insert_symbol_super_mappings(mapping_refs).await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn get_external_symbols_from_tree(
+        &self,
+        tree: &Tree,
+        lang: &dyn LanguageSupport,
+        jar_path: &Path,
+        source_file_path: &str,
+        content: &str,
+        is_decompiled: bool,
+    ) -> Result<(Vec<ExternalSymbol>, Vec<SymbolSuperMapping>)> {
+        let (symbols, mappings) = self.get_symbols_from_tree(tree, lang, jar_path, content)?;
+
+        let external_symbols = symbols
+            .into_iter()
+            .map(|s| ExternalSymbol {
+                id: None,
+                jar_path: jar_path.to_string_lossy().to_string(),
+                source_file_path: source_file_path.to_string(),
+                short_name: s.short_name,
+                fully_qualified_name: s.fully_qualified_name,
+                package_name: s.package_name,
+                parent_name: s.parent_name,
+                symbol_type: s.symbol_type,
+                modifiers: s.modifiers,
+                line_start: s.line_start,
+                line_end: s.line_end,
+                char_start: s.char_start,
+                char_end: s.char_end,
+                ident_line_start: s.ident_line_start,
+                ident_line_end: s.ident_line_end,
+                ident_char_start: s.ident_char_start,
+                ident_char_end: s.ident_char_end,
+                is_decompiled,
+                metadata: s.metadata,
+                last_modified: s.last_modified,
+            })
+            .collect();
+
+        Ok((external_symbols, mappings))
     }
 }

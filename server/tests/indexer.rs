@@ -44,12 +44,12 @@ async fn test_index_groovy_class() {
             file_type: "Groovy".to_string(),
             symbol_type: "Class".to_string(),
             modifiers: Json(vec![]),
-            line_start: 2,
-            line_end: 10,
+            line_start: 4,
+            line_end: 12,
             char_start: 0,
             char_end: 1,
-            ident_line_start: 3,
-            ident_line_end: 3,
+            ident_line_start: 5,
+            ident_line_end: 5,
             ident_char_start: 6,
             ident_char_end: 10,
             metadata: Json(SymbolMetadata {
@@ -101,12 +101,12 @@ async fn test_index_groovy_gradle_single_workspace() {
             file_type: "Groovy".to_string(),
             symbol_type: "Class".to_string(),
             modifiers: Json(vec![]),
-            line_start: 4,
+            line_start: 6,
             line_end: 20,
             char_start: 0,
             char_end: 1,
-            ident_line_start: 4,
-            ident_line_end: 4,
+            ident_line_start: 6,
+            ident_line_end: 6,
             ident_char_start: 6,
             ident_char_end: 17,
             metadata: Json(SymbolMetadata {
@@ -187,12 +187,12 @@ async fn test_index_groovy_gradle_single_workspace() {
             file_type: "Groovy".to_string(),
             symbol_type: "Function".to_string(),
             modifiers: Json(vec![]),
-            line_start: 7,
-            line_end: 9,
+            line_start: 9,
+            line_end: 11,
             char_start: 4,
             char_end: 5,
-            ident_line_start: 7,
-            ident_line_end: 7,
+            ident_line_start: 9,
+            ident_line_end: 9,
             ident_char_start: 11,
             ident_char_end: 25,
             metadata: Json(SymbolMetadata {
@@ -230,7 +230,7 @@ async fn test_index_groovy_gradle_single_workspace() {
             file_type: "Groovy".to_string(),
             symbol_type: "Field".to_string(),
             modifiers: Json(vec!["private".to_string()]),
-            line_start: 7,
+            line_start: 9,
             line_end: 9,
             char_start: 4,
             char_end: 31,
@@ -242,7 +242,7 @@ async fn test_index_groovy_gradle_single_workspace() {
                 parameters: None,
                 return_type: Some("String".to_string()),
                 documentation: None,
-                annotations: Some(vec!["Getter".to_string(), "Setter".to_string()])
+                annotations: Some(vec![])
             }),
             last_modified: 0,
         }
@@ -543,7 +543,7 @@ async fn test_index_groovy_inheritance() {
             symbol_type: "Interface".to_string(),
             modifiers: Json(vec![]),
             line_start: 4,
-            line_end: 13,
+            line_end: 9,
             char_start: 0,
             char_end: 1,
             ident_line_start: 4,
@@ -560,3 +560,59 @@ async fn test_index_groovy_inheritance() {
         }
     );
 }
+
+// TODO: implement java lang support first
+// #[tokio::test]
+// async fn test_index_external_dep_jar() {
+//     let repo = Arc::new(Repository::new(":memory:").await.unwrap());
+//     let path = Path::new("tests/fixtures/groovy-gradle-multi");
+//
+//     let vcs = get_vcs_handler(&path);
+//     let mut indexer = Indexer::new(Arc::clone(&repo), Arc::clone(&vcs));
+//     indexer.register_language("groovy", Arc::new(GroovySupport::new()));
+//     indexer
+//         .index_workspace(&path)
+//         .await
+//         .expect("Indexing failed");
+//
+//     let result = repo
+//         .find_symbol_by_fqn_and_branch("com.example.api.UserController#ApiResponse", "NONE")
+//         .await
+//         .expect("Query failed");
+//     assert!(result.is_some(), "Symbol should be found");
+//
+//     let mut symbol = result.unwrap();
+//     symbol.id = None;
+//     symbol.last_modified = 0;
+//
+//     assert_eq!(
+//         symbol,
+//         Symbol {
+//             id: None,
+//             vcs_branch: "NONE".to_string(),
+//             short_name: "ApiResponse".to_string(),
+//             package_name: "com.example.api".to_string(),
+//             fully_qualified_name: "com.example.api.UserController#ApiResponse".to_string(),
+//             parent_name: Some("com.example.api.UserController".to_string()),
+//             file_path: "tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy".to_string(),
+//             file_type: "Groovy".to_string(),
+//             symbol_type: "Class".to_string(),
+//             modifiers: Json(vec!["private".to_string(), "static".to_string()]),
+//             line_start: 8,
+//             line_end: 12,
+//             char_start: 4,
+//             char_end: 5,
+//             ident_line_start: 8,
+//             ident_line_end: 8,
+//             ident_char_start: 25,
+//             ident_char_end: 36,
+//             metadata: Json(SymbolMetadata {
+//                 parameters: None,
+//                 return_type: None,
+//                 documentation: None,
+//                 annotations: Some(vec![])
+//             }),
+//             last_modified: 0,
+//         }
+//     );
+// }

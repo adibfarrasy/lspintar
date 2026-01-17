@@ -1,7 +1,6 @@
 package com.example.app
 
 import com.example.api.UserController
-import com.example.api.ProductController
 
 class Application {
     static void main(String[] args) {

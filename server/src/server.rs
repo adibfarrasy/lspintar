@@ -1,8 +1,9 @@
 use groovy::GroovySupport;
 use lsp_core::{
+    build_tools::get_build_tool,
     language_support::LanguageSupport,
     util::capitalize,
-    vcs::{get_vcs_handler, handler::VcsHandler},
+    vcs::{VcsHandler, get_vcs_handler},
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -552,6 +553,11 @@ impl LanguageServer for Backend {
 
         if let Some(root) = workspace_root {
             let vcs = get_vcs_handler(&root);
+            let build_tool = get_build_tool(&root);
+
+            let deps = build_tool.get_dependency_paths(&root);
+            tracing::info!("deps: {:#?}", deps);
+
             let mut indexer = Indexer::new(Arc::clone(&self.repo), Arc::clone(&vcs));
 
             self.languages.iter().for_each(|(k, v)| {
@@ -874,6 +880,10 @@ impl LanguageServer for Backend {
             }
         }
 
+        Ok(None)
+    }
+
+    async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
         Ok(None)
     }
 

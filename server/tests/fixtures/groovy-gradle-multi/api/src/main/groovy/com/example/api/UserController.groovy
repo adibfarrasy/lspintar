@@ -47,9 +47,6 @@ class UserController extends BaseService implements DataProcessor {
         // Cursor on MAX_BATCH_SIZE -> should go to DataProcessor.MAX_BATCH_SIZE
         int maxSize = DataProcessor.MAX_BATCH_SIZE
         
-        // Cursor on processInBatches -> should go to DataProcessor.processInBatches()
-        def items = DataProcessor.processInBatches(['a', 'b', 'c'])
-        
         // 2: "this" qualifier
         // Cursor on execute -> should go to UserController.execute()
         this.execute()

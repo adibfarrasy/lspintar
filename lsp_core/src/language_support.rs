@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use tower_lsp::lsp_types::{Position, Range};
-use tree_sitter::{Node, Tree};
+use tree_sitter::{Node, Parser, Tree};
 
 use crate::{languages::Language, node_types::NodeType};
 
