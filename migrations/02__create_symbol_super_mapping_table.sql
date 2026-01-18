@@ -6,5 +6,5 @@ CREATE TABLE symbol_super_mapping (
 );
 
 CREATE INDEX idx_interface_fqn ON symbol_super_mapping(super_fqn);
-CREATE INDEX idx_interface_short_name ON symbol_super_mapping(super_short_name);
+CREATE INDEX idx_super_short_name ON symbol_super_mapping(super_short_name);
 CREATE INDEX idx_symbol_fqn ON symbol_super_mapping(symbol_fqn);

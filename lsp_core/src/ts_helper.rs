@@ -3,16 +3,7 @@ use tree_sitter::{Node, Query, QueryCursor, StreamingIterator, Tree};
 
 use crate::language_support::ParameterResult;
 
-pub fn get_one(
-    language: tree_sitter::Language,
-    node: &Node,
-    content: &str,
-    query_str: &str,
-) -> Option<String> {
-    let query = Query::new(&language, query_str)
-        .ok()
-        .expect("failed to instantiate query");
-
+pub fn get_one(node: &Node, content: &str, query: &Query) -> Option<String> {
     let mut cursor = QueryCursor::new();
     let mut matches = cursor.matches(&query, *node, content.as_bytes());
 
@@ -23,17 +14,11 @@ pub fn get_one(
     })
 }
 
-pub fn get_many(
-    language: tree_sitter::Language,
-    node: &Node,
-    content: &str,
-    query_str: &str,
-) -> Vec<String> {
-    let query = Query::new(&language, query_str)
-        .ok()
-        .expect("failed to instantiate query");
-
+pub fn get_many(node: &Node, content: &str, query: &Query, max_depth: Option<u32>) -> Vec<String> {
     let mut cursor = QueryCursor::new();
+    if let Some(depth) = max_depth {
+        cursor.set_max_start_depth(Some(depth));
+    }
 
     let mut results = Vec::new();
     cursor

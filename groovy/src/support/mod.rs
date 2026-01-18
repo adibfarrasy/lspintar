@@ -9,7 +9,17 @@ use std::{fs, path::Path, sync::Mutex};
 use tower_lsp::lsp_types::{Position, Range};
 use tree_sitter::{Node, Parser, Point, Query, QueryCursor, QueryMatch, StreamingIterator, Tree};
 
-use crate::constants::GROOVY_IMPLICIT_IMPORTS;
+use crate::{
+    constants::GROOVY_IMPLICIT_IMPORTS,
+    support::queries::{
+        DECLARES_VARIABLE_QUERY, GET_ANNOTATIONS_QUERY, GET_EXTENDS_QUERY, GET_FIELD_RETURN_QUERY,
+        GET_FIELD_SHORT_NAME_QUERY, GET_FUNCTION_RETURN_QUERY, GET_GROOVYDOC_QUERY,
+        GET_IMPLEMENTS_QUERY, GET_IMPORTS_QUERY, GET_MODIFIERS_QUERY, GET_PACKAGE_NAME_QUERY,
+        GET_PARAMETERS_QUERY, GET_SHORT_NAME_QUERY,
+    },
+};
+
+mod queries;
 
 pub struct GroovySupport {
     parser: Mutex<Parser>,
@@ -288,15 +298,7 @@ impl GroovySupport {
     }
 
     fn declares_variable(&self, node: Node, content: &str, var_name: &str) -> bool {
-        let query_str = r#"
-        [
-            (variable_declarator name: (identifier) @name)
-            (parameter name: (identifier) @name)
-            (field_declaration (variable_declarator name: (identifier) @name))
-        ]
-        "#;
-
-        let names = ts_helper::get_many(self.get_ts_language(), &node, content, query_str);
+        let names = ts_helper::get_many(&node, content, &DECLARES_VARIABLE_QUERY, Some(1));
         names.iter().any(|name| name == var_name)
     }
 
@@ -414,13 +416,7 @@ impl LanguageSupport for GroovySupport {
     }
 
     fn get_package_name(&self, tree: &Tree, content: &str) -> Option<String> {
-        let query_str = "(package_declaration (scoped_identifier) @package)";
-        ts_helper::get_one(
-            self.get_ts_language(),
-            &tree.root_node(),
-            content,
-            query_str,
-        )
+        ts_helper::get_one(&tree.root_node(), content, &GET_PACKAGE_NAME_QUERY)
     }
 
     fn get_type(&self, node: &Node) -> Option<NodeType> {
@@ -442,60 +438,25 @@ impl LanguageSupport for GroovySupport {
         let node_type = self.get_type(node);
 
         match node_type {
-            Some(NodeType::Field) => {
-                let query_str = r#"
-                    (field_declaration (variable_declarator name: (identifier) @name))
-                    (constant_declaration (variable_declarator name: (identifier) @name))
-                    "#;
-                ts_helper::get_one(self.get_ts_language(), node, source, &query_str)
-            }
-            Some(_) => {
-                let node_kind = node.kind();
-                let query_str = format!("({node_kind} name: (identifier) @name)");
-                ts_helper::get_one(self.get_ts_language(), node, source, &query_str)
-            }
+            Some(NodeType::Field) => ts_helper::get_one(node, source, &GET_FIELD_SHORT_NAME_QUERY),
+            Some(_) => ts_helper::get_one(node, source, &GET_SHORT_NAME_QUERY),
             None => None,
         }
     }
 
     fn get_extends(&self, node: &Node, source: &str) -> Option<String> {
-        let query_str = r#"(superclass (type_identifier) @superclass)"#;
-        ts_helper::get_one(self.get_ts_language(), node, source, query_str)
+        ts_helper::get_one(node, source, &GET_EXTENDS_QUERY)
     }
 
     fn get_implements(&self, node: &Node, source: &str) -> Vec<String> {
-        let query_str = r#"(super_interfaces (type_list (type_identifier) @interface))"#;
-        ts_helper::get_many(self.get_ts_language(), node, source, query_str)
+        ts_helper::get_many(node, source, &GET_IMPLEMENTS_QUERY, Some(1))
     }
 
     fn get_modifiers(&self, node: &Node, source: &str) -> Vec<String> {
         let node_type = self.get_type(node);
 
         match node_type {
-            Some(_) => {
-                let node_kind = node.kind();
-                let query_str = format!(
-                    r#"
-                ({node_kind}
-                (modifiers
-                    [
-                        "public"
-                        "private"
-                        "protected"
-                        "static"
-                        "final"
-                        "abstract"
-                        "synchronized"
-                        "native"
-                        "strictfp"
-                        "transient"
-                        "volatile"
-                    ] @modifier
-                ))
-                "#
-                );
-                ts_helper::get_many(self.get_ts_language(), node, source, &query_str)
-            }
+            Some(_) => ts_helper::get_many(node, source, &GET_MODIFIERS_QUERY, Some(1)),
             None => Vec::new(),
         }
     }
@@ -504,34 +465,18 @@ impl LanguageSupport for GroovySupport {
         let node_type = self.get_type(node);
 
         match node_type {
-            Some(_) => {
-                let node_kind = node.kind();
-                let query_str = format!(
-                    r#"
-                ({node_kind}
-                (modifiers
-                    [
-                        (marker_annotation name: (identifier) @annotation)
-                        (annotation name: (identifier) @annotation)
-                    ]
-                ))
-                "#
-                );
-                ts_helper::get_many(self.get_ts_language(), node, source, &query_str)
-            }
+            Some(_) => ts_helper::get_many(node, source, &GET_ANNOTATIONS_QUERY, Some(1)),
             None => Vec::new(),
         }
     }
 
     fn get_documentation(&self, node: &Node, source: &str) -> Option<String> {
-        let query_str = "(groovydoc_comment) @doc";
-        ts_helper::get_one(self.get_ts_language(), node, source, query_str)
+        ts_helper::get_one(node, source, &GET_GROOVYDOC_QUERY)
     }
 
     fn get_parameters(&self, node: &Node, source: &str) -> Option<Vec<ParameterResult>> {
         if let Some(NodeType::Function) = self.get_type(node) {
-            let query_str = "(function_declaration (parameters (parameter) @arg))";
-            let params = ts_helper::get_many(self.get_ts_language(), node, source, query_str)
+            let params = ts_helper::get_many(node, source, &GET_PARAMETERS_QUERY, Some(1))
                 .into_iter()
                 .map(|p| ts_helper::parse_parameter(&p))
                 .collect();
@@ -545,25 +490,17 @@ impl LanguageSupport for GroovySupport {
         let node_type = self.get_type(node);
 
         match node_type {
-            Some(NodeType::Field) => {
-                let query_str = r#"
-                (field_declaration type: (_) @ret)
-                (constant_declaration type: (_) @ret)
-                "#;
-                ts_helper::get_one(self.get_ts_language(), node, source, &query_str)
-            }
+            Some(NodeType::Field) => ts_helper::get_one(node, source, &GET_FIELD_RETURN_QUERY),
             Some(NodeType::Function) => {
-                let query_str = "(function_declaration (type_identifier) @ret)";
-                ts_helper::get_one(self.get_ts_language(), node, source, query_str)
+                ts_helper::get_one(node, source, &GET_FUNCTION_RETURN_QUERY)
             }
             _ => None,
         }
     }
 
     fn get_imports(&self, tree: &Tree, source: &str) -> Vec<String> {
-        let query_str = "(import_declaration) @doc";
         let explicit_imports =
-            ts_helper::get_many(self.get_ts_language(), &tree.root_node(), source, query_str)
+            ts_helper::get_many(&tree.root_node(), source, &GET_IMPORTS_QUERY, Some(1))
                 .into_iter()
                 .map(|i| i.strip_prefix("import ").unwrap_or_default().to_string())
                 .collect::<Vec<String>>();

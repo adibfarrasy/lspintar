@@ -175,7 +175,7 @@ impl Repository {
                 FROM symbols s
                 INNER JOIN symbol_super_mapping ssm 
                     ON s.fully_qualified_name = ssm.symbol_fqn
-                WHERE ssm.interface_short_name = ? 
+                WHERE ssm.super_short_name = ? 
                 AND s.vcs_branch = ?",
         )
         .bind(super_short_name)

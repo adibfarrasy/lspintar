@@ -7,7 +7,7 @@ pub fn capitalize(s: &str) -> String {
 }
 
 // Only find direct import match
-pub fn naive_resolve_fqn(name: &str, imports: Vec<String>) -> Option<String> {
+pub fn naive_resolve_fqn(name: &str, imports: &[String]) -> Option<String> {
     if let Some(import) = imports.iter().find(|i| i.split('.').last() == Some(name)) {
         return Some(import.clone());
     }

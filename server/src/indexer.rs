@@ -21,6 +21,7 @@ use walkdir::WalkDir;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[derive(Clone)]
 pub struct Indexer {
     languages: HashMap<String, Arc<dyn LanguageSupport>>,
     repo: Arc<Repository>,
@@ -109,7 +110,7 @@ impl Indexer {
             content,
             &package_name,
             &mut symbol_super_mappings,
-            imports,
+            &imports,
         )?;
         Ok((symbols, symbol_super_mappings))
     }
@@ -125,16 +126,15 @@ impl Indexer {
         content: &str,
         package_name: &str,
         symbol_super_mappings: &mut Vec<SymbolSuperMapping>,
-        imports: Vec<String>,
+        imports: &[String],
     ) -> Result<()> {
-        let node_type = lang.get_type(&node);
         let (new_parent, new_is_type_parent) = if lang.should_index(&node) {
+            let node_type = lang.get_type(&node);
             let short_name = lang
                 .get_short_name(&node, content)
                 .context("Failed to get short name")?;
             let sep = if is_type_parent { "#" } else { "." };
             let fqn = format!("{}{}{}", parent_name, sep, short_name);
-
             let range = lang.get_range(&node).context("Failed to get range")?;
             let ident_range = lang
                 .get_ident_range(&node)
@@ -143,11 +143,12 @@ impl Indexer {
                 .duration_since(UNIX_EPOCH)
                 .context("Failed to get duration")?
                 .as_secs();
+
             let modifiers = lang.get_modifiers(&node, content);
             let implements = lang.get_implements(&node, content);
 
             if let Some(superclass_short_name) = lang.get_extends(&node, content) {
-                let superclass_fqn = naive_resolve_fqn(&superclass_short_name, imports.clone());
+                let superclass_fqn = naive_resolve_fqn(&superclass_short_name, imports);
 
                 symbol_super_mappings.push(SymbolSuperMapping {
                     id: None,
@@ -158,7 +159,7 @@ impl Indexer {
             }
 
             for interface_short_name in implements {
-                let interface_fqn = naive_resolve_fqn(&interface_short_name, imports.clone());
+                let interface_fqn = naive_resolve_fqn(&interface_short_name, imports);
 
                 symbol_super_mappings.push(SymbolSuperMapping {
                     id: None,
@@ -248,7 +249,7 @@ impl Indexer {
                 content,
                 &package_name,
                 symbol_super_mappings,
-                imports.clone(),
+                imports,
             )?;
         }
 
@@ -265,22 +266,21 @@ impl Indexer {
                 entry.name().to_string()
             };
 
-            if entry_name.ends_with(".java") || entry_name.ends_with(".groovy") {
-                let mut entry = archive.by_index(i)?;
-                let mut buffer = Vec::new();
-                entry.read_to_end(&mut buffer)?;
-                let content = String::from_utf8(buffer)?;
-
-                self.index_jar_source_content(&content, &entry_name, jar_path, false)
-                    .await?;
-            } else if entry_name.ends_with(".class") {
+            if entry_name.ends_with(".java")
+                || entry_name.ends_with(".groovy")
+                || entry_name.ends_with(".class")
+            {
                 let mut entry = archive.by_index(i)?;
                 let mut buffer = Vec::new();
                 entry.read_to_end(&mut buffer)?;
 
-                let content = self.decompile_class(buffer).await?;
+                let (content, is_decompiled) = if entry_name.ends_with(".class") {
+                    (self.decompile_class(buffer).await?, true)
+                } else {
+                    (String::from_utf8(buffer)?, false)
+                };
 
-                self.index_jar_source_content(&content, &entry_name, jar_path, true)
+                self.index_jar_source_content(&content, &entry_name, jar_path, is_decompiled)
                     .await?;
             }
         }
@@ -289,6 +289,8 @@ impl Indexer {
     }
 
     async fn decompile_class(&self, buffer: Vec<u8>) -> Result<String> {
+        // NOTE: the user should define their own decompile command
+        // the decompiled data can then be further integrated to the LSP
         todo!()
     }
 
@@ -306,7 +308,6 @@ impl Indexer {
 
         if let Some(lang) = self.languages.get(ext) {
             let parsed = lang.parse_str(content).expect("cannot parse content");
-
             let (external_symbols, mappings) = self.get_external_symbols_from_tree(
                 &parsed.0,
                 lang.as_ref(),
