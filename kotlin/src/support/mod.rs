@@ -10,26 +10,26 @@ use tower_lsp::lsp_types::{Position, Range};
 use tree_sitter::{Node, Parser, Point, Query, QueryCursor, QueryMatch, StreamingIterator, Tree};
 
 use crate::{
-    constants::GROOVY_IMPLICIT_IMPORTS,
+    constants::KOTLIN_IMPLICIT_IMPORTS,
     support::queries::{
         DECLARES_VARIABLE_QUERY, GET_ANNOTATIONS_QUERY, GET_EXTENDS_QUERY, GET_FIELD_RETURN_QUERY,
-        GET_FIELD_SHORT_NAME_QUERY, GET_FUNCTION_RETURN_QUERY, GET_GROOVYDOC_QUERY,
-        GET_IMPLEMENTS_QUERY, GET_IMPORTS_QUERY, GET_MODIFIERS_QUERY, GET_PACKAGE_NAME_QUERY,
+        GET_FIELD_SHORT_NAME_QUERY, GET_FUNCTION_RETURN_QUERY, GET_IMPLEMENTS_QUERY,
+        GET_IMPORTS_QUERY, GET_KOTLINDOC_QUERY, GET_MODIFIERS_QUERY, GET_PACKAGE_NAME_QUERY,
         GET_PARAMETERS_QUERY, GET_SHORT_NAME_QUERY, IDENT_QUERY,
     },
 };
 
 mod queries;
 
-pub struct GroovySupport {
+pub struct KotlinSupport {
     parser: Mutex<Parser>,
 }
 
-impl GroovySupport {
+impl KotlinSupport {
     pub fn new() -> Self {
         let mut parser = Parser::new();
         parser
-            .set_language(&tree_sitter_groovy::language())
+            .set_language(&tree_sitter_kotlin::language())
             .unwrap();
         Self {
             parser: Mutex::new(parser),
@@ -132,22 +132,17 @@ impl GroovySupport {
 
                 vec![
                     ("trivial_case", None),
-                    ("method_name", Some("method_qualifier")),
-                    ("this_method_name", Some("this_qualifier")),
-                    ("field_name", Some("field_qualifier")),
+                    ("nav_name", Some("nav_qualifier")),
                     ("arg_name", None),
                     ("var_decl", None),
+                    ("this_method_name", Some("this_qualifier")),
                     ("constructor_type", None),
                     ("type_arg", None),
                     ("cast_type", None),
                     ("class_name", None),
                     ("interface_name", None),
                     ("function_name", None),
-                    ("field_decl_name", None),
-                    (
-                        "scoped_constructor_type",
-                        Some("scoped_constructor_qualifier"),
-                    ),
+                    ("property_name", None),
                     ("super_interfaces", None),
                     ("superclass", None),
                 ]
@@ -183,27 +178,35 @@ impl GroovySupport {
         content: &str,
         position: &Position,
     ) -> Option<IdentResult> {
-        let name_idx = query.capture_index_for_name("import_name");
-        let full_import_idx = query.capture_index_for_name("full_import");
-
-        let name_cap = match_.captures.iter().find(|c| Some(c.index) == name_idx)?;
+        let full_import_idx = query.capture_index_for_name("full_import")?;
         let full_import_cap = match_
             .captures
             .iter()
-            .find(|c| Some(c.index) == full_import_idx)?;
+            .find(|c| c.index == full_import_idx)?;
 
-        let name_node = name_cap.node;
         let full_import_node = full_import_cap.node;
 
-        if !node_contains_position(&name_node, position) {
+        if !node_contains_position(&full_import_node, position) {
             return None;
         }
 
-        let full_text = &content[full_import_node.byte_range()];
-        let name_text = &content[name_node.byte_range()];
-        let scope_text = full_text.strip_suffix(&format!(".{}", name_text))?;
+        let full_text = full_import_node.utf8_text(content.as_bytes()).ok()?;
 
-        Some((name_text.to_string(), Some(scope_text.to_string())))
+        let parts: Vec<&str> = full_text.split('.').collect();
+
+        if parts.is_empty() {
+            return None;
+        }
+
+        let name = parts.last()?.to_string();
+
+        let qualifier = if parts.len() > 1 {
+            Some(parts[..parts.len() - 1].join("."))
+        } else {
+            None
+        };
+
+        Some((name, qualifier))
     }
 
     fn find_in_current_scope(
@@ -214,35 +217,60 @@ impl GroovySupport {
         reference_byte: usize,
     ) -> Option<String> {
         let mut cursor = scope_node.walk();
-
         if !cursor.goto_first_child() {
             return None;
         }
-
         loop {
             let child = cursor.node();
-
             // Only process nodes that come before the reference
             if child.start_byte() >= reference_byte {
                 break;
             }
-
             match child.kind() {
-                "variable_declaration" | "field_declaration" | "parameter" => {
-                    if self.declares_variable(child, content, var_name) {
-                        let type_node = child.child_by_field_name("type")?;
-
-                        let position = Position {
-                            line: type_node.start_position().row as u32,
-                            character: type_node.start_position().column as u32,
-                        };
-                        return self.get_type_at_position(child, content, &position);
+                "property_declaration" => {
+                    let mut var_cursor = child.walk();
+                    for var_child in child.children(&mut var_cursor) {
+                        if var_child.kind() == "variable_declaration" {
+                            if self.declares_variable(var_child, content, var_name) {
+                                let mut type_cursor = var_child.walk();
+                                for type_child in var_child.children(&mut type_cursor) {
+                                    if type_child.kind() == "user_type"
+                                        || type_child.kind() == "nullable_type"
+                                    {
+                                        return Some(
+                                            type_child
+                                                .utf8_text(content.as_bytes())
+                                                .ok()?
+                                                .to_string(),
+                                        );
+                                    }
+                                }
+                                let mut value_cursor = child.walk();
+                                for value_child in child.children(&mut value_cursor) {
+                                    if value_child.kind() == "call_expression" {
+                                        return self.infer_type_from_value(value_child, content);
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
-                "expression_statement"
-                | "assignment_expression"
-                | "object_creation_expression"
-                | "parameters" => {
+                "class_parameter" | "parameter" => {
+                    if self.declares_variable(child, content, var_name) {
+                        let type_node = child.child_by_field_name("type")?;
+                        return Some(type_node.utf8_text(content.as_bytes()).ok()?.to_string());
+                    }
+                }
+                // Lambda parameters are variable_declaration nodes inside lambda_parameters
+                "variable_declaration" => {
+                    if self.declares_variable(child, content, var_name) {
+                        if let Some(type_node) = child.child_by_field_name("type") {
+                            return Some(type_node.utf8_text(content.as_bytes()).ok()?.to_string());
+                        }
+                    }
+                }
+                "statements" | "function_body" | "lambda_literal" | "parameters"
+                | "lambda_parameters" => {
                     if let Some(var_type) =
                         self.find_in_current_scope(child, content, var_name, reference_byte)
                     {
@@ -251,12 +279,27 @@ impl GroovySupport {
                 }
                 _ => {}
             }
-
             if !cursor.goto_next_sibling() {
                 break;
             }
         }
+        None
+    }
 
+    fn infer_type_from_value(&self, value_node: Node, content: &str) -> Option<String> {
+        match value_node.kind() {
+            "call_expression" => {
+                if let Some(ident_node) = value_node.child(0) {
+                    if ident_node.kind() == "identifier" {
+                        return ident_node
+                            .utf8_text(content.as_bytes())
+                            .ok()
+                            .map(|s| s.to_string());
+                    }
+                }
+            }
+            _ => {}
+        }
         None
     }
 
@@ -311,13 +354,13 @@ impl GroovySupport {
     }
 }
 
-impl LanguageSupport for GroovySupport {
+impl LanguageSupport for KotlinSupport {
     fn get_language(&self) -> Language {
-        Language::Groovy
+        Language::Kotlin
     }
 
     fn get_ts_language(&self) -> tree_sitter::Language {
-        tree_sitter_groovy::language()
+        tree_sitter_java::LANGUAGE.into()
     }
 
     fn parse(&self, file_path: &Path) -> Option<ParseResult> {
@@ -384,15 +427,16 @@ impl LanguageSupport for GroovySupport {
 
     fn get_type(&self, node: &Node) -> Option<NodeType> {
         match node.kind() {
-            "class_declaration" => Some(NodeType::Class),
+            "class_declaration" => node
+                .child_by_field_name("body")
+                .and_then(|parent| match parent.kind() {
+                    "class_body" => Some(NodeType::Class),
+                    "enum_class_body" => Some(NodeType::Enum),
+                    _ => None,
+                }),
             "interface_declaration" => Some(NodeType::Interface),
-            "enum_declaration" => Some(NodeType::Enum),
             "function_declaration" => Some(NodeType::Function),
-            "field_declaration" => node.parent().and_then(|parent| match parent.kind() {
-                "class_body" => Some(NodeType::Field),
-                _ => None,
-            }),
-            "constant_declaration" => Some(NodeType::Field),
+            "property_declaration" => Some(NodeType::Field),
             _ => None,
         }
     }
@@ -416,10 +460,15 @@ impl LanguageSupport for GroovySupport {
     }
 
     fn get_modifiers(&self, node: &Node, source: &str) -> Vec<String> {
-        let node_type = self.get_type(node);
-
-        match node_type {
-            Some(_) => ts_helper::get_many(node, source, &GET_MODIFIERS_QUERY, Some(1)),
+        match self.get_type(node) {
+            Some(_) => ts_helper::get_one(node, source, &GET_MODIFIERS_QUERY)
+                .map(|line| {
+                    line.split_whitespace()
+                        .into_iter()
+                        .map(|m| m.to_string())
+                        .collect()
+                })
+                .unwrap_or(vec![]),
             None => Vec::new(),
         }
     }
@@ -428,13 +477,16 @@ impl LanguageSupport for GroovySupport {
         let node_type = self.get_type(node);
 
         match node_type {
-            Some(_) => ts_helper::get_many(node, source, &GET_ANNOTATIONS_QUERY, Some(1)),
+            Some(_) => ts_helper::get_many(node, source, &GET_ANNOTATIONS_QUERY, Some(1))
+                .into_iter()
+                .map(|i| i.strip_prefix("@").unwrap_or_default().trim().to_string())
+                .collect(),
             None => Vec::new(),
         }
     }
 
     fn get_documentation(&self, node: &Node, source: &str) -> Option<String> {
-        ts_helper::get_one(node, source, &GET_GROOVYDOC_QUERY)
+        ts_helper::get_one(node, source, &GET_KOTLINDOC_QUERY)
     }
 
     fn get_parameters(&self, node: &Node, source: &str) -> Option<Vec<ParameterResult>> {
@@ -463,12 +515,18 @@ impl LanguageSupport for GroovySupport {
 
     fn get_imports(&self, tree: &Tree, source: &str) -> Vec<String> {
         let explicit_imports =
-            ts_helper::get_many(&tree.root_node(), source, &GET_IMPORTS_QUERY, Some(1))
+            ts_helper::get_many(&tree.root_node(), source, &GET_IMPORTS_QUERY, None)
                 .into_iter()
-                .map(|i| i.strip_prefix("import ").unwrap_or_default().to_string())
+                .map(|i| {
+                    i.strip_prefix("import ")
+                        .unwrap_or_default()
+                        .trim_end_matches(';')
+                        .trim()
+                        .to_string()
+                })
                 .collect::<Vec<String>>();
 
-        GROOVY_IMPLICIT_IMPORTS
+        KOTLIN_IMPLICIT_IMPORTS
             .iter()
             .map(|s| s.to_string())
             .chain(explicit_imports)
@@ -483,21 +541,20 @@ impl LanguageSupport for GroovySupport {
     ) -> Option<String> {
         let query_text = r#"
         [
-          (field_declaration type: (type_identifier) @identifier)
-          (field_declaration type: (generic_type) @identifier)
-          (variable_declaration type: (type_identifier) @identifier)
-          (variable_declaration type: (generic_type) @identifier)
-          (parameter type: (type_identifier) @identifier)
-          (parameter type: (generic_type) @identifier)
-          (interface_declaration name: (identifier) @identifier)
-          (class_declaration name: (identifier) @identifier)
-          (enum_declaration name: (identifier) @identifier)
+          (property_declaration (variable_declaration type: (user_type) @identifier))
+          (property_declaration (variable_declaration type: (nullable_type) @identifier))
+          (variable_declaration type: (user_type) @identifier)
+          (variable_declaration type: (nullable_type) @identifier)
+          (parameter type: (user_type) @identifier)
+          (parameter type: (nullable_type) @identifier)
+          (class_parameter type: (user_type) @identifier)
+          (class_parameter type: (nullable_type) @identifier)
+          (interface_declaration name: (type_identifier) @identifier)
+          (class_declaration name: (type_identifier) @identifier)
         ]
         "#;
         let query = Query::new(&self.get_ts_language(), query_text).ok()?;
-
         let mut result = None;
-
         let mut cursor = QueryCursor::new();
         cursor
             .matches(&query, node, content.as_bytes())
@@ -509,14 +566,11 @@ impl LanguageSupport for GroovySupport {
                             .utf8_text(content.as_bytes())
                             .unwrap_or_default()
                             .to_string();
-
                         result = Some(ident_name);
                     }
                 }
-
                 result.is_some()
             });
-
         result
     }
 
@@ -586,20 +640,30 @@ impl LanguageSupport for GroovySupport {
 
         let mut current = node;
         loop {
-            let kind = current.kind();
+            if current.kind() == "call_expression" {
+                let query_str = r#"
+                    (call_expression
+                      (call_suffix
+                        (value_arguments) @args))
+                "#;
 
-            if kind == "method_invocation" {
-                let mut cursor = current.walk();
-                for child in current.children(&mut cursor) {
-                    if child.kind() == "argument_list" {
-                        return Some(self.parse_argument_list(&child, content));
-                    }
-                }
+                let query =
+                    tree_sitter::Query::new(&tree_sitter_kotlin::language(), query_str).ok()?;
+                let mut cursor = QueryCursor::new();
+                let mut result = None;
 
-                // TODO: handle closures and object method invocation
-                return Some(vec![]);
+                cursor
+                    .matches(&query, current, content.as_bytes())
+                    .find(|match_| {
+                        for capture in match_.captures.iter() {
+                            let args_node = capture.node;
+                            result = Some(self.parse_argument_list(&args_node, content));
+                        }
+                        result.is_some()
+                    });
+
+                return result.or(Some(vec![]));
             }
-
             current = match current.parent() {
                 Some(p) => p,
                 None => return None,
@@ -674,11 +738,12 @@ impl LanguageSupport for GroovySupport {
             body: (interface_body (function_declaration) @method))
           (enum_declaration 
             name: (identifier) @receiver
-            body: (enum_body (function_declaration) @method))
+            body: (enum_body (enum_body_declarations (function_declaration) @method)))
         ]
         "#;
         let query = Query::new(&self.get_ts_language(), query_text).ok()?;
 
+        println!("I'm here");
         let method_idx = query.capture_index_for_name("method");
         let receiver_idx = query.capture_index_for_name("receiver");
 

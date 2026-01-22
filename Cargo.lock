@@ -1276,6 +1276,7 @@ dependencies = [
  "lsp_core",
  "num_cpus",
  "rayon",
+ "regex",
  "serde",
  "serde_json",
  "sha2",
@@ -1443,6 +1444,42 @@ dependencies = [
  "tree-sitter-groovy",
  "tree-sitter-java",
  "tree-sitter-kotlin",
+ "walkdir",
+ "zip",
+]
+
+[[package]]
+name = "lspintar-server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bincode",
+ "chrono",
+ "dirs",
+ "futures",
+ "groovy",
+ "java",
+ "just",
+ "kotlin",
+ "log",
+ "lsp_core",
+ "num_cpus",
+ "pretty_assertions",
+ "rayon",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tower-lsp",
+ "tracing",
+ "tracing-subscriber",
+ "tree-sitter",
+ "tree-sitter-groovy",
+ "tree-sitter-java",
+ "tree-sitter-kotlin",
+ "uuid",
  "walkdir",
  "zip",
 ]
@@ -2153,42 +2190,6 @@ dependencies = [
  "itoa",
  "ryu",
  "serde",
-]
-
-[[package]]
-name = "server"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bincode",
- "chrono",
- "dirs",
- "futures",
- "groovy",
- "java",
- "just",
- "kotlin",
- "log",
- "lsp_core",
- "num_cpus",
- "pretty_assertions",
- "rayon",
- "serde",
- "serde_json",
- "sha2",
- "sqlx",
- "tempfile",
- "tokio",
- "tower-lsp",
- "tracing",
- "tracing-subscriber",
- "tree-sitter",
- "tree-sitter-groovy",
- "tree-sitter-java",
- "tree-sitter-kotlin",
- "uuid",
- "walkdir",
- "zip",
 ]
 
 [[package]]
