@@ -202,43 +202,43 @@ fn test_get_annotations() {
     assert!(annotations.is_empty());
 }
 
-// #[test]
-// fn test_get_documentation() {
-//     let support = KotlinSupport::new();
-//
-//     let content = r#"
-//         /**
-//          * This is a test class
-//          * with multiple lines
-//          */
-//         class Foo {}
-//         "#;
-//     let parsed = support.parse_str(&content).expect("cannot parse content");
-//
-//     let node = find_node_by_kind(parsed.0.root_node(), "class_declaration").unwrap();
-//     let docs = support.get_documentation(&node, &parsed.1).unwrap();
-//     assert!(docs.contains("This is a test class"));
-//
-//     let content = r#"
-//         class Bar {
-//             /**
-//              * Test method
-//              */
-//             fun test() {}
-//         }
-//         "#;
-//     let parsed = support.parse_str(&content).expect("cannot parse content");
-//     let class_node = find_node_by_kind(parsed.0.root_node(), "class_declaration").unwrap();
-//     let method_node = find_node_by_kind(class_node, "function_declaration").unwrap();
-//     let docs = support.get_documentation(&method_node, &parsed.1).unwrap();
-//     assert!(docs.contains("Test method"));
-//
-//     let content = "class Baz {}";
-//     let parsed = support.parse_str(&content).expect("cannot parse content");
-//     let node = find_node_by_kind(parsed.0.root_node(), "class_declaration").unwrap();
-//     let docs = support.get_documentation(&node, &parsed.1);
-//     assert!(docs.is_none());
-// }
+#[test]
+fn test_get_documentation() {
+    let support = KotlinSupport::new();
+
+    let content = r#"
+        /**
+         * This is a test class
+         * with multiple lines
+         */
+        class Foo {}
+        "#;
+    let parsed = support.parse_str(&content).expect("cannot parse content");
+
+    let node = find_node_by_kind(parsed.0.root_node(), "class_declaration").unwrap();
+    let docs = support.get_documentation(&node, &parsed.1).unwrap();
+    assert!(docs.contains("This is a test class"));
+
+    let content = r#"
+        class Bar {
+            /**
+             * Test method
+             */
+            fun test() {}
+        }
+        "#;
+    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let class_node = find_node_by_kind(parsed.0.root_node(), "class_declaration").unwrap();
+    let method_node = find_node_by_kind(class_node, "function_declaration").unwrap();
+    let docs = support.get_documentation(&method_node, &parsed.1).unwrap();
+    assert!(docs.contains("Test method"));
+
+    let content = "class Baz {}";
+    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let node = find_node_by_kind(parsed.0.root_node(), "class_declaration").unwrap();
+    let docs = support.get_documentation(&node, &parsed.1);
+    assert!(docs.is_none());
+}
 
 #[test]
 fn test_get_parameters() {

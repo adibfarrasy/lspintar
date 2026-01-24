@@ -142,7 +142,6 @@ fn test_find_lambda_parameter_type() {
         }
         "#;
     let parsed = support.parse_str(&content).expect("cannot parse content");
-    println!("Tree:\n{}", parsed.0.root_node().to_sexp());
     let pos = find_position(content, "item.uppercase");
     let var_type = support.find_variable_type(&parsed.0, &parsed.1, "item", &pos);
     assert_eq!(var_type, Some("String".to_string()));

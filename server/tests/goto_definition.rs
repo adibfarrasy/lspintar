@@ -1,8 +1,8 @@
 use std::env;
 use std::sync::Arc;
 
+use lspintar_server::{Repository, server::Backend};
 use pretty_assertions::assert_eq;
-use server::{Repository, server::Backend};
 use tower_lsp::{
     LanguageServer, LspService,
     lsp_types::{

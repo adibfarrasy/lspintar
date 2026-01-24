@@ -4,14 +4,14 @@ use lsp_core::{
     build_tools::{BuildToolHandler, gradle::GradleHandler},
     vcs::get_vcs_handler,
 };
-use pretty_assertions::assert_eq;
-use server::{
+use lspintar_server::{
     Indexer, Repository,
     models::{
         external_symbol::ExternalSymbol,
         symbol::{Symbol, SymbolMetadata},
     },
 };
+use pretty_assertions::assert_eq;
 use sqlx::types::Json;
 use std::{
     path::{Path, PathBuf},

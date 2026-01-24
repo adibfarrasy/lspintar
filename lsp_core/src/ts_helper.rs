@@ -35,20 +35,22 @@ pub fn get_many(node: &Node, content: &str, query: &Query, max_depth: Option<u32
 
 pub fn parse_parameter(param: &str) -> ParameterResult {
     let param = param.trim();
-    param
-        .split_once(':')
-        .map(|(name, rest)| {
-            if let Some((arg, default)) = rest.split_once('=') {
-                (
-                    name.trim().to_string(),
-                    Some(arg.trim().to_string()),
-                    Some(default.trim().to_string()),
-                )
-            } else {
-                (name.trim().to_string(), Some(rest.trim().to_string()), None)
-            }
-        })
-        .unwrap_or((param.to_string(), None, None))
+
+    let (type_and_name, default) = if let Some(eq_pos) = param.find('=') {
+        let (left, right) = param.split_at(eq_pos);
+        (left.trim(), Some(right[1..].trim().trim_matches('\'')))
+    } else {
+        (param, None)
+    };
+
+    if let Some(last_space) = type_and_name.rfind(char::is_whitespace) {
+        let type_name = type_and_name[..last_space].trim().to_string();
+        let name = type_and_name[last_space..].trim().to_string();
+        (name, Some(type_name), default.map(String::from))
+    } else {
+        // No whitespace = untyped parameter (for Groovy)
+        (type_and_name.to_string(), None, default.map(String::from))
+    }
 }
 
 pub fn node_contains_position(node: &Node, position: &Position) -> bool {

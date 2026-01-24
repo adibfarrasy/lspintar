@@ -214,7 +214,6 @@ impl Backend {
             }
         }
 
-        println!("supers: {:#?}", supers);
         for super_name in supers.iter().map(|symbol| &symbol.fully_qualified_name) {
             let results = self
                 .recurse_try_members_with_inheritance(
@@ -652,8 +651,6 @@ impl LanguageServer for Backend {
                     .ok_or(tower_lsp::jsonrpc::Error::invalid_params(format!(
                         "Failed to find FQN by location",
                     )))?;
-
-                println!("fqn: {}", fqn);
 
                 return Ok(Some(self.symbol_to_defn_response(fqn, &branch).await?));
             };

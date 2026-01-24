@@ -2898,7 +2898,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-groovy"
 version = "0.0.1"
-source = "git+https://github.com/adibfarrasy/tree-sitter-groovy#c8901e7499256a73cfa9e9fe8ba232d7c0e3d3f7"
+source = "git+https://github.com/adibfarrasy/tree-sitter-groovy#5f6e01b05317e573db708c3ad05ec2135f59fa58"
 dependencies = [
  "cc",
  "just",
@@ -2917,7 +2917,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-kotlin"
 version = "0.4.0"
-source = "git+https://github.com/adibfarrasy/tree-sitter-kotlin#99b68a8126431ab2cb1736e63e7fc7c1dcbb4853"
+source = "git+https://github.com/adibfarrasy/tree-sitter-kotlin#9c03aefd27a12dacefa17b2e3dd3464d5fec766a"
 dependencies = [
  "cc",
  "tree-sitter",

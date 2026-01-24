@@ -107,8 +107,8 @@ pub static GET_ANNOTATIONS_QUERY: LazyLock<Query> = LazyLock::new(|| {
     .unwrap()
 });
 
-pub static GET_KOTLINDOC_QUERY: LazyLock<Query> =
-    LazyLock::new(|| Query::new(&KOTLIN_TS_LANGUAGE, r#"(kotlindoc_comment) @doc"#).unwrap());
+pub static GET_KDOC_QUERY: LazyLock<Query> =
+    LazyLock::new(|| Query::new(&KOTLIN_TS_LANGUAGE, r#"(kdoc_comment) @doc"#).unwrap());
 
 pub static GET_PARAMETERS_QUERY: LazyLock<Query> = LazyLock::new(|| {
     Query::new(

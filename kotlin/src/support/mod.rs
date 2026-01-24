@@ -14,7 +14,7 @@ use crate::{
     support::queries::{
         DECLARES_VARIABLE_QUERY, GET_ANNOTATIONS_QUERY, GET_EXTENDS_QUERY, GET_FIELD_RETURN_QUERY,
         GET_FIELD_SHORT_NAME_QUERY, GET_FUNCTION_RETURN_QUERY, GET_IMPLEMENTS_QUERY,
-        GET_IMPORTS_QUERY, GET_KOTLINDOC_QUERY, GET_MODIFIERS_QUERY, GET_PACKAGE_NAME_QUERY,
+        GET_IMPORTS_QUERY, GET_KDOC_QUERY, GET_MODIFIERS_QUERY, GET_PACKAGE_NAME_QUERY,
         GET_PARAMETERS_QUERY, GET_SHORT_NAME_QUERY, IDENT_QUERY,
     },
 };
@@ -352,6 +352,24 @@ impl KotlinSupport {
         }
         params
     }
+
+    fn parse_parameter(&self, param: &str) -> ParameterResult {
+        let param = param.trim();
+        param
+            .split_once(':')
+            .map(|(name, rest)| {
+                if let Some((arg, default)) = rest.split_once('=') {
+                    (
+                        name.trim().to_string(),
+                        Some(arg.trim().to_string()),
+                        Some(default.trim().to_string()),
+                    )
+                } else {
+                    (name.trim().to_string(), Some(rest.trim().to_string()), None)
+                }
+            })
+            .unwrap_or((param.to_string(), None, None))
+    }
 }
 
 impl LanguageSupport for KotlinSupport {
@@ -360,7 +378,7 @@ impl LanguageSupport for KotlinSupport {
     }
 
     fn get_ts_language(&self) -> tree_sitter::Language {
-        tree_sitter_java::LANGUAGE.into()
+        tree_sitter_kotlin::language()
     }
 
     fn parse(&self, file_path: &Path) -> Option<ParseResult> {
@@ -486,14 +504,14 @@ impl LanguageSupport for KotlinSupport {
     }
 
     fn get_documentation(&self, node: &Node, source: &str) -> Option<String> {
-        ts_helper::get_one(node, source, &GET_KOTLINDOC_QUERY)
+        ts_helper::get_one(node, source, &GET_KDOC_QUERY)
     }
 
     fn get_parameters(&self, node: &Node, source: &str) -> Option<Vec<ParameterResult>> {
         if let Some(NodeType::Function) = self.get_type(node) {
             let params = ts_helper::get_many(node, source, &GET_PARAMETERS_QUERY, Some(1))
                 .into_iter()
-                .map(|p| ts_helper::parse_parameter(&p))
+                .map(|p| self.parse_parameter(&p))
                 .collect();
             Some(params)
         } else {
@@ -677,40 +695,70 @@ impl LanguageSupport for KotlinSupport {
 
         loop {
             match node.kind() {
-                "map_literal" => return Some("Map".to_string()),
-                "array_literal" => return Some("List".to_string()),
+                "collection_literal" => return Some("List".to_string()),
 
-                // Numeric literals
-                "decimal_integer_literal"
-                | "hex_integer_literal"
-                | "octal_integer_literal"
-                | "binary_integer_literal" => {
-                    // Check for long suffix (l or L)
-                    if let Ok(text) = node.utf8_text(content.as_bytes()) {
-                        if text.ends_with('l') || text.ends_with('L') {
-                            return Some("Long".to_string());
+                "decimal_integer_literal" | "hex_literal" | "bin_literal" => {
+                    if let Ok(_) = node.utf8_text(content.as_bytes()) {
+                        if let Some(parent) = node.parent() {
+                            match parent.kind() {
+                                "long_literal" => {
+                                    return Some("Long".to_string());
+                                }
+                                "unsigned_literal" => {
+                                    if let Ok(parent_text) = parent.utf8_text(content.as_bytes()) {
+                                        let parent_lower = parent_text.trim().to_lowercase();
+                                        if parent_lower.ends_with("ul") {
+                                            return Some("ULong".to_string());
+                                        }
+                                        return Some("UInt".to_string());
+                                    }
+                                    return Some("UInt".to_string());
+                                }
+                                _ => {
+                                    return Some("Int".to_string());
+                                }
+                            }
                         }
+
+                        return Some("Int".to_string());
                     }
-                    return Some("Integer".to_string());
+                    return Some("Int".to_string());
                 }
 
-                "decimal_floating_point_literal" | "hex_floating_point_literal" => {
+                "long_literal" => {
+                    return Some("Long".to_string());
+                }
+
+                "unsigned_literal" => {
                     if let Ok(text) = node.utf8_text(content.as_bytes()) {
                         let lower = text.to_lowercase();
-                        if lower.ends_with('f') {
+                        if lower.ends_with("ul") {
+                            return Some("ULong".to_string());
+                        }
+                        return Some("UInt".to_string());
+                    }
+                    return Some("UInt".to_string());
+                }
+
+                "real_literal" => {
+                    if let Ok(text) = node.utf8_text(content.as_bytes()) {
+                        let lower = text.to_lowercase();
+                        if lower.ends_with('f') || lower.ends_with('F') {
                             return Some("Float".to_string());
                         }
+                        // In Kotlin, real literals without suffix are Double
+                        return Some("Double".to_string());
                     }
                     return Some("Double".to_string());
                 }
 
-                "true" | "false" => return Some("Boolean".to_string()),
+                "boolean_literal" => return Some("Boolean".to_string()),
 
-                "string_literal" | "text_block" => return Some("String".to_string()),
+                "character_literal" => return Some("Char".to_string()),
 
                 "null_literal" => return None,
 
-                "regex_literal" => return Some("Pattern".to_string()),
+                "string_literal" => return Some("String".to_string()),
 
                 _ => {}
             }
@@ -730,20 +778,22 @@ impl LanguageSupport for KotlinSupport {
     ) -> Option<(String, Vec<String>)> {
         let query_text = r#"
         [
-           (class_declaration 
-            name: (identifier) @receiver
+            (class_declaration 
+            name: (type_identifier) @receiver
             body: (class_body (function_declaration) @method))
-          (interface_declaration 
-            name: (identifier) @receiver
+            (interface_declaration 
+            name: (type_identifier) @receiver
             body: (interface_body (function_declaration) @method))
-          (enum_declaration 
-            name: (identifier) @receiver
-            body: (enum_body (enum_body_declarations (function_declaration) @method)))
+            (class_declaration 
+            name: (type_identifier) @receiver
+            body: (enum_class_body (function_declaration) @method))
+            (object_declaration 
+            name: (type_identifier) @receiver
+            body: (class_body (function_declaration) @method))
         ]
         "#;
         let query = Query::new(&self.get_ts_language(), query_text).ok()?;
 
-        println!("I'm here");
         let method_idx = query.capture_index_for_name("method");
         let receiver_idx = query.capture_index_for_name("receiver");
 

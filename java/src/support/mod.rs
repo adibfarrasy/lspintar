@@ -683,7 +683,6 @@ impl LanguageSupport for JavaSupport {
         "#;
         let query = Query::new(&self.get_ts_language(), query_text).ok()?;
 
-        println!("I'm here");
         let method_idx = query.capture_index_for_name("method");
         let receiver_idx = query.capture_index_for_name("receiver");
 
