@@ -1,5 +1,6 @@
 use groovy::GroovySupport;
 use java::JavaSupport;
+use kotlin::KotlinSupport;
 use lsp_core::{
     build_tools::{BuildToolHandler, gradle::GradleHandler},
     vcs::get_vcs_handler,
@@ -642,6 +643,101 @@ async fn test_index_external_dep_jar() {
                 documentation: Some(doc_string.to_string()),
                 annotations: Some(vec![]),
             },),
+            last_modified: 0,
+        }
+    );
+}
+
+#[tokio::test]
+async fn test_index_kotlin_data_class() {
+    let repo = Arc::new(Repository::new(":memory:").await.unwrap());
+    let path = Path::new("tests/fixtures/polyglot-spring/src/main/kotlin/com/example/demo/User.kt");
+
+    let vcs = get_vcs_handler(&path);
+    let mut indexer = Indexer::new(Arc::clone(&repo), Arc::clone(&vcs));
+    indexer.register_language("kt", Arc::new(KotlinSupport::new()));
+    indexer.index_file(&path).await.expect("Indexing failed");
+
+    let result = repo
+        .find_symbol_by_fqn_and_branch("com.example.User", "NONE")
+        .await
+        .expect("Query failed");
+    assert!(result.is_some(), "Symbol should be found");
+
+    let mut symbol = result.unwrap();
+    symbol.id = None;
+    symbol.last_modified = 0;
+
+    assert_eq!(
+        symbol,
+        Symbol {
+            id: None,
+            vcs_branch: "NONE".to_string(),
+            short_name: "User".to_string(),
+            package_name: "com.example".to_string(),
+            fully_qualified_name: "com.example.User".to_string(),
+            parent_name: Some("com.example".to_string()),
+            file_path: "tests/fixtures/polyglot-spring/src/main/kotlin/com/example/demo/User.kt"
+                .to_string(),
+            file_type: "Kotlin".to_string(),
+            symbol_type: "Class".to_string(),
+            modifiers: Json(vec!["data".to_string()]),
+            line_start: 2,
+            line_end: 2,
+            char_start: 0,
+            char_end: 47,
+            ident_line_start: 2,
+            ident_line_end: 2,
+            ident_char_start: 11,
+            ident_char_end: 15,
+            metadata: Json(SymbolMetadata {
+                parameters: None,
+                return_type: None,
+                documentation: None,
+                annotations: Some(vec![])
+            }),
+            last_modified: 0,
+        }
+    );
+
+    let result = repo
+        .find_symbol_by_fqn_and_branch("com.example.User#name", "NONE")
+        .await
+        .expect("Query failed");
+    assert!(result.is_some(), "Symbol should be found");
+
+    let mut symbol = result.unwrap();
+    symbol.id = None;
+    symbol.last_modified = 0;
+
+    assert_eq!(
+        symbol,
+        Symbol {
+            id: None,
+            vcs_branch: "NONE".to_string(),
+            short_name: "name".to_string(),
+            package_name: "com.example".to_string(),
+            fully_qualified_name: "com.example.User#name".to_string(),
+            parent_name: Some("com.example.User".to_string()),
+            file_path: "tests/fixtures/polyglot-spring/src/main/kotlin/com/example/demo/User.kt"
+                .to_string(),
+            file_type: "Kotlin".to_string(),
+            symbol_type: "Field".to_string(),
+            modifiers: Json(vec![]),
+            line_start: 2,
+            line_end: 2,
+            char_start: 30,
+            char_end: 46,
+            ident_line_start: 2,
+            ident_line_end: 2,
+            ident_char_start: 34,
+            ident_char_end: 38,
+            metadata: Json(SymbolMetadata {
+                parameters: None,
+                return_type: Some("String".to_string()),
+                documentation: None,
+                annotations: Some(vec![])
+            }),
             last_modified: 0,
         }
     );

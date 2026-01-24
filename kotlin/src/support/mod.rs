@@ -215,7 +215,7 @@ impl KotlinSupport {
         content: &str,
         var_name: &str,
         reference_byte: usize,
-    ) -> Option<String> {
+    ) -> Option<(String, Position)> {
         let mut cursor = scope_node.walk();
         if !cursor.goto_first_child() {
             return None;
@@ -232,23 +232,39 @@ impl KotlinSupport {
                     for var_child in child.children(&mut var_cursor) {
                         if var_child.kind() == "variable_declaration" {
                             if self.declares_variable(var_child, content, var_name) {
+                                // Try to get explicit type
                                 let mut type_cursor = var_child.walk();
                                 for type_child in var_child.children(&mut type_cursor) {
                                     if type_child.kind() == "user_type"
                                         || type_child.kind() == "nullable_type"
                                     {
-                                        return Some(
-                                            type_child
-                                                .utf8_text(content.as_bytes())
-                                                .ok()?
-                                                .to_string(),
-                                        );
+                                        let type_name = type_child
+                                            .utf8_text(content.as_bytes())
+                                            .ok()?
+                                            .to_string();
+
+                                        let (_, var_position) = ts_helper::get_one_with_position(
+                                            &child,
+                                            content,
+                                            &DECLARES_VARIABLE_QUERY,
+                                        )?;
+
+                                        return Some((type_name, var_position));
                                     }
                                 }
+
+                                // Infer from value if no explicit type
                                 let mut value_cursor = child.walk();
                                 for value_child in child.children(&mut value_cursor) {
                                     if value_child.kind() == "call_expression" {
-                                        return self.infer_type_from_value(value_child, content);
+                                        let type_name =
+                                            self.infer_type_from_value(value_child, content)?;
+                                        let identifier = var_child.child_by_field_name("name")?;
+                                        let var_position = Position {
+                                            line: identifier.start_position().row as u32,
+                                            character: identifier.start_position().column as u32,
+                                        };
+                                        return Some((type_name, var_position));
                                     }
                                 }
                             }
@@ -258,23 +274,35 @@ impl KotlinSupport {
                 "class_parameter" | "parameter" => {
                     if self.declares_variable(child, content, var_name) {
                         let type_node = child.child_by_field_name("type")?;
-                        return Some(type_node.utf8_text(content.as_bytes()).ok()?.to_string());
+                        let type_name = type_node.utf8_text(content.as_bytes()).ok()?.to_string();
+                        let identifier = child.child_by_field_name("name")?;
+                        let var_position = Position {
+                            line: identifier.start_position().row as u32,
+                            character: identifier.start_position().column as u32,
+                        };
+                        return Some((type_name, var_position));
                     }
                 }
-                // Lambda parameters are variable_declaration nodes inside lambda_parameters
                 "variable_declaration" => {
                     if self.declares_variable(child, content, var_name) {
                         if let Some(type_node) = child.child_by_field_name("type") {
-                            return Some(type_node.utf8_text(content.as_bytes()).ok()?.to_string());
+                            let type_name =
+                                type_node.utf8_text(content.as_bytes()).ok()?.to_string();
+                            let identifier = child.child_by_field_name("name")?;
+                            let var_position = Position {
+                                line: identifier.start_position().row as u32,
+                                character: identifier.start_position().column as u32,
+                            };
+                            return Some((type_name, var_position));
                         }
                     }
                 }
                 "statements" | "function_body" | "lambda_literal" | "parameters"
                 | "lambda_parameters" => {
-                    if let Some(var_type) =
+                    if let Some(result) =
                         self.find_in_current_scope(child, content, var_name, reference_byte)
                     {
-                        return Some(var_type);
+                        return Some(result);
                     }
                 }
                 _ => {}
@@ -445,16 +473,28 @@ impl LanguageSupport for KotlinSupport {
 
     fn get_type(&self, node: &Node) -> Option<NodeType> {
         match node.kind() {
-            "class_declaration" => node
-                .child_by_field_name("body")
-                .and_then(|parent| match parent.kind() {
-                    "class_body" => Some(NodeType::Class),
-                    "enum_class_body" => Some(NodeType::Enum),
-                    _ => None,
-                }),
+            "class_declaration" => {
+                if let Some(body) = node.child_by_field_name("body") {
+                    match body.kind() {
+                        "enum_class_body" => Some(NodeType::Enum),
+                        _ => Some(NodeType::Class),
+                    }
+                } else {
+                    Some(NodeType::Class)
+                }
+            }
             "interface_declaration" => Some(NodeType::Interface),
             "function_declaration" => Some(NodeType::Function),
             "property_declaration" => Some(NodeType::Field),
+            "class_parameter" => {
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    if child.kind() == "binding_pattern_kind" {
+                        return Some(NodeType::Field);
+                    }
+                }
+                None
+            }
             _ => None,
         }
     }
@@ -608,43 +648,8 @@ impl LanguageSupport for KotlinSupport {
         var_name: &str,
         position: &Position,
     ) -> Option<String> {
-        let mut current_node = get_node_at_position(tree, content, position)?;
-
-        if var_name == "this" {
-            let mut node = current_node;
-            while let Some(parent) = node.parent() {
-                if parent.kind() == "class_declaration" {
-                    let type_node = parent.child_by_field_name("name")?;
-                    let position = Position {
-                        line: type_node.start_position().row as u32,
-                        character: type_node.start_position().column as u32,
-                    };
-                    return self
-                        .get_ident_within_node(&parent, content, &position)
-                        .map(|(name, _)| name);
-                }
-                node = parent;
-            }
-            return None;
-        }
-
-        // Bubble up through scopes
-        let reference_byte = current_node.start_byte();
-        loop {
-            if let Some(var_type) =
-                self.find_in_current_scope(current_node, content, var_name, reference_byte)
-            {
-                return Some(var_type);
-            }
-
-            if let Some(parent) = current_node.parent() {
-                current_node = parent;
-            } else {
-                break;
-            }
-        }
-
-        None
+        self.find_variable_declaration(tree, content, var_name, position)
+            .map(|(type_name, _)| type_name)
     }
 
     fn extract_call_arguments(
@@ -829,6 +834,49 @@ impl LanguageSupport for KotlinSupport {
             });
 
         result
+    }
+
+    fn find_variable_declaration(
+        &self,
+        tree: &Tree,
+        content: &str,
+        var_name: &str,
+        position: &Position,
+    ) -> Option<(String, Position)> {
+        let mut current_node = get_node_at_position(tree, content, position)?;
+        if var_name == "this" {
+            let mut node = current_node;
+            while let Some(parent) = node.parent() {
+                if parent.kind() == "class_declaration" {
+                    let type_node = parent.child_by_field_name("name")?;
+                    let pos = Position {
+                        line: type_node.start_position().row as u32,
+                        character: type_node.start_position().column as u32,
+                    };
+                    let name = self
+                        .get_ident_within_node(&parent, content, &pos)
+                        .map(|(name, _)| name)?;
+                    return Some((name, pos));
+                }
+                node = parent;
+            }
+            return None;
+        }
+
+        let reference_byte = current_node.start_byte();
+        loop {
+            if let Some(result) =
+                self.find_in_current_scope(current_node, content, var_name, reference_byte)
+            {
+                return Some(result);
+            }
+            if let Some(parent) = current_node.parent() {
+                current_node = parent;
+            } else {
+                break;
+            }
+        }
+        None
     }
 }
 

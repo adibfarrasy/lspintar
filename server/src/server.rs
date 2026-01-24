@@ -1,4 +1,6 @@
 use groovy::GroovySupport;
+use java::JavaSupport;
+use kotlin::KotlinSupport;
 use lsp_core::{
     build_tools::get_build_tool,
     language_support::LanguageSupport,
@@ -32,6 +34,8 @@ impl Backend {
     pub fn new(client: tower_lsp::Client, repo: Arc<Repository>) -> Self {
         let mut languages: HashMap<String, Arc<dyn LanguageSupport>> = HashMap::new();
         languages.insert("groovy".to_string(), Arc::new(GroovySupport::new()));
+        languages.insert("java".to_string(), Arc::new(JavaSupport::new()));
+        languages.insert("kt".to_string(), Arc::new(KotlinSupport::new()));
 
         Self {
             client,
@@ -733,6 +737,20 @@ impl LanguageServer for Backend {
                         ));
                     }
                     None => {
+                        if let Some((_, var_pos)) =
+                            lang.find_variable_declaration(&tree, &content, &ident, &position)
+                        {
+                            let location = Location::new(
+                                params
+                                    .text_document_position_params
+                                    .text_document
+                                    .uri
+                                    .clone(),
+                                Range::new(var_pos, var_pos),
+                            );
+                            return Ok(Some(GotoDefinitionResponse::from(location)));
+                        }
+
                         let fqn = self
                             .resolve_fqn(&ident, imports, package_name, &branch)
                             .await

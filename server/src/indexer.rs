@@ -63,6 +63,7 @@ impl Indexer {
                     .ok_or_else(|| anyhow!("failed to parse file: {}", path.display()))?;
                 let data =
                     self.get_symbols_from_tree(&parsed.0, lang.as_ref(), &path, &parsed.1)?;
+
                 self.repo.insert_symbols(&data.0).await?;
 
                 if !data.1.is_empty() {

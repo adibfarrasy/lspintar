@@ -40,7 +40,10 @@ pub static GET_MODIFIERS_QUERY: LazyLock<Query> =
 pub static GET_FIELD_RETURN_QUERY: LazyLock<Query> = LazyLock::new(|| {
     Query::new(
         &KOTLIN_TS_LANGUAGE,
-        r#"(variable_declaration type: (_) @ret)"#,
+        r#"
+            (variable_declaration type: (_) @ret)
+            (class_parameter type: (user_type (type_identifier) @ret))
+        "#,
     )
     .unwrap()
 });
@@ -73,6 +76,7 @@ pub static GET_FIELD_SHORT_NAME_QUERY: LazyLock<Query> = LazyLock::new(|| {
         &KOTLIN_TS_LANGUAGE,
         r#"
         (property_declaration (variable_declaration name: (identifier) @name))
+        (class_parameter name: (identifier) @name)
         "#,
     )
     .unwrap()

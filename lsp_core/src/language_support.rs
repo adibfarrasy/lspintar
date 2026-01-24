@@ -69,6 +69,15 @@ pub trait LanguageSupport: Send + Sync {
         position: &Position,
     ) -> Option<String>;
 
+    // returns (type, position)
+    fn find_variable_declaration(
+        &self,
+        tree: &Tree,
+        content: &str,
+        var_name: &str,
+        position: &Position,
+    ) -> Option<(String, Position)>;
+
     fn extract_call_arguments(
         &self,
         tree: &Tree,

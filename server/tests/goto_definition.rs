@@ -18,7 +18,7 @@ struct TestServer {
 }
 
 impl TestServer {
-    async fn new() -> Self {
+    async fn new(fixture: &str) -> Self {
         let db_name = Uuid::new_v4();
         let db_dir = format!("file:{}?mode=memory&cache=shared", db_name);
         let repo = Arc::new(Repository::new(&db_dir).await.unwrap());
@@ -29,7 +29,7 @@ impl TestServer {
 
         let mut init_params = InitializeParams::default();
         init_params.root_uri = Some(
-            Url::from_file_path(root.join("tests/fixtures/groovy-gradle-multi"))
+            Url::from_file_path(root.join("tests/fixtures").join(fixture))
                 .expect("cannot parse root URI"),
         );
         backend.initialize(init_params).await.unwrap();
@@ -41,7 +41,7 @@ impl TestServer {
 
 #[tokio::test]
 async fn test_simple() {
-    let server = TestServer::new().await;
+    let server = TestServer::new("groovy-gradle-multi").await;
 
     let root = env::current_dir().expect("cannot get current dir");
 
@@ -82,7 +82,7 @@ async fn test_simple() {
 
 #[tokio::test]
 async fn test_static_member() {
-    let server = TestServer::new().await;
+    let server = TestServer::new("groovy-gradle-multi").await;
 
     let root = env::current_dir().expect("cannot get current dir");
 
@@ -123,7 +123,7 @@ async fn test_static_member() {
 
 #[tokio::test]
 async fn test_this_member() {
-    let server = TestServer::new().await;
+    let server = TestServer::new("groovy-gradle-multi").await;
 
     let root = env::current_dir().expect("cannot get current dir");
 
@@ -164,7 +164,7 @@ async fn test_this_member() {
 
 #[tokio::test]
 async fn test_this_super_member() {
-    let server = TestServer::new().await;
+    let server = TestServer::new("groovy-gradle-multi").await;
 
     let root = env::current_dir().expect("cannot get current dir");
 
@@ -205,7 +205,7 @@ async fn test_this_super_member() {
 
 #[tokio::test]
 async fn test_instance_member_access() {
-    let server = TestServer::new().await;
+    let server = TestServer::new("groovy-gradle-multi").await;
 
     let root = env::current_dir().expect("cannot get current dir");
 
@@ -246,7 +246,7 @@ async fn test_instance_member_access() {
 
 #[tokio::test]
 async fn test_resolve_chain() {
-    let server = TestServer::new().await;
+    let server = TestServer::new("groovy-gradle-multi").await;
 
     let root = env::current_dir().expect("cannot get current dir");
 
@@ -321,7 +321,7 @@ async fn test_resolve_chain() {
 
 #[tokio::test]
 async fn test_method_overloading() {
-    let server = TestServer::new().await;
+    let server = TestServer::new("groovy-gradle-multi").await;
 
     let root = env::current_dir().expect("cannot get current dir");
 
@@ -464,7 +464,7 @@ async fn test_method_overloading() {
 
 #[tokio::test]
 async fn test_goto_superclass() {
-    let server = TestServer::new().await;
+    let server = TestServer::new("groovy-gradle-multi").await;
 
     let root = env::current_dir().expect("cannot get current dir");
 
@@ -505,7 +505,7 @@ async fn test_goto_superclass() {
 
 #[tokio::test]
 async fn test_goto_interface() {
-    let server = TestServer::new().await;
+    let server = TestServer::new("groovy-gradle-multi").await;
 
     let root = env::current_dir().expect("cannot get current dir");
 
@@ -537,6 +537,88 @@ async fn test_goto_interface() {
             end: Position {
                 line: 4,
                 character: 23,
+            },
+        },
+    );
+
+    assert_eq!(result.unwrap(), GotoDefinitionResponse::from(location));
+}
+
+#[tokio::test]
+async fn test_goto_property() {
+    let server = TestServer::new("polyglot-spring").await;
+
+    let root = env::current_dir().expect("cannot get current dir");
+
+    let params = GotoDefinitionParams {
+        text_document_position_params: TextDocumentPositionParams {
+            text_document: TextDocumentIdentifier {
+                uri: Url::from_file_path(root.join("tests/fixtures/polyglot-spring/src/main/groovy/com/example/demo/Controller.groovy"))
+                    .expect("cannot parse root URI"),
+            },
+            position: Position::new(23, 29),
+        },
+        work_done_progress_params: WorkDoneProgressParams::default(),
+        partial_result_params: PartialResultParams::default(),
+    };
+
+    let result = server.backend.goto_definition(params).await.unwrap();
+    assert!(result.is_some());
+
+    let location = Location::new(
+        Url::from_file_path(root.join(
+            "tests/fixtures/polyglot-spring/src/main/groovy/com/example/demo/Controller.groovy",
+        ))
+        .unwrap(),
+        Range {
+            start: Position {
+                line: 9,
+                character: 16,
+            },
+            end: Position {
+                line: 9,
+                character: 16,
+            },
+        },
+    );
+
+    assert_eq!(result.unwrap(), GotoDefinitionResponse::from(location));
+}
+
+#[tokio::test]
+async fn test_goto_data_class_field() {
+    let server = TestServer::new("polyglot-spring").await;
+
+    let root = env::current_dir().expect("cannot get current dir");
+
+    let params = GotoDefinitionParams {
+        text_document_position_params: TextDocumentPositionParams {
+            text_document: TextDocumentIdentifier {
+                uri: Url::from_file_path(root.join("tests/fixtures/polyglot-spring/src/main/groovy/com/example/demo/Controller.groovy"))
+                    .expect("cannot parse root URI"),
+            },
+            position: Position::new(39, 32),
+        },
+        work_done_progress_params: WorkDoneProgressParams::default(),
+        partial_result_params: PartialResultParams::default(),
+    };
+
+    let result = server.backend.goto_definition(params).await.unwrap();
+    assert!(result.is_some());
+
+    let location = Location::new(
+        Url::from_file_path(
+            root.join("tests/fixtures/polyglot-spring/src/main/kotlin/com/example/demo/User.kt"),
+        )
+        .unwrap(),
+        Range {
+            start: Position {
+                line: 2,
+                character: 34,
+            },
+            end: Position {
+                line: 2,
+                character: 38,
             },
         },
     );

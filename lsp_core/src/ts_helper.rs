@@ -4,33 +4,64 @@ use tree_sitter::{Node, Query, QueryCursor, StreamingIterator, Tree};
 use crate::language_support::ParameterResult;
 
 pub fn get_one(node: &Node, content: &str, query: &Query) -> Option<String> {
+    get_one_with_position(node, content, query).map(|(text, _)| text)
+}
+
+pub fn get_one_with_position(
+    node: &Node,
+    content: &str,
+    query: &Query,
+) -> Option<(String, Position)> {
     let mut cursor = QueryCursor::new();
     let mut matches = cursor.matches(&query, *node, content.as_bytes());
-
     matches.next().and_then(|m| {
-        m.captures
-            .first()
-            .and_then(|c| c.node.utf8_text(content.as_bytes()).ok().map(String::from))
+        m.captures.first().and_then(|c| {
+            let text = c
+                .node
+                .utf8_text(content.as_bytes())
+                .ok()
+                .map(String::from)?;
+            let position = Position {
+                line: c.node.start_position().row as u32,
+                character: c.node.start_position().column as u32,
+            };
+            Some((text, position))
+        })
     })
 }
 
-pub fn get_many(node: &Node, content: &str, query: &Query, max_depth: Option<u32>) -> Vec<String> {
+pub fn get_many_with_position(
+    node: &Node,
+    content: &str,
+    query: &Query,
+    max_depth: Option<u32>,
+) -> Vec<(String, Position)> {
     let mut cursor = QueryCursor::new();
     if let Some(depth) = max_depth {
         cursor.set_max_start_depth(Some(depth));
     }
-
     let mut results = Vec::new();
     cursor
         .matches(&query, *node, content.as_bytes())
         .for_each(|m| {
             for capture in m.captures {
                 if let Ok(text) = capture.node.utf8_text(content.as_bytes()) {
-                    results.push(text.to_string());
+                    let position = Position {
+                        line: capture.node.start_position().row as u32,
+                        character: capture.node.start_position().column as u32,
+                    };
+                    results.push((text.to_string(), position));
                 }
             }
         });
     results
+}
+
+pub fn get_many(node: &Node, content: &str, query: &Query, max_depth: Option<u32>) -> Vec<String> {
+    get_many_with_position(node, content, query, max_depth)
+        .into_iter()
+        .map(|(text, _)| text)
+        .collect()
 }
 
 pub fn parse_parameter(param: &str) -> ParameterResult {

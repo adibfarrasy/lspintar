@@ -212,51 +212,52 @@ impl GroovySupport {
         content: &str,
         var_name: &str,
         reference_byte: usize,
-    ) -> Option<String> {
+    ) -> Option<(String, Position)> {
         let mut cursor = scope_node.walk();
-
         if !cursor.goto_first_child() {
             return None;
         }
-
         loop {
             let child = cursor.node();
-
             // Only process nodes that come before the reference
             if child.start_byte() >= reference_byte {
                 break;
             }
-
             match child.kind() {
                 "variable_declaration" | "field_declaration" | "parameter" => {
                     if self.declares_variable(child, content, var_name) {
                         let type_node = child.child_by_field_name("type")?;
-
-                        let position = Position {
+                        let type_position = Position {
                             line: type_node.start_position().row as u32,
                             character: type_node.start_position().column as u32,
                         };
-                        return self.get_type_at_position(child, content, &position);
+                        let var_type = self.get_type_at_position(child, content, &type_position)?;
+
+                        let (_, var_position) = ts_helper::get_one_with_position(
+                            &child,
+                            content,
+                            &DECLARES_VARIABLE_QUERY,
+                        )?;
+
+                        return Some((var_type, var_position));
                     }
                 }
                 "expression_statement"
                 | "assignment_expression"
                 | "object_creation_expression"
                 | "parameters" => {
-                    if let Some(var_type) =
+                    if let Some(result) =
                         self.find_in_current_scope(child, content, var_name, reference_byte)
                     {
-                        return Some(var_type);
+                        return Some(result);
                     }
                 }
                 _ => {}
             }
-
             if !cursor.goto_next_sibling() {
                 break;
             }
         }
-
         None
     }
 
@@ -536,43 +537,8 @@ impl LanguageSupport for GroovySupport {
         var_name: &str,
         position: &Position,
     ) -> Option<String> {
-        let mut current_node = get_node_at_position(tree, content, position)?;
-
-        if var_name == "this" {
-            let mut node = current_node;
-            while let Some(parent) = node.parent() {
-                if parent.kind() == "class_declaration" {
-                    let type_node = parent.child_by_field_name("name")?;
-                    let position = Position {
-                        line: type_node.start_position().row as u32,
-                        character: type_node.start_position().column as u32,
-                    };
-                    return self
-                        .get_ident_within_node(&parent, content, &position)
-                        .map(|(name, _)| name);
-                }
-                node = parent;
-            }
-            return None;
-        }
-
-        // Bubble up through scopes
-        let reference_byte = current_node.start_byte();
-        loop {
-            if let Some(var_type) =
-                self.find_in_current_scope(current_node, content, var_name, reference_byte)
-            {
-                return Some(var_type);
-            }
-
-            if let Some(parent) = current_node.parent() {
-                current_node = parent;
-            } else {
-                break;
-            }
-        }
-
-        None
+        self.find_variable_declaration(tree, content, var_name, position)
+            .map(|(type_name, _)| type_name)
     }
 
     fn extract_call_arguments(
@@ -714,6 +680,49 @@ impl LanguageSupport for GroovySupport {
             });
 
         result
+    }
+
+    fn find_variable_declaration(
+        &self,
+        tree: &Tree,
+        content: &str,
+        var_name: &str,
+        position: &Position,
+    ) -> Option<(String, Position)> {
+        let mut current_node = get_node_at_position(tree, content, position)?;
+        if var_name == "this" {
+            let mut node = current_node;
+            while let Some(parent) = node.parent() {
+                if parent.kind() == "class_declaration" || parent.kind() == "enum_declaration" {
+                    let type_node = parent.child_by_field_name("name")?;
+                    let pos = Position {
+                        line: type_node.start_position().row as u32,
+                        character: type_node.start_position().column as u32,
+                    };
+                    let name = self
+                        .get_ident_within_node(&parent, content, &pos)
+                        .map(|(name, _)| name)?;
+                    return Some((name, pos));
+                }
+                node = parent;
+            }
+            return None;
+        }
+
+        let reference_byte = current_node.start_byte();
+        loop {
+            if let Some(result) =
+                self.find_in_current_scope(current_node, content, var_name, reference_byte)
+            {
+                return Some(result);
+            }
+            if let Some(parent) = current_node.parent() {
+                current_node = parent;
+            } else {
+                break;
+            }
+        }
+        None
     }
 }
 
