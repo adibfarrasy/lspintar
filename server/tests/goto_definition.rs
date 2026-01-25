@@ -595,7 +595,7 @@ async fn test_goto_data_class_field() {
 
     let root = env::current_dir().expect("cannot get current dir");
 
-    let params = GotoDefinitionParams {
+    let mut params = GotoDefinitionParams {
         text_document_position_params: TextDocumentPositionParams {
             text_document: TextDocumentIdentifier {
                 uri: Url::from_file_path(root.join("tests/fixtures/polyglot-spring/src/main/groovy/com/example/demo/Controller.groovy"))

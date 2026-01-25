@@ -145,6 +145,7 @@ impl KotlinSupport {
                     ("property_name", None),
                     ("super_interfaces", None),
                     ("superclass", None),
+                    ("return_name", None),
                 ]
                 .into_iter()
                 .for_each(|(name, qual)| {

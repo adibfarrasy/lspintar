@@ -488,3 +488,18 @@ fn test_delegation_multiple() {
     let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
     assert_eq!(ident, Some(("Interface2".to_string(), None)));
 }
+
+#[test]
+fn test_return_type_detection() {
+    let support = KotlinSupport::new();
+    let content = r#"
+        class Foo {
+            fun test(): String {
+                return "hello"
+            }
+        }"#;
+    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let pos = find_position(content, "String");
+    let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
+    assert_eq!(ident, Some(("String".to_string(), None)));
+}

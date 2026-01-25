@@ -123,45 +123,46 @@ pub static IDENT_QUERY: LazyLock<Query> = LazyLock::new(|| {
     Query::new(
         &JAVA_TS_LANGUAGE,
         r#"
-    (expression_statement (identifier) @trivial_case)
-    (method_invocation
-        object: (_) @method_qualifier
-        name: (identifier) @method_name)
-    (method_invocation
-        object: (this) @this_qualifier
-        name: (identifier) @this_method_name)
-    (field_access
-        object: (_) @field_qualifier
-        field: (identifier) @field_name)
-    (argument_list (identifier) @arg_name)
-    (variable_declarator (identifier) @var_decl)
-    [
-        (object_creation_expression
-            type: (type_identifier) @constructor_type)
-        (object_creation_expression
-            type: (generic_type (type_identifier) @constructor_type))
-        (object_creation_expression
-            type: (scoped_type_identifier
-                (_) @scoped_constructor_qualifier
-                (type_identifier) @scoped_constructor_type))
-        (object_creation_expression
-            type: (generic_type
-                (scoped_type_identifier
-                    (_) @scoped_constructor_qualifier
-                    (type_identifier) @scoped_constructor_type)))
-    ]
-    (type_arguments (type_identifier) @type_arg)
-    (cast_expression type: (type_identifier) @cast_type)
-    (import_declaration
-        (scoped_identifier
-            name: (identifier) @import_name) @full_import)
-    (class_declaration name: (identifier) @class_name)
-    (interface_declaration name: (identifier) @interface_name)
-    (function_declaration name: (identifier) @function_name)
-    (field_declaration (variable_declarator name: (identifier) @field_decl_name))
-    (super_interfaces (type_list (type_identifier) @super_interfaces))
-    (superclass (type_identifier) @superclass)
-"#,
+            (expression_statement (identifier) @trivial_case)
+            (method_invocation
+                object: (_) @method_qualifier
+                name: (identifier) @method_name)
+            (method_invocation
+                object: (this) @this_qualifier
+                name: (identifier) @this_method_name)
+            (field_access
+                object: (_) @field_qualifier
+                field: (identifier) @field_name)
+            (argument_list (identifier) @arg_name)
+            (variable_declarator (identifier) @var_decl)
+            [
+                (object_creation_expression
+                    type: (type_identifier) @constructor_type)
+                (object_creation_expression
+                    type: (generic_type (type_identifier) @constructor_type))
+                (object_creation_expression
+                    type: (scoped_type_identifier
+                        (_) @scoped_constructor_qualifier
+                        (type_identifier) @scoped_constructor_type))
+                (object_creation_expression
+                    type: (generic_type
+                        (scoped_type_identifier
+                            (_) @scoped_constructor_qualifier
+                            (type_identifier) @scoped_constructor_type)))
+            ]
+            (type_arguments (type_identifier) @type_arg)
+            (cast_expression type: (type_identifier) @cast_type)
+            (import_declaration
+                (scoped_identifier
+                    name: (identifier) @import_name) @full_import)
+            (class_declaration name: (identifier) @class_name)
+            (interface_declaration name: (identifier) @interface_name)
+            (function_declaration name: (identifier) @function_name)
+            (field_declaration (variable_declarator name: (identifier) @field_decl_name))
+            (super_interfaces (type_list (type_identifier) @super_interfaces))
+            (superclass (type_identifier) @superclass)
+            (function_declaration type: (type_identifier) @return_name)
+        "#,
     )
     .unwrap()
 });

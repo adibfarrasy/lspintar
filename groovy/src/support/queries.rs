@@ -164,6 +164,7 @@ pub static IDENT_QUERY: LazyLock<Query> = LazyLock::new(|| {
     (field_declaration (variable_declarator name: (identifier) @field_decl_name))
     (super_interfaces (type_list (type_identifier) @super_interfaces))
     (superclass (type_identifier) @superclass)
+    (function_declaration type: (type_identifier) @return_name)
 "#,
     )
     .unwrap()

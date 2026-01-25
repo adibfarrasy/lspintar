@@ -152,6 +152,7 @@ pub static IDENT_QUERY: LazyLock<Query> = LazyLock::new(|| {
         (delegation_specifier 
           (constructor_invocation 
             (user_type (type_identifier) @superclass)))
+        (function_declaration return_type: (user_type (type_identifier) @return_name))
         "#,
     )
     .unwrap()

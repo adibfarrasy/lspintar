@@ -398,3 +398,18 @@ fn test_nested_method_calls() {
         Some(("message".to_string(), Some("MyClass#process".to_string())))
     );
 }
+
+#[test]
+fn test_return_type_detection() {
+    let support = GroovySupport::new();
+    let content = r#"
+        class Foo {
+            String test() {
+                return "hello"
+            }
+        }"#;
+    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let pos = find_position(content, "String");
+    let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
+    assert_eq!(ident, Some(("String".to_string(), None)));
+}
