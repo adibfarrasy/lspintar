@@ -19,6 +19,7 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.apache.groovy:groovy:4.0.15'
     implementation 'org.jetbrains.kotlin:kotlin-stdlib'
+    implementation 'org.apache.commons:commons-lang3:3.14.0'
 }
 
 kotlin {

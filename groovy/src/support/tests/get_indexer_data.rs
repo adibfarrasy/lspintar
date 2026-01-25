@@ -177,7 +177,6 @@ fn test_get_annotations() {
 
     let content = "@Component\n@Service\nclass Foo {}";
     let parsed = support.parse_str(&content).expect("cannot parse content");
-    println!("{}", parsed.0.root_node().to_sexp());
     let node = find_node_by_kind(parsed.0.root_node(), "class_declaration").unwrap();
     let annotations = support.get_annotations(&node, &parsed.1);
     assert_eq!(annotations, vec!["Component", "Service"]);

@@ -5,3 +5,4 @@
 *.db-wal
 .gradle/
 build/
+TODO.md

@@ -1,5 +1,6 @@
-use std::env;
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::{env, sync::LazyLock};
 
 use lspintar_server::{Repository, server::Backend};
 use pretty_assertions::assert_eq;
@@ -12,6 +13,9 @@ use tower_lsp::{
     },
 };
 use uuid::Uuid;
+
+static HOME_DIR: LazyLock<PathBuf> =
+    LazyLock::new(|| dirs::home_dir().expect("cannot get home dir"));
 
 struct TestServer {
     backend: Backend,
@@ -103,8 +107,8 @@ async fn test_static_member() {
 
     let location = Location::new(
         Url::from_file_path(root.join(
-            "/Users/adibf/Projects/lspintar-ws/lspintar/server/tests/fixtures/groovy-gradle-multi/core/src/main/groovy/com/example/core/DataProcessor.groovy",
-        ))
+            HOME_DIR.join("Projects/lspintar-ws/lspintar/server/tests/fixtures/groovy-gradle-multi/core/src/main/groovy/com/example/core/DataProcessor.groovy",
+        )))
         .unwrap(),
         Range {
             start: Position {
@@ -144,8 +148,8 @@ async fn test_this_member() {
 
     let location = Location::new(
         Url::from_file_path(root.join(
-            "/Users/adibf/Projects/lspintar-ws/lspintar/server/tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy",
-        ))
+            HOME_DIR.join("Projects/lspintar-ws/lspintar/server/tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy",
+        )))
         .unwrap(),
         Range {
             start: Position {
@@ -185,8 +189,8 @@ async fn test_this_super_member() {
 
     let location = Location::new(
         Url::from_file_path(root.join(
-            "/Users/adibf/Projects/lspintar-ws/lspintar/server/tests/fixtures/groovy-gradle-multi/core/src/main/groovy/com/example/core/BaseService.groovy",
-        ))
+            HOME_DIR.join("Projects/lspintar-ws/lspintar/server/tests/fixtures/groovy-gradle-multi/core/src/main/groovy/com/example/core/BaseService.groovy",
+        )))
         .unwrap(),
         Range {
             start: Position {
@@ -226,8 +230,8 @@ async fn test_instance_member_access() {
 
     let location = Location::new(
         Url::from_file_path(root.join(
-            "/Users/adibf/Projects/lspintar-ws/lspintar/server/tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy",
-        ))
+            HOME_DIR.join("Projects/lspintar-ws/lspintar/server/tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy",
+        )))
         .unwrap(),
         Range {
             start: Position {
@@ -267,8 +271,8 @@ async fn test_resolve_chain() {
 
     let location = Location::new(
         Url::from_file_path(root.join(
-            "/Users/adibf/Projects/lspintar-ws/lspintar/server/tests/fixtures/groovy-gradle-multi/core/src/main/groovy/com/example/core/DataProcessResult.groovy",
-        ))
+            HOME_DIR.join("Projects/lspintar-ws/lspintar/server/tests/fixtures/groovy-gradle-multi/core/src/main/groovy/com/example/core/DataProcessResult.groovy",
+        )))
         .unwrap(),
         Range {
             start: Position {
@@ -301,8 +305,8 @@ async fn test_resolve_chain() {
 
     let location = Location::new(
         Url::from_file_path(root.join(
-            "/Users/adibf/Projects/lspintar-ws/lspintar/server/tests/fixtures/groovy-gradle-multi/core/src/main/groovy/com/example/core/DataProcessResult.groovy",
-        ))
+            HOME_DIR.join("Projects/lspintar-ws/lspintar/server/tests/fixtures/groovy-gradle-multi/core/src/main/groovy/com/example/core/DataProcessResult.groovy",
+        )))
         .unwrap(),
         Range {
             start: Position {
@@ -342,8 +346,8 @@ async fn test_method_overloading() {
 
     let location = Location::new(
         Url::from_file_path(root.join(
-            "/Users/adibf/Projects/lspintar-ws/lspintar/server/tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy",
-        ))
+            HOME_DIR.join("Projects/lspintar-ws/lspintar/server/tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy",
+        )))
         .unwrap(),
         Range {
             start: Position {
@@ -376,8 +380,8 @@ async fn test_method_overloading() {
 
     let location = Location::new(
         Url::from_file_path(root.join(
-            "/Users/adibf/Projects/lspintar-ws/lspintar/server/tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy",
-        ))
+            HOME_DIR.join("Projects/lspintar-ws/lspintar/server/tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy",
+        )))
         .unwrap(),
         Range {
             start: Position {
@@ -410,8 +414,8 @@ async fn test_method_overloading() {
 
     let location = Location::new(
         Url::from_file_path(root.join(
-            "/Users/adibf/Projects/lspintar-ws/lspintar/server/tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy",
-        ))
+            HOME_DIR.join("Projects/lspintar-ws/lspintar/server/tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy",
+        )))
         .unwrap(),
         Range {
             start: Position {
@@ -444,8 +448,8 @@ async fn test_method_overloading() {
 
     let location = Location::new(
         Url::from_file_path(root.join(
-            "/Users/adibf/Projects/lspintar-ws/lspintar/server/tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy",
-        ))
+            HOME_DIR.join("Projects/lspintar-ws/lspintar/server/tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy",
+        )))
         .unwrap(),
         Range {
             start: Position {
@@ -485,8 +489,8 @@ async fn test_goto_superclass() {
 
     let location = Location::new(
         Url::from_file_path(root.join(
-            "/Users/adibf/Projects/lspintar-ws/lspintar/server/tests/fixtures/groovy-gradle-multi/core/src/main/groovy/com/example/core/BaseService.groovy",
-        ))
+            HOME_DIR.join("Projects/lspintar-ws/lspintar/server/tests/fixtures/groovy-gradle-multi/core/src/main/groovy/com/example/core/BaseService.groovy",
+        )))
         .unwrap(),
         Range {
             start: Position {
@@ -526,8 +530,8 @@ async fn test_goto_interface() {
 
     let location = Location::new(
         Url::from_file_path(root.join(
-            "/Users/adibf/Projects/lspintar-ws/lspintar/server/tests/fixtures/groovy-gradle-multi/core/src/main/groovy/com/example/core/DataProcessor.groovy",
-        ))
+            HOME_DIR.join("Projects/lspintar-ws/lspintar/server/tests/fixtures/groovy-gradle-multi/core/src/main/groovy/com/example/core/DataProcessor.groovy",
+        )))
         .unwrap(),
         Range {
             start: Position {
@@ -556,7 +560,7 @@ async fn test_goto_property() {
                 uri: Url::from_file_path(root.join("tests/fixtures/polyglot-spring/src/main/groovy/com/example/demo/Controller.groovy"))
                     .expect("cannot parse root URI"),
             },
-            position: Position::new(23, 29),
+            position: Position::new(27, 29),
         },
         work_done_progress_params: WorkDoneProgressParams::default(),
         partial_result_params: PartialResultParams::default(),
@@ -572,11 +576,11 @@ async fn test_goto_property() {
         .unwrap(),
         Range {
             start: Position {
-                line: 9,
+                line: 10,
                 character: 16,
             },
             end: Position {
-                line: 9,
+                line: 10,
                 character: 16,
             },
         },
@@ -597,7 +601,7 @@ async fn test_goto_data_class_field() {
                 uri: Url::from_file_path(root.join("tests/fixtures/polyglot-spring/src/main/groovy/com/example/demo/Controller.groovy"))
                     .expect("cannot parse root URI"),
             },
-            position: Position::new(39, 32),
+            position: Position::new(42, 32),
         },
         work_done_progress_params: WorkDoneProgressParams::default(),
         partial_result_params: PartialResultParams::default(),
@@ -624,4 +628,76 @@ async fn test_goto_data_class_field() {
     );
 
     assert_eq!(result.unwrap(), GotoDefinitionResponse::from(location));
+}
+
+#[tokio::test]
+async fn test_goto_external_def() {
+    let server = TestServer::new("polyglot-spring").await;
+
+    let root = env::current_dir().expect("cannot get current dir");
+
+    let params = GotoDefinitionParams {
+        text_document_position_params: TextDocumentPositionParams {
+            text_document: TextDocumentIdentifier {
+                uri: Url::from_file_path(root.join("tests/fixtures/polyglot-spring/src/main/groovy/com/example/demo/Controller.groovy"))
+                    .expect("cannot parse root URI"),
+            },
+            position: Position::new(24, 24),
+        },
+        work_done_progress_params: WorkDoneProgressParams::default(),
+        partial_result_params: PartialResultParams::default(),
+    };
+
+    let result = server.backend.goto_definition(params).await.unwrap();
+    assert!(result.is_some());
+
+    let location = match result.unwrap() {
+        GotoDefinitionResponse::Scalar(loc) => loc,
+        _ => panic!("Expected scalar location"),
+    };
+
+    assert!(
+        location
+            .uri
+            .path()
+            .ends_with("org/apache/commons/lang3/StringUtils.java")
+    );
+    assert_eq!(location.range.start.line, 124);
+    assert_eq!(location.range.start.character, 13);
+}
+
+#[tokio::test]
+async fn test_resolve_chain_exetrnal() {
+    let server = TestServer::new("polyglot-spring").await;
+
+    let root = env::current_dir().expect("cannot get current dir");
+
+    let params = GotoDefinitionParams {
+        text_document_position_params: TextDocumentPositionParams {
+            text_document: TextDocumentIdentifier {
+                uri: Url::from_file_path(root.join("tests/fixtures/polyglot-spring/src/main/groovy/com/example/demo/Controller.groovy"))
+                    .expect("cannot parse root URI"),
+            },
+            position: Position::new(24, 36),
+        },
+        work_done_progress_params: WorkDoneProgressParams::default(),
+        partial_result_params: PartialResultParams::default(),
+    };
+
+    let result = server.backend.goto_definition(params).await.unwrap();
+    assert!(result.is_some());
+
+    let location = match result.unwrap() {
+        GotoDefinitionResponse::Scalar(loc) => loc,
+        _ => panic!("Expected scalar location"),
+    };
+
+    assert!(
+        location
+            .uri
+            .path()
+            .ends_with("org/apache/commons/lang3/StringUtils.java")
+    );
+    assert_eq!(location.range.start.line, 540);
+    assert_eq!(location.range.start.character, 25);
 }

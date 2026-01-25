@@ -2,6 +2,7 @@ package com.example
 
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.stereotype.Component
+import org.apache.commons.lang3.StringUtils
 
 @Component
 class Controller {
@@ -19,17 +20,19 @@ class Controller {
     UserRepository userRepository
     
     void demoGoToDefinition() {
-        // 1: Cross-language service calls
+        // Cursor on StringUtils -> should go to external dependency static class
+        // Cursor on capitalize -> should go to external dependency StringUtil.capitalize()
+        String input = StringUtils.capitalize("input")
+
         // Cursor on process -> should go to JavaService.process() (Java)
-        String javaResult = javaService.process("test")
+        String javaResult = javaService.process(input)
         
         // Cursor on process -> should go to GroovyService.process() (Groovy)
-        String groovyResult = groovyService.process("test")
+        String groovyResult = groovyService.process(input)
         
         // Cursor on process -> should go to KotlinService.process() (Kotlin)
-        String kotlinResult = kotlinService.process("test")
+        String kotlinResult = kotlinService.process(input)
         
-        // 2: Interface implementation across languages
         // Cursor on findById -> should go to UserRepository.findById() (Kotlin impl)
         User user = userRepository.findById(1L)
         
@@ -38,12 +41,5 @@ class Controller {
         
         // Cursor on name -> should go to User.name (Kotlin data class)
         String userName = user.name
-        
-        // 3: Method chaining across languages
-        String result = javaService.process(
-            groovyService.process(
-                kotlinService.process("input")
-            )
-        )
     }
 }

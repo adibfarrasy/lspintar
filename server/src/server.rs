@@ -19,7 +19,10 @@ use tower_lsp::{LanguageServer, lsp_types::request::GotoImplementationParams};
 use tower_lsp::{jsonrpc::Result, lsp_types::request::GotoImplementationResponse};
 use tree_sitter::Tree;
 
-use crate::{Indexer, Repository, models::symbol::Symbol};
+use crate::{
+    Indexer, Repository, as_lsp_location::AsLspLocation, enums::ResolvedSymbol,
+    models::symbol::Symbol,
+};
 
 pub struct Backend {
     pub client: tower_lsp::Client,
@@ -75,20 +78,28 @@ impl Backend {
             {
                 return Some(tmp_fqn);
             }
+
+            if let Ok(Some(_)) = self.repo.find_external_symbol_by_fqn(&tmp_fqn).await {
+                return Some(tmp_fqn);
+            }
         }
 
         // Package + name fallback
-        return Some(
-            package_name
-                .map(|pkg| {
-                    if !name.contains(&pkg) {
-                        format!("{}.{}", pkg, name)
-                    } else {
-                        name.to_string()
-                    }
-                })
-                .unwrap_or_else(|| name.to_string()),
-        );
+        let fallback_fqn = package_name
+            .map(|pkg| {
+                if !name.contains(&pkg) {
+                    format!("{}.{}", pkg, name)
+                } else {
+                    name.to_string()
+                }
+            })
+            .unwrap_or_else(|| name.to_string());
+
+        if let Ok(Some(_)) = self.repo.find_external_symbol_by_fqn(&fallback_fqn).await {
+            return Some(fallback_fqn);
+        }
+
+        Some(fallback_fqn)
     }
 
     #[tracing::instrument(skip_all)]
@@ -99,7 +110,7 @@ impl Backend {
         imports: &[String],
         package_name: Option<String>,
         branch: &str,
-    ) -> Vec<Symbol> {
+    ) -> Vec<ResolvedSymbol> {
         let class_fqn = match self
             .resolve_fqn(qualifier, imports.to_vec(), package_name.clone(), branch)
             .await
@@ -107,6 +118,8 @@ impl Backend {
             Some(fqn) => fqn,
             None => return vec![],
         };
+
+        println!("class_fqn: {class_fqn}");
 
         let mut visited = HashSet::new();
         self.try_members_with_inheritance(
@@ -155,7 +168,7 @@ impl Backend {
         visited: &mut HashSet<String>,
         imports: Vec<String>,
         package_name: Option<String>,
-    ) -> Vec<Symbol> {
+    ) -> Vec<ResolvedSymbol> {
         if !visited.insert(type_fqn.to_string()) {
             return vec![];
         }
@@ -168,16 +181,21 @@ impl Backend {
             .await
         {
             if !found.is_empty() {
-                return found;
+                return found.into_iter().map(ResolvedSymbol::Project).collect();
             }
+        }
+
+        // Try external symbols
+        if let Ok(Some(external)) = self.repo.find_external_symbol_by_fqn(&member_fqn).await {
+            return vec![ResolvedSymbol::External(external)];
         }
 
         // Try property access
         if let Some(found) = self.try_property_access(type_fqn, member, branch).await {
-            return vec![found];
+            return vec![ResolvedSymbol::Project(found)];
         }
 
-        // Get class/interface info to find parents
+        // Get class/interface info - try project symbols first, then external
         let type_symbol = match self
             .repo
             .find_symbol_by_fqn_and_branch(type_fqn, branch)
@@ -192,7 +210,7 @@ impl Backend {
             None => return vec![],
         };
 
-        // Try superclass/interfaces
+        // Try superclass/interfaces (only for project symbols)
         let supers = match self
             .repo
             .find_supers_by_symbol_fqn_and_branch(&type_symbol.fully_qualified_name, &branch)
@@ -201,22 +219,6 @@ impl Backend {
             Ok(symbols) => symbols,
             Err(_) => return vec![],
         };
-
-        for super_name in supers.iter().map(|symbol| &symbol.fully_qualified_name) {
-            let results = self
-                .recurse_try_members_with_inheritance(
-                    super_name,
-                    member,
-                    branch,
-                    visited,
-                    imports.clone(),
-                    package_name.clone(),
-                )
-                .await;
-            if !results.is_empty() {
-                return results;
-            }
-        }
 
         for super_name in supers.iter().map(|symbol| &symbol.fully_qualified_name) {
             let results = self
@@ -246,7 +248,7 @@ impl Backend {
         visited: &mut HashSet<String>,
         imports: Vec<String>,
         package_name: Option<String>,
-    ) -> Vec<Symbol> {
+    ) -> Vec<ResolvedSymbol> {
         tracing::info!("recurse_try_members_with_inheritance");
         let fqn = match self
             .resolve_fqn(
@@ -288,9 +290,20 @@ impl Backend {
         fqn: String,
         branch: &str,
     ) -> Result<GotoDefinitionResponse> {
-        let symbol = self
+        if let Ok(Some(symbol)) = self.repo.find_symbol_by_fqn_and_branch(&fqn, branch).await {
+            return symbol
+                .as_lsp_location()
+                .map(GotoDefinitionResponse::from)
+                .ok_or_else(|| {
+                    tower_lsp::jsonrpc::Error::invalid_params(
+                        "Failed to convert to location".to_string(),
+                    )
+                });
+        }
+
+        let external_symbol = self
             .repo
-            .find_symbol_by_fqn_and_branch(&fqn, branch)
+            .find_external_symbol_by_fqn(&fqn)
             .await
             .map_err(|e| {
                 tower_lsp::jsonrpc::Error::invalid_params(format!("Failed to find symbol: {}", e))
@@ -299,8 +312,8 @@ impl Backend {
                 tower_lsp::jsonrpc::Error::invalid_params("Symbol not found".to_string())
             })?;
 
-        symbol
-            .to_lsp_location()
+        external_symbol
+            .as_lsp_location()
             .map(GotoDefinitionResponse::from)
             .ok_or_else(|| {
                 tower_lsp::jsonrpc::Error::invalid_params(
@@ -309,36 +322,22 @@ impl Backend {
             })
     }
 
-    fn symbols_to_impl_response(
+    fn resolved_symbols_to_impl_response(
         &self,
-        implementations: Vec<Symbol>,
+        implementations: Vec<ResolvedSymbol>,
     ) -> Option<GotoImplementationResponse> {
         let locations: Vec<Location> = implementations
             .into_iter()
-            .map(|sym| Location {
-                uri: Url::from_file_path(&sym.file_path).unwrap(),
-                range: Range {
-                    start: Position {
-                        line: sym.ident_line_start as u32,
-                        character: sym.ident_char_start as u32,
-                    },
-                    end: Position {
-                        line: sym.ident_line_end as u32,
-                        character: sym.ident_char_end as u32,
-                    },
-                },
-            })
+            .filter_map(|sym| sym.as_lsp_location())
             .collect();
 
-        let response = match locations.len() {
+        match locations.len() {
             0 => None,
             1 => Some(GotoImplementationResponse::Scalar(
-                locations.first().unwrap().clone(),
+                locations.into_iter().next().unwrap(),
             )),
             _ => Some(GotoImplementationResponse::Array(locations)),
-        };
-
-        return response;
+        }
     }
 
     #[tracing::instrument(skip_all)]
@@ -353,20 +352,17 @@ impl Backend {
         branch: &str,
         position: &Position,
         package_name: Option<String>,
-    ) -> Vec<Symbol> {
+    ) -> Vec<ResolvedSymbol> {
         let parts: Vec<&str> = qualifier.split('#').collect();
-
         if parts.is_empty() {
             return vec![];
         }
-
         let base_type =
             if let Some(var_type) = lang.find_variable_type(tree, content, parts[0], position) {
                 var_type
             } else {
                 parts[0].to_string()
             };
-
         let mut current_type_fqn = match self
             .resolve_fqn(&base_type, imports.clone(), package_name.clone(), branch)
             .await
@@ -374,22 +370,19 @@ impl Backend {
             Some(fqn) => fqn,
             None => return vec![],
         };
-
         if parts.len() > 1 {
             for part in &parts[1..] {
                 let symbols = self
                     .try_type_member(&current_type_fqn, part, &imports, None, branch)
                     .await;
-
-                let symbol = match symbols.into_iter().next() {
+                let resolved = match symbols.into_iter().next() {
                     Some(s) => s,
                     None => return vec![],
                 };
 
-                current_type_fqn = if let Some(return_type) = &symbol.metadata.return_type {
+                current_type_fqn = if let Some(return_type) = &resolved.metadata().return_type {
                     // For methods/fields, resolve their return/field type
-                    let parent_package = symbol.package_name.clone();
-
+                    let parent_package = resolved.package_name().to_string();
                     match self
                         .resolve_fqn(return_type, imports.clone(), Some(parent_package), branch)
                         .await
@@ -399,11 +392,10 @@ impl Backend {
                     }
                 } else {
                     // For types (Class/Interface/Enum), use their FQN directly
-                    symbol.fully_qualified_name.clone()
+                    resolved.fully_qualified_name().to_string()
                 };
             }
         }
-
         // Returns all overloads
         self.try_type_member(&current_type_fqn, member, &imports, None, branch)
             .await
@@ -411,7 +403,7 @@ impl Backend {
 
     async fn select_best_overload(
         &self,
-        symbols: Vec<Symbol>,
+        symbols: Vec<ResolvedSymbol>,
         call_args: Vec<(String, Position)>,
         lang: &Arc<dyn LanguageSupport>,
         tree: &Tree,
@@ -419,13 +411,13 @@ impl Backend {
         imports: &[String],
         package_name: Option<String>,
         branch: &str,
-    ) -> Option<Symbol> {
+    ) -> Option<ResolvedSymbol> {
         let arg_count = call_args.len();
 
-        let arity_matches: Vec<Symbol> = symbols
+        let arity_matches: Vec<ResolvedSymbol> = symbols
             .into_iter()
             .filter(|s| {
-                s.metadata
+                s.metadata()
                     .parameters
                     .as_ref()
                     .map_or(false, |params| params.len() == arg_count)
@@ -458,66 +450,40 @@ impl Backend {
             arg_fqns.push(arg_fqn);
         }
 
-        for symbol in arity_matches {
-            let path = PathBuf::from_str(&symbol.file_path).unwrap();
+        for resolved in arity_matches {
+            let params = &resolved.metadata().parameters;
+            let pkg_name = resolved.package_name();
 
-            if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                let symbol_lang = match self.languages.get(ext) {
-                    Some(l) => l,
-                    None => {
-                        tracing::info!(
-                            "failed to get language support for {}. path: {:#?}",
-                            ext,
-                            path
-                        );
-                        continue;
-                    }
-                };
+            if let Some(params) = params {
+                let mut all_match = true;
+                for (i, param) in params.iter().enumerate() {
+                    if let Some(param_type) = &param.type_name {
+                        let mut param_type = param_type.to_string();
+                        if let Some(top_generic_type) = param_type.split_once('<') {
+                            param_type = top_generic_type.0.to_string();
+                        }
 
-                let (symbol_tree, symbol_content) = match symbol_lang.parse(&path) {
-                    Some(p) => p,
-                    None => {
-                        tracing::info!("failed to parse file {:#?}", path);
-                        continue;
-                    }
-                };
+                        let param_fqn = self
+                            .resolve_fqn(
+                                &param_type,
+                                imports.to_vec(),
+                                Some(pkg_name.to_string()),
+                                branch,
+                            )
+                            .await
+                            .unwrap_or(param_type.to_string());
 
-                if let Some(params) = &symbol.metadata.parameters {
-                    let mut all_match = true;
-
-                    for (i, param) in params.iter().enumerate() {
-                        if let Some(param_type) = &param.type_name {
-                            let mut param_type = param_type.to_string();
-
-                            if let Some(top_generic_type) = param_type.split_once('<') {
-                                let new_val = top_generic_type.0;
-                                param_type = new_val.to_string();
-                            }
-
-                            let imports = symbol_lang.get_imports(&symbol_tree, &symbol_content);
-                            let param_fqn = self
-                                .resolve_fqn(
-                                    &param_type,
-                                    imports.clone(),
-                                    Some(symbol.package_name.clone()),
-                                    branch,
-                                )
-                                .await
-                                .unwrap_or(param_type.to_string());
-
-                            if param_fqn != arg_fqns[i] {
-                                all_match = false;
-                                break;
-                            }
-                        } else {
+                        if param_fqn != arg_fqns[i] {
                             all_match = false;
                             break;
                         }
+                    } else {
+                        all_match = false;
+                        break;
                     }
-
-                    if all_match {
-                        return Some(symbol);
-                    }
+                }
+                if all_match {
+                    return Some(resolved);
                 }
             }
         }
@@ -528,14 +494,24 @@ impl Backend {
     /**
      For cases where matching exact parameter types is impractical/overkill.
     */
-    fn filter_by_arity(&self, symbols: Vec<Symbol>, expected_param_count: usize) -> Vec<Symbol> {
+    fn filter_by_arity(
+        &self,
+        symbols: Vec<ResolvedSymbol>,
+        expected_param_count: usize,
+    ) -> Vec<ResolvedSymbol> {
         symbols
             .into_iter()
-            .filter(|s| {
-                s.metadata
+            .filter(|s| match s {
+                ResolvedSymbol::Project(symbol) => symbol
+                    .metadata
                     .parameters
                     .as_ref()
-                    .map_or(false, |params| params.len() == expected_param_count)
+                    .map_or(false, |params| params.len() == expected_param_count),
+                ResolvedSymbol::External(external) => external
+                    .metadata
+                    .parameters
+                    .as_ref()
+                    .map_or(false, |params| params.len() == expected_param_count),
             })
             .collect()
     }
@@ -558,9 +534,6 @@ impl LanguageServer for Backend {
             let vcs = get_vcs_handler(&root);
             let build_tool = get_build_tool(&root);
 
-            let deps = build_tool.get_dependency_paths(&root);
-            tracing::info!("deps: {:#?}", deps);
-
             let mut indexer = Indexer::new(Arc::clone(&self.repo), Arc::clone(&vcs));
 
             self.languages.iter().for_each(|(k, v)| {
@@ -568,11 +541,23 @@ impl LanguageServer for Backend {
             });
 
             indexer.index_workspace(&root).await.map_err(|e| {
-                tower_lsp::jsonrpc::Error::invalid_params(format!(
-                    "Failed to index workspace: {}",
-                    e
-                ))
+                tower_lsp::jsonrpc::Error::invalid_params(
+                    format!("Failed to index workspace: {e}",),
+                )
             })?;
+
+            let external_deps = build_tool.get_dependency_paths(&root).map_err(|e| {
+                tower_lsp::jsonrpc::Error::invalid_params(format!(
+                    "Failed to get dependencies: {e}"
+                ))
+            });
+            for (byte_jar, src_jar) in external_deps.unwrap() {
+                let _ = if let Some(src_path) = src_jar {
+                    indexer.index_jar(&src_path).await
+                } else {
+                    indexer.index_jar(&byte_jar).await
+                };
+            }
 
             *self.vcs_handler.write().await = Some(vcs);
             *self.workspace_root.write().await = Some(root);
@@ -683,7 +668,7 @@ impl LanguageServer for Backend {
                                 let symbol = symbols.iter().next().unwrap();
                                 return Ok(Some(
                                     symbol
-                                        .to_lsp_location()
+                                        .as_lsp_location()
                                         .map(GotoDefinitionResponse::from)
                                         .ok_or_else(|| {
                                             tower_lsp::jsonrpc::Error::invalid_params(
@@ -710,7 +695,7 @@ impl LanguageServer for Backend {
                                 {
                                     return Ok(Some(
                                         symbol
-                                            .to_lsp_location()
+                                            .as_lsp_location()
                                             .map(GotoDefinitionResponse::from)
                                             .ok_or_else(|| {
                                                 tower_lsp::jsonrpc::Error::invalid_params(
@@ -724,7 +709,7 @@ impl LanguageServer for Backend {
                             // No call context, return all overloads
                             let locations: Vec<Location> = symbols
                                 .into_iter()
-                                .filter_map(|s| s.to_lsp_location())
+                                .filter_map(|s| s.as_lsp_location())
                                 .collect();
 
                             if !locations.is_empty() {
@@ -732,9 +717,9 @@ impl LanguageServer for Backend {
                             }
                         }
 
-                        return Err(tower_lsp::jsonrpc::Error::invalid_params(
-                            "Qualifier found but failed to resolve".to_string(),
-                        ));
+                        return Err(tower_lsp::jsonrpc::Error::invalid_params(format!(
+                            "Qualifier {q} found but failed to resolve"
+                        )));
                     }
                     None => {
                         if let Some((_, var_pos)) =
@@ -851,7 +836,12 @@ impl LanguageServer for Backend {
                         implementations
                     };
 
-                    return Ok(self.symbols_to_impl_response(implementations));
+                    return Ok(self.resolved_symbols_to_impl_response(
+                        implementations
+                            .into_iter()
+                            .map(|i| ResolvedSymbol::Project(i))
+                            .collect(),
+                    ));
                 };
 
                 if let Some((receiver_type, params)) =
@@ -884,13 +874,18 @@ impl LanguageServer for Backend {
                             .find_symbols_by_fqn_and_branch(&method_fqn, &branch)
                             .await
                         {
-                            method_symbols.extend(symbols);
+                            let resolved: Vec<ResolvedSymbol> = symbols
+                                .into_iter()
+                                .map(|s| ResolvedSymbol::Project(s))
+                                .collect();
+
+                            method_symbols.extend(resolved);
                         }
                     }
 
                     method_symbols = self.filter_by_arity(method_symbols, params.len());
 
-                    return Ok(self.symbols_to_impl_response(method_symbols));
+                    return Ok(self.resolved_symbols_to_impl_response(method_symbols));
                 }
             }
         }

@@ -267,16 +267,15 @@ impl Indexer {
                 entry.name().to_string()
             };
 
-            if entry_name.ends_with(".java")
-                || entry_name.ends_with(".groovy")
-                || entry_name.ends_with(".class")
+            if entry_name.ends_with(".java") || entry_name.ends_with(".groovy")
+            // || entry_name.ends_with(".class")
             {
                 let mut entry = archive.by_index(i)?;
                 let mut buffer = Vec::new();
                 entry.read_to_end(&mut buffer)?;
 
                 let (content, is_decompiled) = if entry_name.ends_with(".class") {
-                    (self.decompile_class(buffer).await?, true)
+                    (self.decompile_class(buffer)?, true)
                 } else {
                     (String::from_utf8(buffer)?, false)
                 };
@@ -289,7 +288,7 @@ impl Indexer {
         Ok(())
     }
 
-    async fn decompile_class(&self, buffer: Vec<u8>) -> Result<String> {
+    fn decompile_class(&self, buffer: Vec<u8>) -> Result<String> {
         // NOTE: the user should define their own decompile command
         // the decompiled data can then be further integrated to the LSP
         todo!()

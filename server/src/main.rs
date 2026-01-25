@@ -3,6 +3,8 @@ use std::sync::Arc;
 use tokio::io::{stdin, stdout};
 use tower_lsp::{LspService, Server};
 
+mod as_lsp_location;
+mod enums;
 mod indexer;
 mod models;
 mod repo;
