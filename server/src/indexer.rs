@@ -129,7 +129,7 @@ impl Indexer {
         symbol_super_mappings: &mut Vec<SymbolSuperMapping>,
         imports: &[String],
     ) -> Result<()> {
-        let (new_parent, new_is_type_parent) = if lang.should_index(&node) {
+        let (new_parent, new_is_type_parent) = if lang.should_index(&node, content) {
             let node_type = lang.get_type(&node);
             let short_name = lang
                 .get_short_name(&node, content)

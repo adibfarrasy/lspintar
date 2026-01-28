@@ -18,7 +18,14 @@ pub trait LanguageSupport: Send + Sync {
     fn get_ts_language(&self) -> tree_sitter::Language;
     fn parse(&self, file_path: &Path) -> Option<ParseResult>;
     fn parse_str(&self, source: &str) -> Option<ParseResult>;
-    fn should_index(&self, node: &Node) -> bool;
+
+    fn should_index(&self, node: &Node, source: &str) -> bool {
+        self.get_type(node).is_some()
+            && self
+                .get_modifiers(node, source)
+                .contains(&"private".to_string())
+    }
+
     fn get_range(&self, node: &Node) -> Option<Range>;
     fn get_ident_range(&self, node: &Node) -> Option<Range>;
 

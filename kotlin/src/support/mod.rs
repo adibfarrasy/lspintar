@@ -423,10 +423,6 @@ impl LanguageSupport for KotlinSupport {
             .map(|tree| (tree, content.to_string()))
     }
 
-    fn should_index(&self, node: &Node) -> bool {
-        self.get_type(node).is_some()
-    }
-
     fn get_range(&self, node: &Node) -> Option<Range> {
         let range = node.range();
         Some(Range {

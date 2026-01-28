@@ -1,9 +1,12 @@
+use core::panic;
+use futures::{StreamExt, stream};
 use groovy::GroovySupport;
 use java::JavaSupport;
 use kotlin::KotlinSupport;
 use lsp_core::{
     build_tools::get_build_tool,
     language_support::LanguageSupport,
+    lsp_info, lsp_logging, lsp_progress, lsp_progress_begin, lsp_progress_end,
     util::capitalize,
     vcs::{VcsHandler, get_vcs_handler},
 };
@@ -11,7 +14,8 @@ use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
     str::FromStr,
-    sync::Arc,
+    sync::{Arc, atomic::AtomicUsize},
+    time::Instant,
 };
 use tokio::sync::RwLock;
 use tower_lsp::lsp_types::*;
@@ -35,6 +39,8 @@ pub struct Backend {
 
 impl Backend {
     pub fn new(client: tower_lsp::Client, repo: Arc<Repository>) -> Self {
+        lsp_logging::init_logging_service(client.clone());
+
         let mut languages: HashMap<String, Arc<dyn LanguageSupport>> = HashMap::new();
         languages.insert("groovy".to_string(), Arc::new(GroovySupport::new()));
         languages.insert("java".to_string(), Arc::new(JavaSupport::new()));
@@ -531,41 +537,7 @@ impl LanguageServer for Backend {
             });
 
         if let Some(root) = workspace_root {
-            let vcs = get_vcs_handler(&root);
-            let build_tool = get_build_tool(&root);
-
-            let mut indexer = Indexer::new(Arc::clone(&self.repo), Arc::clone(&vcs));
-
-            self.languages.iter().for_each(|(k, v)| {
-                indexer.register_language(k, v.clone());
-            });
-
-            indexer.index_workspace(&root).await.map_err(|e| {
-                tower_lsp::jsonrpc::Error::invalid_params(
-                    format!("Failed to index workspace: {e}",),
-                )
-            })?;
-
-            let external_deps = build_tool.get_dependency_paths(&root).map_err(|e| {
-                tower_lsp::jsonrpc::Error::invalid_params(format!(
-                    "Failed to get dependencies: {e}"
-                ))
-            });
-            for (byte_jar, src_jar) in external_deps.unwrap() {
-                let _ = if let Some(src_path) = src_jar {
-                    indexer.index_jar(&src_path).await
-                } else {
-                    indexer.index_jar(&byte_jar).await
-                };
-            }
-
-            *self.vcs_handler.write().await = Some(vcs);
             *self.workspace_root.write().await = Some(root);
-            *self.indexer.write().await = Some(indexer);
-        } else {
-            return Err(tower_lsp::jsonrpc::Error::invalid_params(
-                "No workspace root provided",
-            ));
         }
 
         Ok(InitializeResult {
@@ -586,6 +558,78 @@ impl LanguageServer for Backend {
                 version: Some("0.1.0".to_string()),
             }),
         })
+    }
+
+    async fn initialized(&self, _: InitializedParams) {
+        let workspace_root = self.workspace_root.read().await.clone();
+        if let Some(root) = workspace_root {
+            let vcs = get_vcs_handler(&root);
+            let build_tool = get_build_tool(&root);
+
+            let mut indexer = Indexer::new(Arc::clone(&self.repo), Arc::clone(&vcs));
+
+            self.languages.iter().for_each(|(k, v)| {
+                indexer.register_language(k, v.clone());
+            });
+
+            let indexing_start = Instant::now();
+
+            lsp_info!("Indexing...");
+            lsp_progress_begin!("indexing", "Indexing");
+            lsp_progress!("indexing", "Indexing workspace...", 0.);
+            let _ = indexer
+                .index_workspace(&root)
+                .await
+                .map_err(|e| panic!("Failed to index workspace: {e}"));
+            lsp_progress!("indexing", "Indexing dependencies...", 50.);
+
+            let external_deps = build_tool
+                .get_dependency_paths(&root)
+                .map_err(|e| panic!("Failed to get dependencies: {e}"));
+
+            *self.indexer.write().await = Some(indexer);
+
+            let jars: Vec<_> = external_deps.unwrap();
+
+            let total = jars.len();
+            let progress = Arc::new(AtomicUsize::new(0));
+
+            stream::iter(jars.clone())
+                .map(|(byte_jar, src_jar)| {
+                    let indexer = Arc::clone(&self.indexer);
+                    let progress = Arc::clone(&progress);
+                    async move {
+                        let jar = src_jar.as_ref().unwrap_or(&byte_jar);
+                        let result = indexer.write().await.as_mut().unwrap().index_jar(jar).await;
+                        let completed =
+                            progress.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                        let percent = 50.0 + (completed as f32 / total as f32) * 50.0;
+                        lsp_progress!(
+                            "indexing",
+                            &format!("Indexing jars ({}/{})", completed, total),
+                            percent
+                        );
+
+                        result
+                    }
+                })
+                .buffer_unordered(num_cpus::get())
+                .for_each(|result| async {
+                    if let Err(e) = result {
+                        tracing::warn!("Failed to index jar: {e}");
+                    }
+                })
+                .await;
+
+            lsp_progress!("indexing", "Finalizing...", 100.);
+            lsp_info!("Indexing finished in {:?}", indexing_start.elapsed());
+            lsp_progress_end!("indexing");
+
+            *self.vcs_handler.write().await = Some(vcs);
+            *self.workspace_root.write().await = Some(root);
+        } else {
+            panic!("No workspace root provided");
+        }
     }
 
     async fn goto_definition(
