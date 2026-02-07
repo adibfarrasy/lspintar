@@ -21,7 +21,7 @@ CREATE TABLE external_symbols (
     
     -- Metadata
     metadata TEXT NOT NULL DEFAULT '{}',
-    is_decompiled BOOLEAN NOT NULL,
+    needs_decompilation BOOLEAN NOT NULL,
     last_modified INTEGER NOT NULL
 );
 

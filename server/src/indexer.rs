@@ -1,3 +1,7 @@
+use classfile_parser::{
+    ClassAccessFlags, class_parser, constant_info::ConstantInfo, field_info::FieldAccessFlags,
+    method_info::MethodAccessFlags,
+};
 use lsp_core::{
     language_support::LanguageSupport, node_types::NodeType, util::naive_resolve_fqn,
     vcs::VcsHandler,
@@ -42,7 +46,11 @@ impl Indexer {
     }
 
     pub async fn index_workspace(&self, path: &Path) -> Result<()> {
-        for entry in WalkDir::new(path).follow_links(true) {
+        for entry in WalkDir::new(path)
+            .follow_links(true)
+            .into_iter()
+            .filter_entry(|e| !is_excluded(e))
+        {
             let entry = entry?;
             if entry.file_type().is_file() {
                 self.index_file(&entry.path()).await?;
@@ -61,6 +69,7 @@ impl Indexer {
                 let parsed = lang
                     .parse(&path)
                     .ok_or_else(|| anyhow!("failed to parse file: {}", path.display()))?;
+
                 let data =
                     self.get_symbols_from_tree(&parsed.0, lang.as_ref(), &path, &parsed.1)?;
 
@@ -113,6 +122,7 @@ impl Indexer {
             &mut symbol_super_mappings,
             &imports,
         )?;
+
         Ok((symbols, symbol_super_mappings))
     }
 
@@ -267,54 +277,50 @@ impl Indexer {
                 entry.name().to_string()
             };
 
-            if entry_name.ends_with(".java") || entry_name.ends_with(".groovy")
-            // || entry_name.ends_with(".class")
-            {
-                let mut entry = archive.by_index(i)?;
-                let mut buffer = Vec::new();
-                entry.read_to_end(&mut buffer)?;
+            let path = Path::new(&entry_name).extension().and_then(|s| s.to_str());
 
-                let (content, is_decompiled) = if entry_name.ends_with(".class") {
-                    (self.decompile_class(buffer)?, true)
-                } else {
-                    (String::from_utf8(buffer)?, false)
-                };
+            let mut entry = archive.by_index(i)?;
+            let mut buffer = Vec::new();
+            entry.read_to_end(&mut buffer)?;
 
-                self.index_jar_source_content(&content, &entry_name, jar_path, is_decompiled)
-                    .await?;
+            if matches!(path, Some("class")) {
+                let symbols = self.extract_class_metadata(&buffer, &entry_name, jar_path)?;
+                self.repo.insert_external_symbols(&symbols).await?;
+            } else if matches!(path, Some("java" | "groovy" | "kt")) {
+                self.index_jar_source_content(
+                    Some(String::from_utf8(buffer)?),
+                    &entry_name,
+                    jar_path,
+                )
+                .await?;
             }
         }
 
         Ok(())
     }
 
-    fn decompile_class(&self, buffer: Vec<u8>) -> Result<String> {
-        // NOTE: the user should define their own decompile command
-        // the decompiled data can then be further integrated to the LSP
-        todo!()
-    }
-
     async fn index_jar_source_content(
         &self,
-        content: &str,
+        content: Option<String>,
         entry_name: &str,
         jar_path: &Path,
-        is_decompiled: bool,
     ) -> Result<()> {
         let ext = Path::new(entry_name)
             .extension()
             .and_then(|e| e.to_str())
-            .ok_or_else(|| anyhow!("No extension"))?;
+            .ok_or(anyhow!("No extension"))?;
 
         if let Some(lang) = self.languages.get(ext) {
-            let parsed = lang.parse_str(content).expect("cannot parse content");
+            let parsed = lang
+                .parse_str(&content.unwrap_or_default())
+                .ok_or(anyhow!("Cannot parse content"))?;
+
             let (external_symbols, mappings) = self.get_external_symbols_from_tree(
                 &parsed.0,
                 lang.as_ref(),
                 jar_path,
                 entry_name,
                 &parsed.1,
-                is_decompiled,
             )?;
 
             self.repo.insert_external_symbols(&external_symbols).await?;
@@ -338,7 +344,6 @@ impl Indexer {
         jar_path: &Path,
         source_file_path: &str,
         content: &str,
-        is_decompiled: bool,
     ) -> Result<(Vec<ExternalSymbol>, Vec<SymbolSuperMapping>)> {
         let (symbols, mappings) = self.get_symbols_from_tree(tree, lang, jar_path, content)?;
 
@@ -362,7 +367,7 @@ impl Indexer {
                 ident_line_end: s.ident_line_end,
                 ident_char_start: s.ident_char_start,
                 ident_char_end: s.ident_char_end,
-                is_decompiled,
+                needs_decompilation: false,
                 metadata: s.metadata,
                 last_modified: s.last_modified,
             })
@@ -370,4 +375,209 @@ impl Indexer {
 
         Ok((external_symbols, mappings))
     }
+
+    fn extract_class_metadata(
+        &self,
+        class_bytes: &[u8],
+        entry_name: &str,
+        jar_path: &Path,
+    ) -> Result<Vec<ExternalSymbol>> {
+        let class = class_parser(class_bytes)
+            .map_err(|e| anyhow!("Failed to parse class: {:?}", e))?
+            .1;
+
+        let mut symbols = Vec::new();
+
+        let class_name = get_class_name(&class.const_pool, class.this_class)?.replace('/', ".");
+        let package_name = class_name
+            .rfind('.')
+            .map(|i| &class_name[..i])
+            .unwrap_or("");
+        let short_name = class_name
+            .rfind('.')
+            .map(|i| &class_name[i + 1..])
+            .unwrap_or(&class_name);
+
+        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+
+        // Class symbol
+        symbols.push(ExternalSymbol {
+            id: None,
+            jar_path: jar_path.to_string_lossy().to_string(),
+            source_file_path: entry_name.to_string(),
+            short_name: short_name.to_string(),
+            fully_qualified_name: class_name.clone(),
+            package_name: package_name.to_string(),
+            parent_name: Some(package_name.to_string()),
+            symbol_type: if class.access_flags.contains(ClassAccessFlags::INTERFACE) {
+                NodeType::Interface.to_string()
+            } else if class.access_flags.contains(ClassAccessFlags::ENUM) {
+                NodeType::Enum.to_string()
+            } else {
+                NodeType::Class.to_string()
+            },
+            modifiers: Json::from(class_access_to_modifiers(class.access_flags)),
+            line_start: 0,
+            line_end: 0,
+            char_start: 0,
+            char_end: 0,
+            ident_line_start: 0,
+            ident_line_end: 0,
+            ident_char_start: 0,
+            ident_char_end: 0,
+            needs_decompilation: true,
+            metadata: Json::from(SymbolMetadata {
+                annotations: Some(vec![]),
+                parameters: None,
+                documentation: None,
+                return_type: None,
+            }),
+            last_modified: now,
+        });
+
+        // Methods
+        for method in &class.methods {
+            let method_name = get_utf8(&class.const_pool, method.name_index)?;
+            symbols.push(ExternalSymbol {
+                id: None,
+                jar_path: jar_path.to_string_lossy().to_string(),
+                source_file_path: entry_name.to_string(),
+                short_name: method_name.clone(),
+                fully_qualified_name: format!("{}#{}", class_name, method_name),
+                package_name: package_name.to_string(),
+                parent_name: Some(class_name.clone()),
+                symbol_type: NodeType::Function.to_string(),
+                modifiers: Json::from(method_access_to_modifiers(method.access_flags)),
+                line_start: 0,
+                line_end: 0,
+                char_start: 0,
+                char_end: 0,
+                ident_line_start: 0,
+                ident_line_end: 0,
+                ident_char_start: 0,
+                ident_char_end: 0,
+                needs_decompilation: true,
+                metadata: Json::from(SymbolMetadata {
+                    annotations: Some(vec![]),
+                    parameters: None,
+                    documentation: None,
+                    return_type: None,
+                }),
+                last_modified: now,
+            });
+        }
+
+        // Fields
+        for field in &class.fields {
+            let field_name = get_utf8(&class.const_pool, field.name_index)?;
+            symbols.push(ExternalSymbol {
+                id: None,
+                jar_path: jar_path.to_string_lossy().to_string(),
+                source_file_path: entry_name.to_string(),
+                short_name: field_name.clone(),
+                fully_qualified_name: format!("{}#{}", class_name, field_name),
+                package_name: package_name.to_string(),
+                parent_name: Some(class_name.clone()),
+                symbol_type: NodeType::Field.to_string(),
+                modifiers: Json::from(field_access_to_modifiers(field.access_flags)),
+                line_start: 0,
+                line_end: 0,
+                char_start: 0,
+                char_end: 0,
+                ident_line_start: 0,
+                ident_line_end: 0,
+                ident_char_start: 0,
+                ident_char_end: 0,
+                needs_decompilation: true,
+                metadata: Json::from(SymbolMetadata {
+                    annotations: Some(vec![]),
+                    parameters: None,
+                    documentation: None,
+                    return_type: None,
+                }),
+                last_modified: now,
+            });
+        }
+
+        Ok(symbols)
+    }
+}
+
+fn get_utf8(pool: &[ConstantInfo], index: u16) -> Result<String> {
+    match &pool[(index - 1) as usize] {
+        ConstantInfo::Utf8(s) => Ok(s.utf8_string.clone()),
+        _ => Err(anyhow!("Not a UTF8 constant")),
+    }
+}
+
+fn get_class_name(pool: &[ConstantInfo], index: u16) -> Result<String> {
+    match &pool[(index - 1) as usize] {
+        ConstantInfo::Class(c) => get_utf8(pool, c.name_index),
+        _ => Err(anyhow!("Not a Class constant")),
+    }
+}
+
+fn class_access_to_modifiers(flags: ClassAccessFlags) -> Vec<String> {
+    let mut mods = Vec::new();
+    if flags.contains(ClassAccessFlags::PUBLIC) {
+        mods.push("public".to_string());
+    }
+    if flags.contains(ClassAccessFlags::FINAL) {
+        mods.push("final".to_string());
+    }
+    if flags.contains(ClassAccessFlags::ABSTRACT) {
+        mods.push("abstract".to_string());
+    }
+    mods
+}
+
+fn method_access_to_modifiers(flags: MethodAccessFlags) -> Vec<String> {
+    let mut mods = Vec::new();
+    if flags.contains(MethodAccessFlags::PUBLIC) {
+        mods.push("public".to_string());
+    }
+    if flags.contains(MethodAccessFlags::PRIVATE) {
+        mods.push("private".to_string());
+    }
+    if flags.contains(MethodAccessFlags::PROTECTED) {
+        mods.push("protected".to_string());
+    }
+    if flags.contains(MethodAccessFlags::STATIC) {
+        mods.push("static".to_string());
+    }
+    if flags.contains(MethodAccessFlags::FINAL) {
+        mods.push("final".to_string());
+    }
+    if flags.contains(MethodAccessFlags::ABSTRACT) {
+        mods.push("abstract".to_string());
+    }
+    mods
+}
+
+fn field_access_to_modifiers(flags: FieldAccessFlags) -> Vec<String> {
+    let mut mods = Vec::new();
+    if flags.contains(FieldAccessFlags::PUBLIC) {
+        mods.push("public".to_string());
+    }
+    if flags.contains(FieldAccessFlags::PRIVATE) {
+        mods.push("private".to_string());
+    }
+    if flags.contains(FieldAccessFlags::PROTECTED) {
+        mods.push("protected".to_string());
+    }
+    if flags.contains(FieldAccessFlags::STATIC) {
+        mods.push("static".to_string());
+    }
+    if flags.contains(FieldAccessFlags::FINAL) {
+        mods.push("final".to_string());
+    }
+    mods
+}
+
+fn is_excluded(entry: &walkdir::DirEntry) -> bool {
+    entry
+        .file_name()
+        .to_str()
+        .map(|s| matches!(s, "build" | "target" | ".gradle" | ".git" | "out" | "bin"))
+        .unwrap_or(false)
 }

@@ -171,7 +171,7 @@ macro_rules! lsp_error {
 }
 
 #[macro_export]
-macro_rules! lsp_warning {
+macro_rules! lsp_warn {
     ($($arg:tt)*) => {
         $crate::lsp_logging::log_message(
             $crate::lsp_logging::LogMessage::warning(format!($($arg)*))

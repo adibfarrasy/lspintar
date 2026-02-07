@@ -235,7 +235,7 @@ impl Repository {
             "INSERT INTO external_symbols (jar_path, source_file_path, short_name, package_name, 
             fully_qualified_name, parent_name, symbol_type, modifiers, line_start, line_end, 
             char_start, char_end, ident_line_start, ident_line_end, ident_char_start,
-            ident_char_end, is_decompiled, metadata, last_modified)
+            ident_char_end, needs_decompilation, metadata, last_modified)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(jar_path, source_file_path, fully_qualified_name) DO UPDATE SET
                 short_name = excluded.short_name,
@@ -251,7 +251,7 @@ impl Repository {
                 ident_line_end = excluded.ident_line_end,
                 ident_char_start = excluded.ident_char_start,
                 ident_char_end = excluded.ident_char_end,
-                is_decompiled = excluded.is_decompiled,
+                needs_decompilation = excluded.needs_decompilation,
                 metadata = excluded.metadata,
                 last_modified = excluded.last_modified",
         )
@@ -271,7 +271,7 @@ impl Repository {
         .bind(s.ident_line_end)
         .bind(s.ident_char_start)
         .bind(s.ident_char_end)
-        .bind(s.is_decompiled)
+        .bind(s.needs_decompilation)
         .bind(&s.metadata)
         .bind(s.last_modified)
         .execute(&mut *tx)

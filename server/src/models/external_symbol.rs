@@ -29,7 +29,7 @@ pub struct ExternalSymbol {
     pub ident_line_end: i64,
     pub ident_char_start: i64,
     pub ident_char_end: i64,
-    pub is_decompiled: bool,
+    pub needs_decompilation: bool,
     #[sqlx(json)]
     pub metadata: Json<SymbolMetadata>,
     pub last_modified: i64,

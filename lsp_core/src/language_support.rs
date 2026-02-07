@@ -21,9 +21,6 @@ pub trait LanguageSupport: Send + Sync {
 
     fn should_index(&self, node: &Node, source: &str) -> bool {
         self.get_type(node).is_some()
-            && self
-                .get_modifiers(node, source)
-                .contains(&"private".to_string())
     }
 
     fn get_range(&self, node: &Node) -> Option<Range>;

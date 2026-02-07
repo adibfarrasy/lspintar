@@ -667,7 +667,7 @@ async fn test_goto_external_def() {
 }
 
 #[tokio::test]
-async fn test_resolve_chain_exetrnal() {
+async fn test_resolve_chain_external() {
     let server = TestServer::new("polyglot-spring").await;
 
     let root = env::current_dir().expect("cannot get current dir");
