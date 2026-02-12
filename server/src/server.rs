@@ -1,4 +1,3 @@
-use anyhow::{Context, anyhow};
 use core::panic;
 use futures::{StreamExt, stream};
 use groovy::GroovySupport;
@@ -7,20 +6,17 @@ use kotlin::KotlinSupport;
 use lsp_core::{
     build_tools::get_build_tool,
     language_support::LanguageSupport,
-    lsp_error, lsp_info, lsp_logging, lsp_progress, lsp_progress_begin, lsp_progress_end, lsp_warn,
+    lsp_info, lsp_logging, lsp_progress, lsp_progress_begin, lsp_progress_end,
     util::capitalize,
     vcs::{VcsHandler, get_vcs_handler},
 };
 use std::{
     collections::{HashMap, HashSet},
-    env, fs,
     path::PathBuf,
-    process::Stdio,
     str::FromStr,
     sync::{Arc, atomic::AtomicUsize},
-    time::{Duration, Instant},
+    time::Instant,
 };
-use tempfile::tempdir;
 use tokio::sync::RwLock;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{LanguageServer, lsp_types::request::GotoImplementationParams};
@@ -32,8 +28,6 @@ use crate::{
     models::symbol::Symbol,
 };
 
-const DECOMPILATION_TIMEOUT_SECS: u64 = 5;
-
 pub struct Backend {
     pub client: tower_lsp::Client,
     indexer: Arc<RwLock<Option<Indexer>>>,
@@ -41,7 +35,6 @@ pub struct Backend {
     workspace_root: Arc<RwLock<Option<PathBuf>>>,
     languages: HashMap<String, Arc<dyn LanguageSupport>>,
     vcs_handler: Arc<RwLock<Option<Arc<dyn VcsHandler>>>>,
-    cfr_jar_path: Option<PathBuf>,
 }
 
 impl Backend {
@@ -60,7 +53,6 @@ impl Backend {
             workspace_root: Arc::new(RwLock::new(None)),
             languages,
             vcs_handler: Arc::new(RwLock::new(None)),
-            cfr_jar_path: None, // TODO: allow user to bring in their CFR jar
         }
     }
 
@@ -133,8 +125,6 @@ impl Backend {
             None => return vec![],
         };
 
-        println!("class_fqn: {class_fqn}");
-
         let mut visited = HashSet::new();
         self.try_members_with_inheritance(
             &class_fqn,
@@ -173,6 +163,57 @@ impl Backend {
             .flatten()
     }
 
+    async fn try_parent_member(
+        &self,
+        type_fqn: &str,
+        member: &str,
+        branch: &str,
+        visited: &mut HashSet<String>,
+        imports: Vec<String>,
+        package_name: Option<String>,
+    ) -> Vec<ResolvedSymbol> {
+        let type_symbol = match self
+            .repo
+            .find_symbol_by_fqn_and_branch(type_fqn, branch)
+            .await
+        {
+            Ok(symbols) => symbols.into_iter().next(),
+            Err(_) => None,
+        };
+
+        let type_symbol = match type_symbol {
+            Some(s) => s,
+            None => return vec![],
+        };
+
+        let supers = match self
+            .repo
+            .find_supers_by_symbol_fqn_and_branch(&type_symbol.fully_qualified_name, &branch)
+            .await
+        {
+            Ok(symbols) => symbols,
+            Err(_) => return vec![],
+        };
+
+        for super_name in supers.iter().map(|symbol| &symbol.fully_qualified_name) {
+            let results = self
+                .recurse_try_members_with_inheritance(
+                    super_name,
+                    member,
+                    branch,
+                    visited,
+                    imports.clone(),
+                    package_name.clone(),
+                )
+                .await;
+            if !results.is_empty() {
+                return results;
+            }
+        }
+
+        vec![]
+    }
+
     #[tracing::instrument(skip(self))]
     async fn try_members_with_inheritance(
         &self,
@@ -199,55 +240,19 @@ impl Backend {
             }
         }
 
-        // Try external symbols
-        if let Ok(Some(external)) = self.repo.find_external_symbol_by_fqn(&member_fqn).await {
-            return vec![ResolvedSymbol::External(external)];
-        }
-
-        // Try property access
         if let Some(found) = self.try_property_access(type_fqn, member, branch).await {
             return vec![ResolvedSymbol::Project(found)];
         }
 
-        // Get class/interface info - try project symbols first, then external
-        let type_symbol = match self
-            .repo
-            .find_symbol_by_fqn_and_branch(type_fqn, branch)
-            .await
-        {
-            Ok(symbols) => symbols.into_iter().next(),
-            Err(_) => None,
-        };
+        let result = self
+            .try_parent_member(type_fqn, member, branch, visited, imports, package_name)
+            .await;
+        if !result.is_empty() {
+            return result;
+        }
 
-        let type_symbol = match type_symbol {
-            Some(s) => s,
-            None => return vec![],
-        };
-
-        // Try superclass/interfaces (only for project symbols)
-        let supers = match self
-            .repo
-            .find_supers_by_symbol_fqn_and_branch(&type_symbol.fully_qualified_name, &branch)
-            .await
-        {
-            Ok(symbols) => symbols,
-            Err(_) => return vec![],
-        };
-
-        for super_name in supers.iter().map(|symbol| &symbol.fully_qualified_name) {
-            let results = self
-                .recurse_try_members_with_inheritance(
-                    super_name,
-                    member,
-                    branch,
-                    visited,
-                    imports.clone(),
-                    package_name.clone(),
-                )
-                .await;
-            if !results.is_empty() {
-                return results;
-            }
+        if let Ok(Some(found)) = self.repo.find_external_symbol_by_fqn(&member_fqn).await {
+            return vec![ResolvedSymbol::External(found)];
         }
 
         vec![]
@@ -529,123 +534,6 @@ impl Backend {
             })
             .collect()
     }
-
-    fn decompile_class(&self, class_name: &str, buffer: &[u8]) -> anyhow::Result<String> {
-        if self.cfr_jar_path.is_none() {
-            return Ok(String::new());
-        }
-
-        let decompiler_jar = self.cfr_jar_path.as_ref().unwrap();
-
-        let input_dir = tempdir()
-            .context("Failed to create temp input dir")?
-            .path()
-            .join("input");
-        let output_dir = tempdir()
-            .context("Failed to create temp output dir")?
-            .path()
-            .join("output");
-
-        fs::create_dir_all(&input_dir)?;
-        fs::create_dir_all(&output_dir)?;
-
-        let class_file_name = format!("{}.class", class_name.replace('.', "/"));
-        let class_file_path = input_dir.join(&class_file_name);
-
-        if let Some(parent) = class_file_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-
-        fs::write(&class_file_path, buffer)?;
-
-        let mut command = std::process::Command::new("java");
-        command.args(&[
-            "-jar",
-            decompiler_jar.to_string_lossy().as_ref(),
-            class_file_path.to_string_lossy().as_ref(),
-            "--outputdir",
-            output_dir.to_string_lossy().as_ref(),
-            "--caseinsensitivefs",
-            "true",
-        ]);
-        let output = self
-            .execute_with_timeout(command)
-            .context("Failed to execute Java decompiler")?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(anyhow!("Decompilation failed: {}", stderr));
-        }
-
-        let java_file_name = format!("{}.java", class_name.replace('.', "/"));
-        let java_file_path = output_dir.join(&java_file_name);
-
-        if !java_file_path.exists() {
-            return Err(anyhow!(
-                "Decompiled file not found: {}",
-                java_file_path.display()
-            ));
-        }
-
-        let decompiled_source =
-            fs::read_to_string(&java_file_path).context("Failed to read decompiled source file")?;
-
-        Ok(decompiled_source)
-    }
-
-    fn execute_with_timeout(
-        &self,
-        mut command: std::process::Command,
-    ) -> anyhow::Result<std::process::Output> {
-        let mut child = command
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .context("Failed to spawn decompiler process")?;
-
-        let timeout = Duration::from_secs(DECOMPILATION_TIMEOUT_SECS);
-        let start_time = std::time::Instant::now();
-
-        // Use a simple polling approach to check for completion or timeout
-        loop {
-            match child.try_wait() {
-                Ok(Some(_status)) => {
-                    let output = child
-                        .wait_with_output()
-                        .context("Failed to collect decompiler output")?;
-                    return Ok(output);
-                }
-                Ok(None) => {
-                    if start_time.elapsed() > timeout {
-                        let pid = child.id();
-                        lsp_error!(
-                            "Decompilation timeout reached ({}s), terminating process {}",
-                            DECOMPILATION_TIMEOUT_SECS,
-                            pid
-                        );
-
-                        // Try to kill the process
-                        if let Err(e) = child.kill() {
-                            lsp_warn!("Failed to kill decompilation process {}: {}", pid, e);
-                        }
-                        let _ = child.wait(); // Clean up zombie process
-
-                        return Err(anyhow!(
-                            "Decompilation timed out after {} seconds. Process was terminated to prevent CPU exhaustion.",
-                            DECOMPILATION_TIMEOUT_SECS
-                        ));
-                    }
-
-                    // Sleep briefly before checking again
-                    std::thread::sleep(Duration::from_millis(100));
-                }
-                Err(e) => {
-                    return Err(anyhow!("Error waiting for decompiler process: {}", e)
-                        .context("Command execution failed"));
-                }
-            }
-        }
-    }
 }
 
 #[tower_lsp::async_trait]
@@ -690,9 +578,6 @@ impl LanguageServer for Backend {
         if let Some(root) = workspace_root {
             let vcs = get_vcs_handler(&root);
             let build_tool = get_build_tool(&root);
-
-            // TODO: sane default to download cfr and set the path?
-            let _cfr_jar_path = env::var("CFR_JAR_PATH").ok().map(PathBuf::from);
 
             let mut indexer = Indexer::new(Arc::clone(&self.repo), Arc::clone(&vcs));
 
@@ -758,8 +643,6 @@ impl LanguageServer for Backend {
 
             *self.vcs_handler.write().await = Some(vcs);
             *self.workspace_root.write().await = Some(root);
-        } else {
-            panic!("No workspace root provided");
         }
     }
 

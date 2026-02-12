@@ -1,8 +1,9 @@
-use std::collections::hash_map::DefaultHasher;
-use std::fs;
-use std::hash::{Hash, Hasher};
-use std::path::PathBuf;
-use zip::ZipArchive;
+use std::{fs, path::Path, process::Stdio, time::Duration};
+
+use anyhow::{Context, anyhow};
+use tempfile::tempdir;
+
+use crate::{lsp_error, lsp_warn};
 
 pub fn capitalize(s: &str) -> String {
     let mut chars = s.chars();
@@ -21,39 +22,116 @@ pub fn naive_resolve_fqn(name: &str, imports: &[String]) -> Option<String> {
     None
 }
 
-pub fn extract_jar_to_cache(
-    jar_path: &str,
-    cache_dir: PathBuf,
-) -> Result<PathBuf, Box<dyn std::error::Error>> {
-    let mut hasher = DefaultHasher::new();
-    jar_path.hash(&mut hasher);
-    let jar_hash = hasher.finish();
+pub fn decompile_class(
+    class_name: &str,
+    buffer: &[u8],
+    decompiler_jar: &Path,
+) -> anyhow::Result<String> {
+    let input_dir = tempdir()
+        .context("Failed to create temp input dir")?
+        .path()
+        .join("input");
+    let output_dir = tempdir()
+        .context("Failed to create temp output dir")?
+        .path()
+        .join("output");
 
-    let extract_dir = cache_dir.join(jar_hash.to_string());
+    fs::create_dir_all(&input_dir)?;
+    fs::create_dir_all(&output_dir)?;
 
-    if extract_dir.exists() {
-        return Ok(extract_dir);
+    let class_file_name = format!("{}.class", class_name.replace('.', "/"));
+    let class_file_path = input_dir.join(&class_file_name);
+
+    if let Some(parent) = class_file_path.parent() {
+        fs::create_dir_all(parent)?;
     }
 
-    fs::create_dir_all(&extract_dir)?;
+    fs::write(&class_file_path, buffer)?;
 
-    let file = fs::File::open(jar_path)?;
-    let mut archive = ZipArchive::new(file)?;
+    let mut command = std::process::Command::new("java");
+    command.args(&[
+        "-jar",
+        decompiler_jar.to_string_lossy().as_ref(),
+        class_file_path.to_string_lossy().as_ref(),
+        "--outputdir",
+        output_dir.to_string_lossy().as_ref(),
+        "--caseinsensitivefs",
+        "true",
+    ]);
+    let output = execute_with_timeout(command).context("Failed to execute Java decompiler")?;
 
-    for i in 0..archive.len() {
-        let mut file = archive.by_index(i)?;
-        let outpath = extract_dir.join(file.name());
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow!("Decompilation failed: {}", stderr));
+    }
 
-        if file.is_dir() {
-            fs::create_dir_all(&outpath)?;
-        } else {
-            if let Some(p) = outpath.parent() {
-                fs::create_dir_all(p)?;
+    let java_file_name = format!("{}.java", class_name.replace('.', "/"));
+    let java_file_path = output_dir.join(&java_file_name);
+
+    if !java_file_path.exists() {
+        return Err(anyhow!(
+            "Decompiled file not found: {}",
+            java_file_path.display()
+        ));
+    }
+
+    let decompiled_source =
+        fs::read_to_string(&java_file_path).context("Failed to read decompiled source file")?;
+
+    Ok(decompiled_source)
+}
+
+const DECOMPILATION_TIMEOUT_SECS: u64 = 5;
+
+pub fn execute_with_timeout(
+    mut command: std::process::Command,
+) -> anyhow::Result<std::process::Output> {
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("Failed to spawn decompiler process")?;
+
+    let timeout = Duration::from_secs(DECOMPILATION_TIMEOUT_SECS);
+    let start_time = std::time::Instant::now();
+
+    // Use a simple polling approach to check for completion or timeout
+    loop {
+        match child.try_wait() {
+            Ok(Some(_status)) => {
+                let output = child
+                    .wait_with_output()
+                    .context("Failed to collect decompiler output")?;
+                return Ok(output);
             }
-            let mut outfile = fs::File::create(&outpath)?;
-            std::io::copy(&mut file, &mut outfile)?;
+            Ok(None) => {
+                if start_time.elapsed() > timeout {
+                    let pid = child.id();
+                    lsp_error!(
+                        "Decompilation timeout reached ({}s), terminating process {}",
+                        DECOMPILATION_TIMEOUT_SECS,
+                        pid
+                    );
+
+                    // Try to kill the process
+                    if let Err(e) = child.kill() {
+                        lsp_warn!("Failed to kill decompilation process {}: {}", pid, e);
+                    }
+                    let _ = child.wait(); // Clean up zombie process
+
+                    return Err(anyhow!(
+                        "Decompilation timed out after {} seconds. Process was terminated to prevent CPU exhaustion.",
+                        DECOMPILATION_TIMEOUT_SECS
+                    ));
+                }
+
+                // Sleep briefly before checking again
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(e) => {
+                return Err(anyhow!("Error waiting for decompiler process: {}", e)
+                    .context("Command execution failed"));
+            }
         }
     }
-
-    Ok(extract_dir)
 }

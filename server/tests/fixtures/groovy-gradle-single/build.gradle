@@ -12,6 +12,7 @@ repositories {
 dependencies {
     implementation 'org.apache.groovy:groovy:4.0.15'
     implementation 'org.apache.groovy:groovy-json:4.0.15'
+    implementation files('lib/dummy.jar')
 }
 
 sourceCompatibility = '11'

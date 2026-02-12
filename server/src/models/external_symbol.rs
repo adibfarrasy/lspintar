@@ -1,12 +1,18 @@
 use std::collections::hash_map::DefaultHasher;
+use std::error::Error;
+use std::fs::{self, File};
 use std::hash::{Hash, Hasher};
-use std::path::PathBuf;
+use std::io::{Read, Write, copy};
+use std::path::{Path, PathBuf};
 
-use lsp_core::util::extract_jar_to_cache;
+use lsp_core::util::decompile_class;
 use sqlx::{FromRow, types::Json};
 use tower_lsp::lsp_types::{Location, Position, Range, Url};
+use zip::ZipArchive;
 
+use crate::Indexer;
 use crate::as_lsp_location::AsLspLocation;
+use crate::constants::{get_cache_dir, get_cfr_jar_path};
 use crate::models::symbol::SymbolMetadata;
 
 #[derive(Debug, Clone, FromRow, PartialEq, Eq)]
@@ -37,26 +43,10 @@ pub struct ExternalSymbol {
 
 impl AsLspLocation for ExternalSymbol {
     fn as_lsp_location(&self) -> Option<Location> {
-        let cache_dir = dirs::cache_dir()
-            .unwrap_or_else(|| PathBuf::from("/tmp"))
-            .join("lspintar/sources");
-
-        // Hash jar_path
-        let mut hasher = DefaultHasher::new();
-        self.jar_path.hash(&mut hasher);
-        let jar_hash = hasher.finish();
-
-        let extract_dir = cache_dir.join(jar_hash.to_string());
-
-        if !extract_dir.exists() {
-            extract_jar_to_cache(&self.jar_path, cache_dir).ok()?;
-        }
-
-        let full_path = extract_dir.join(&self.source_file_path);
-        let uri = Url::from_file_path(full_path).ok()?;
-
+        let cached_path = self.extract_to_cache().ok()?;
+        let uri = Url::from_file_path(cached_path).ok()?;
         Some(Location {
-            uri: uri,
+            uri,
             range: Range {
                 start: Position {
                     line: self.ident_line_start as u32,
@@ -68,5 +58,74 @@ impl AsLspLocation for ExternalSymbol {
                 },
             },
         })
+    }
+}
+
+impl ExternalSymbol {
+    pub fn extract_to_cache(&self) -> Result<PathBuf, Box<dyn Error>> {
+        let mut hasher = DefaultHasher::new();
+        self.jar_path.hash(&mut hasher);
+        self.source_file_path.hash(&mut hasher);
+        self.needs_decompilation.hash(&mut hasher);
+        let jar_hash = hasher.finish();
+
+        let extract_dir = get_cache_dir().join(jar_hash.to_string());
+
+        let outpath = if self.needs_decompilation {
+            extract_dir
+                .join(&self.source_file_path)
+                .with_extension("java")
+        } else {
+            extract_dir.join(&self.source_file_path)
+        };
+
+        if outpath.exists() {
+            return Ok(outpath);
+        }
+
+        let file = File::open(&self.jar_path)?;
+        let mut archive = ZipArchive::new(file)?;
+
+        match archive.by_name(&self.source_file_path) {
+            Ok(mut file) => {
+                if let Some(p) = outpath.parent() {
+                    if !p.exists() {
+                        fs::create_dir_all(p)?;
+                    }
+                }
+
+                if self.needs_decompilation {
+                    let mut buffer = Vec::new();
+                    file.read_to_end(&mut buffer)?;
+                    let class_name = self
+                        .fully_qualified_name
+                        .split_once('#')
+                        .map(|(name, _)| name)
+                        .unwrap_or(&self.fully_qualified_name);
+                    let source_code = decompile_class(
+                        class_name,
+                        &buffer,
+                        get_cfr_jar_path()
+                            .as_ref()
+                            .ok_or("CFR_JAR_PATH is not set")?,
+                    )?;
+
+                    let mut outfile = File::create(&outpath)?;
+                    outfile.write_all(source_code.as_bytes())?;
+                } else {
+                    let mut outfile = File::create(&outpath)?;
+                    copy(&mut file, &mut outfile)?;
+                }
+            }
+            Err(_) => {
+                return Err(format!(
+                    "File '{}' not found in JAR '{}'",
+                    self.source_file_path, self.jar_path
+                )
+                .into());
+            }
+        }
+
+        Ok(outpath)
     }
 }
