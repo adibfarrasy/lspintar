@@ -1,6 +1,6 @@
 #![allow(unused_imports)]
 
-use crate::{JavaSupport, constants::JAVA_IMPORT_SUBPATHS};
+use crate::{JavaSupport, constants::JAVA_IMPLICIT_IMPORTS};
 use lsp_core::{language_support::LanguageSupport, node_types::NodeType};
 
 use tower_lsp::lsp_types::{Position, Range};
@@ -16,9 +16,9 @@ fn test_get_imports() {
     let node_names = support.get_imports(&parsed.0, &parsed.1);
     assert_eq!(
         node_names,
-        JAVA_IMPORT_SUBPATHS
+        JAVA_IMPLICIT_IMPORTS
             .iter()
-            .map(|s| s.to_string().replace("/", "."))
+            .map(|s| s.to_string())
             .chain(vec![
                 "com.example.Foo".to_string(),
                 "java.util.*".to_string()

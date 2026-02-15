@@ -10,7 +10,7 @@ use tower_lsp::lsp_types::{Position, Range};
 use tree_sitter::{Node, Parser, Point, Query, QueryCursor, QueryMatch, StreamingIterator, Tree};
 
 use crate::{
-    constants::JAVA_IMPORT_SUBPATHS,
+    constants::JAVA_IMPLICIT_IMPORTS,
     support::queries::{
         DECLARES_VARIABLE_QUERY, GET_ANNOTATIONS_QUERY, GET_EXTENDS_QUERY, GET_FIELD_RETURN_QUERY,
         GET_FIELD_SHORT_NAME_QUERY, GET_FUNCTION_RETURN_QUERY, GET_IMPLEMENTS_QUERY,
@@ -390,6 +390,7 @@ impl LanguageSupport for JavaSupport {
                 "class_body" => Some(NodeType::Field),
                 _ => None,
             }),
+            "annotation_type_declaration" => Some(NodeType::Annotation),
             "constant_declaration" => Some(NodeType::Field),
             _ => None,
         }
@@ -470,9 +471,9 @@ impl LanguageSupport for JavaSupport {
                 })
                 .collect::<Vec<String>>();
 
-        JAVA_IMPORT_SUBPATHS
+        JAVA_IMPLICIT_IMPORTS
             .iter()
-            .map(|s| s.to_string().replace("/", "."))
+            .map(|s| s.to_string())
             .chain(explicit_imports)
             .collect()
     }

@@ -2,7 +2,7 @@ use classfile_parser::{
     ClassAccessFlags, class_parser, constant_info::ConstantInfo, field_info::FieldAccessFlags,
     method_info::MethodAccessFlags,
 };
-use java::JAVA_IMPORT_SUBPATHS;
+use java::JAVA_IMPLICIT_IMPORTS;
 use lsp_core::{
     language_support::LanguageSupport, node_types::NodeType, util::naive_resolve_fqn,
     vcs::VcsHandler,
@@ -277,6 +277,10 @@ impl Indexer {
                 entry.name().to_string()
             };
 
+            if entry_name.ends_with("module-info.class") {
+                continue;
+            }
+
             let path = Path::new(&entry_name).extension().and_then(|s| s.to_str());
 
             let mut entry = archive.by_index(i)?;
@@ -312,9 +316,9 @@ impl Indexer {
             .map(|n| n == "src.zip")
             .unwrap_or(false)
         {
-            if !JAVA_IMPORT_SUBPATHS
+            if !JAVA_IMPLICIT_IMPORTS
                 .iter()
-                .any(|prefix| entry_name.contains(prefix))
+                .any(|prefix| entry_name.contains(&prefix.replace(".", "/").trim_end_matches("*")))
             {
                 return Ok(());
             }

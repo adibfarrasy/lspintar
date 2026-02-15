@@ -19,7 +19,7 @@ use server::Backend;
 async fn main() {
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::DEBUG)
-        // .with_env_filter("debug,sqlx=warn,rusqlite=warn")
+        .with_env_filter("debug,sqlx=warn,rusqlite=warn")
         .with_writer(std::io::stderr)
         .with_ansi(false)
         .without_time()

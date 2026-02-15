@@ -899,3 +899,80 @@ async fn test_index_jdk_dep_source_jar() {
         }
     );
 }
+
+#[tokio::test]
+async fn test_index_external_annotation_dep_jar() {
+    let db_name = Uuid::new_v4();
+    let db_dir = format!("file:{}?mode=memory&cache=shared", db_name);
+    let repo = Arc::new(Repository::new(&db_dir).await.unwrap());
+    let path = Path::new("tests/fixtures/polyglot-spring");
+
+    let gradle_handler = GradleHandler;
+    let dep_jars = gradle_handler.get_dependency_paths(&path).unwrap();
+
+    let jar_path = dep_jars
+        .iter()
+        .map(|p| p.clone().1)
+        .find(|p| {
+            if let Some(source_jar) = p {
+                source_jar.to_string_lossy().contains("spring-context")
+                    && source_jar.to_string_lossy().contains("-sources.jar")
+            } else {
+                false
+            }
+        })
+        .expect("spring-context sources.jar not found")
+        .expect("spring-context is empty");
+
+    let vcs = get_vcs_handler(&path);
+    let mut indexer = Indexer::new(Arc::clone(&repo), Arc::clone(&vcs));
+    indexer.register_language("groovy", Arc::new(GroovySupport::new()));
+    indexer.register_language("java", Arc::new(JavaSupport::new()));
+    indexer
+        .index_jar(&jar_path)
+        .await
+        .expect("JAR indexing failed");
+
+    let result = repo
+        .find_external_symbol_by_fqn("org.springframework.stereotype.Service")
+        .await
+        .expect("Query failed");
+    assert!(result.is_some(), "External symbol should be found");
+
+    let mut symbol = result.unwrap();
+    symbol.id = None;
+    symbol.last_modified = 0;
+    symbol.jar_path = String::new();
+    symbol.metadata.documentation = None;
+
+    assert_eq!(
+        symbol,
+        ExternalSymbol {
+            id: None,
+            jar_path: String::new(),
+            source_file_path: "org/springframework/stereotype/Service.java".to_string(),
+            short_name: "Service".to_string(),
+            fully_qualified_name: "org.springframework.stereotype.Service".to_string(),
+            package_name: "org.springframework.stereotype".to_string(),
+            parent_name: Some("org.springframework.stereotype".to_string()),
+            symbol_type: "Annotation".to_string(),
+            modifiers: Json(vec!["public".to_string()]),
+            line_start: 26,
+            line_end: 57,
+            char_start: 0,
+            char_end: 1,
+            ident_line_start: 47,
+            ident_line_end: 47,
+            ident_char_start: 18,
+            ident_char_end: 25,
+            needs_decompilation: false,
+            metadata: Json(SymbolMetadata {
+                parameters: None,
+                return_type: None,
+                documentation: None,
+                annotations: Some(vec![]),
+            },),
+            last_modified: 0,
+        }
+    );
+}

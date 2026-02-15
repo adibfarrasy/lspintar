@@ -151,6 +151,7 @@ impl GroovySupport {
                     ("super_interfaces", None),
                     ("superclass", None),
                     ("return_name", None),
+                    ("annotation", None),
                 ]
                 .into_iter()
                 .for_each(|(name, qual)| {
@@ -390,6 +391,7 @@ impl LanguageSupport for GroovySupport {
                 "class_body" => Some(NodeType::Field),
                 _ => None,
             }),
+            "annotation_type_declaration" => Some(NodeType::Annotation),
             "constant_declaration" => Some(NodeType::Field),
             _ => None,
         }

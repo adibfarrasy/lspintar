@@ -87,6 +87,7 @@ pub static GET_SHORT_NAME_QUERY: LazyLock<Query> = LazyLock::new(|| {
         (interface_declaration name: (identifier) @name)
         (enum_declaration name: (identifier) @name)
         (function_declaration name: (identifier) @name)
+        (annotation_type_declaration name: (identifier) @name)
         ]
         "#,
     )

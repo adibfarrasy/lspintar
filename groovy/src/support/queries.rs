@@ -90,6 +90,7 @@ pub static GET_SHORT_NAME_QUERY: LazyLock<Query> = LazyLock::new(|| {
         (interface_declaration name: (identifier) @name)
         (enum_declaration name: (identifier) @name)
         (function_declaration name: (identifier) @name)
+        (annotation_type_declaration name: (identifier) @name)
         ]
         "#,
     )
@@ -165,6 +166,13 @@ pub static IDENT_QUERY: LazyLock<Query> = LazyLock::new(|| {
     (super_interfaces (type_list (type_identifier) @super_interfaces))
     (superclass (type_identifier) @superclass)
     (function_declaration type: (type_identifier) @return_name)
+    [
+      (class_declaration (modifiers [(marker_annotation name: (identifier) @annotation) (annotation name: (identifier) @annotation)]))
+      (interface_declaration (modifiers [(marker_annotation name: (identifier) @annotation) (annotation name: (identifier) @annotation)]))
+      (enum_declaration (modifiers [(marker_annotation name: (identifier) @annotation) (annotation name: (identifier) @annotation)]))
+      (field_declaration (modifiers [(marker_annotation name: (identifier) @annotation) (annotation name: (identifier) @annotation)]))
+      (function_declaration (modifiers [(marker_annotation name: (identifier) @annotation) (annotation name: (identifier) @annotation)]))
+    ]
 "#,
     )
     .unwrap()

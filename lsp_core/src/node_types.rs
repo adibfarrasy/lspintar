@@ -7,6 +7,7 @@ pub enum NodeType {
     Function,
     Field,
     Enum,
+    Annotation,
 }
 
 impl Display for NodeType {
@@ -17,6 +18,7 @@ impl Display for NodeType {
             NodeType::Function => write!(f, "Function"),
             NodeType::Field => write!(f, "Field"),
             NodeType::Enum => write!(f, "Enum"),
+            NodeType::Annotation => write!(f, "Annotation"),
         }
     }
 }
@@ -29,6 +31,7 @@ impl NodeType {
             "Function" => Some(NodeType::Function),
             "Field" => Some(NodeType::Field),
             "Enum" => Some(NodeType::Enum),
+            "Annotation" => Some(NodeType::Annotation),
             _ => None,
         }
     }

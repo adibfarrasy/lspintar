@@ -24,7 +24,8 @@ impl BuildToolHandler for GradleHandler {
                 if (plugins.hasPlugin('java') || plugins.hasPlugin('groovy')) {
                     task lspClasspath {
                         doLast {
-                            configurations.compileClasspath.files.each {
+                            def allJars = (configurations.compileClasspath.files + configurations.runtimeClasspath.files).unique()
+                            allJars.each {
                                 println it.absolutePath
                             }
                         }
@@ -32,7 +33,10 @@ impl BuildToolHandler for GradleHandler {
                     
                     task lspSources {
                         doLast {
-                            configurations.compileClasspath.resolvedConfiguration.resolvedArtifacts.each { artifact ->
+                            def allArtifacts = (configurations.compileClasspath.resolvedConfiguration.resolvedArtifacts + 
+                                configurations.runtimeClasspath.resolvedConfiguration.resolvedArtifacts).unique()
+
+                            allArtifacts.each { artifact ->
                                 def id = artifact.moduleVersion.id
                                 try {
                                     def dep = dependencies.create("${id.group}:${id.name}:${id.version}:sources")

@@ -1,4 +1,3 @@
-// Kotlin implicit imports (JVM platform)
 pub const KOTLIN_IMPLICIT_IMPORTS: [&str; 10] = [
     "kotlin.*",
     "kotlin.annotation.*",

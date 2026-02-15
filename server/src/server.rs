@@ -90,6 +90,9 @@ impl Backend {
             }
         }
 
+        // Implicit import match
+        // TODO: what do?
+
         // Package + name fallback
         let fallback_fqn = package_name
             .map(|pkg| {
@@ -328,7 +331,7 @@ impl Backend {
                 tower_lsp::jsonrpc::Error::invalid_params(format!("Failed to find symbol: {}", e))
             })?
             .ok_or_else(|| {
-                tower_lsp::jsonrpc::Error::invalid_params("Symbol not found".to_string())
+                tower_lsp::jsonrpc::Error::invalid_params(format!("Symbol not found for {}", fqn))
             })?;
 
         external_symbol
@@ -626,7 +629,7 @@ impl LanguageServer for Backend {
                         let percent = 50.0 + (completed as f32 / total as f32) * 50.0;
                         lsp_progress!(
                             "indexing",
-                            &format!("Indexing jars ({}/{})", completed, total),
+                            &format!("Indexing JARs ({}/{})", completed, total),
                             percent
                         );
 

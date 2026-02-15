@@ -413,3 +413,65 @@ fn test_return_type_detection() {
     let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
     assert_eq!(ident, Some(("String".to_string(), None)));
 }
+
+#[test]
+fn test_annotation_on_class() {
+    let support = GroovySupport::new();
+    let content = r#"
+        @Controller
+        class Foo {
+            String test() {
+                return "hello"
+            }
+        }"#;
+    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let pos = find_position(content, "Controller");
+    let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
+    assert_eq!(ident, Some(("Controller".to_string(), None)));
+}
+
+#[test]
+fn test_annotation_on_method() {
+    let support = GroovySupport::new();
+    let content = r#"
+        class Foo {
+            @GetMapping("/test")
+            String test() {
+                return "hello"
+            }
+        }"#;
+    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let pos = find_position(content, "GetMapping");
+    let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
+    assert_eq!(ident, Some(("GetMapping".to_string(), None)));
+}
+
+#[test]
+fn test_annotation_on_field() {
+    let support = GroovySupport::new();
+    let content = r#"
+        class Foo {
+            @Autowired
+            String service
+        }"#;
+    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let pos = find_position(content, "Autowired");
+    let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
+    assert_eq!(ident, Some(("Autowired".to_string(), None)));
+}
+
+#[test]
+fn test_annotation_with_parameters() {
+    let support = GroovySupport::new();
+    let content = r#"
+        class Foo {
+            @RequestMapping(value = "/api", method = RequestMethod.GET)
+            String test() {
+                return "hello"
+            }
+        }"#;
+    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let pos = find_position(content, "RequestMapping");
+    let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
+    assert_eq!(ident, Some(("RequestMapping".to_string(), None)));
+}
