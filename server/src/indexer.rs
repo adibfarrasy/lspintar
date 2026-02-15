@@ -2,6 +2,7 @@ use classfile_parser::{
     ClassAccessFlags, class_parser, constant_info::ConstantInfo, field_info::FieldAccessFlags,
     method_info::MethodAccessFlags,
 };
+use java::JAVA_IMPORT_SUBPATHS;
 use lsp_core::{
     language_support::LanguageSupport, node_types::NodeType, util::naive_resolve_fqn,
     vcs::VcsHandler,
@@ -71,7 +72,7 @@ impl Indexer {
                     .ok_or_else(|| anyhow!("failed to parse file: {}", path.display()))?;
 
                 let data =
-                    self.get_symbols_from_tree(&parsed.0, lang.as_ref(), &path, &parsed.1)?;
+                    self.get_symbols_from_tree(&parsed.0, lang.as_ref(), &path, &parsed.1, false)?;
 
                 self.repo.insert_symbols(&data.0).await?;
 
@@ -101,12 +102,13 @@ impl Indexer {
         lang: &dyn LanguageSupport,
         path: &Path,
         content: &str,
+        is_external: bool,
     ) -> Result<(Vec<Symbol>, Vec<SymbolSuperMapping>)> {
         let mut symbols = Vec::new();
         let mut symbol_super_mappings = Vec::new();
-        let package_name = lang
-            .get_package_name(tree, content)
-            .ok_or_else(|| anyhow!("failed to get package name"))?;
+        let Some(package_name) = lang.get_package_name(tree, content) else {
+            return Ok((symbols, symbol_super_mappings));
+        };
 
         let imports = lang.get_imports(tree, content);
 
@@ -121,6 +123,7 @@ impl Indexer {
             &package_name,
             &mut symbol_super_mappings,
             &imports,
+            is_external,
         )?;
 
         Ok((symbols, symbol_super_mappings))
@@ -128,140 +131,137 @@ impl Indexer {
 
     fn dfs(
         &self,
-        node: Node,
+        root: Node,
         lang: &dyn LanguageSupport,
-        parent_name: &str,
-        is_type_parent: bool,
+        initial_parent: &str,
+        initial_is_type_parent: bool,
         symbols: &mut Vec<Symbol>,
         path: &Path,
         content: &str,
         package_name: &str,
         symbol_super_mappings: &mut Vec<SymbolSuperMapping>,
         imports: &[String],
+        is_external: bool,
     ) -> Result<()> {
-        let (new_parent, new_is_type_parent) = if lang.should_index(&node, content) {
-            let node_type = lang.get_type(&node);
-            let short_name = lang
-                .get_short_name(&node, content)
-                .context("Failed to get short name")?;
-            let sep = if is_type_parent { "#" } else { "." };
-            let fqn = format!("{}{}{}", parent_name, sep, short_name);
-            let range = lang.get_range(&node).context("Failed to get range")?;
-            let ident_range = lang
-                .get_ident_range(&node)
-                .context("Failed to get ident range")?;
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .context("Failed to get duration")?
-                .as_secs();
+        let mut stack = vec![(root, initial_parent.to_string(), initial_is_type_parent)];
 
-            let modifiers = lang.get_modifiers(&node, content);
-            let implements = lang.get_implements(&node, content);
+        while let Some((node, parent_name, is_type_parent)) = stack.pop() {
+            let (new_parent, new_is_type_parent) = if lang.should_index(&node, content) {
+                let node_type = lang.get_type(&node);
+                let modifiers = lang.get_modifiers(&node, content);
 
-            if let Some(superclass_short_name) = lang.get_extends(&node, content) {
-                let superclass_fqn = naive_resolve_fqn(&superclass_short_name, imports);
+                if is_external && !modifiers.contains(&"public".to_string()) {
+                    (parent_name.clone(), is_type_parent)
+                } else {
+                    let short_name = lang
+                        .get_short_name(&node, content)
+                        .context("Failed to get short name")?;
+                    let sep = if is_type_parent { "#" } else { "." };
+                    let fqn = format!("{}{}{}", parent_name, sep, short_name);
+                    let range = lang.get_range(&node).context("Failed to get range")?;
+                    let ident_range = lang
+                        .get_ident_range(&node)
+                        .context("Failed to get ident range")?;
+                    let now = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .context("Failed to get duration")?
+                        .as_secs();
 
-                symbol_super_mappings.push(SymbolSuperMapping {
-                    id: None,
-                    symbol_fqn: fqn.clone(),
-                    super_short_name: superclass_short_name,
-                    super_fqn: superclass_fqn,
-                });
-            }
+                    let implements = lang.get_implements(&node, content);
 
-            for interface_short_name in implements {
-                let interface_fqn = naive_resolve_fqn(&interface_short_name, imports);
+                    if let Some(superclass_short_name) = lang.get_extends(&node, content) {
+                        let superclass_fqn = naive_resolve_fqn(&superclass_short_name, imports);
+                        symbol_super_mappings.push(SymbolSuperMapping {
+                            id: None,
+                            symbol_fqn: fqn.clone(),
+                            super_short_name: superclass_short_name,
+                            super_fqn: superclass_fqn,
+                        });
+                    }
 
-                symbol_super_mappings.push(SymbolSuperMapping {
-                    id: None,
-                    symbol_fqn: fqn.clone(),
-                    super_short_name: interface_short_name,
-                    super_fqn: interface_fqn,
-                });
-            }
+                    for interface_short_name in implements {
+                        let interface_fqn = naive_resolve_fqn(&interface_short_name, imports);
+                        symbol_super_mappings.push(SymbolSuperMapping {
+                            id: None,
+                            symbol_fqn: fqn.clone(),
+                            super_short_name: interface_short_name,
+                            super_fqn: interface_fqn,
+                        });
+                    }
 
-            let documentation = lang.get_documentation(&node, content);
-            let annotations = lang.get_annotations(&node, content);
+                    let documentation = lang.get_documentation(&node, content);
+                    let annotations = lang.get_annotations(&node, content);
 
-            let mut metadata = SymbolMetadata {
-                annotations: Some(annotations),
-                parameters: None,
-                documentation: documentation,
-                return_type: None,
+                    let mut metadata = SymbolMetadata {
+                        annotations: Some(annotations),
+                        parameters: None,
+                        documentation: documentation,
+                        return_type: None,
+                    };
+
+                    match node_type {
+                        Some(NodeType::Function) => {
+                            let symbol_params = lang
+                                .get_parameters(&node, content)
+                                .context("failed to get function params")?
+                                .into_iter()
+                                .map(|(name, type_name, default_value)| SymbolParameter {
+                                    name,
+                                    type_name,
+                                    default_value,
+                                })
+                                .collect();
+                            metadata.parameters = Some(symbol_params);
+                            metadata.return_type = lang.get_return(&node, content);
+                        }
+                        Some(NodeType::Field) => {
+                            let ret = lang
+                                .get_return(&node, content)
+                                .context("failed to get function return type")?;
+                            metadata.return_type = Some(ret);
+                        }
+                        _ => (),
+                    };
+
+                    symbols.push(Symbol {
+                        id: None,
+                        vcs_branch: self.vcs.get_current_branch().ok().unwrap(),
+                        short_name: short_name,
+                        package_name: package_name.to_string(),
+                        fully_qualified_name: fqn.clone(),
+                        parent_name: Some(parent_name.to_string()),
+                        file_path: path.to_string_lossy().to_string(),
+                        file_type: lang.get_language().to_string(),
+                        symbol_type: node_type.clone().expect("unknown node type").to_string(),
+                        modifiers: Json::from(modifiers),
+                        line_start: range.start.line as i64,
+                        line_end: range.end.line as i64,
+                        char_start: range.start.character as i64,
+                        char_end: range.end.character as i64,
+                        ident_line_start: ident_range.start.line as i64,
+                        ident_line_end: ident_range.end.line as i64,
+                        ident_char_start: ident_range.start.character as i64,
+                        ident_char_end: ident_range.end.character as i64,
+                        metadata: Json::from(metadata),
+                        last_modified: now as i64,
+                    });
+
+                    let is_next_type = matches!(
+                        node_type,
+                        Some(NodeType::Class | NodeType::Interface | NodeType::Enum)
+                    );
+
+                    (fqn, is_next_type)
+                }
+            } else {
+                (parent_name.clone(), is_type_parent)
             };
 
-            match node_type {
-                Some(NodeType::Function) => {
-                    let symbol_params = lang
-                        .get_parameters(&node, content)
-                        .context("failed to get function params")?
-                        .into_iter()
-                        .map(|(name, type_name, default_value)| SymbolParameter {
-                            name,
-                            type_name,
-                            default_value,
-                        })
-                        .collect();
-
-                    metadata.parameters = Some(symbol_params);
-
-                    metadata.return_type = lang.get_return(&node, content);
-                }
-                Some(NodeType::Field) => {
-                    let ret = lang
-                        .get_return(&node, content)
-                        .context("failed to get function return type")?;
-                    metadata.return_type = Some(ret);
-                }
-                _ => (),
-            };
-
-            symbols.push(Symbol {
-                id: None,
-                vcs_branch: self.vcs.get_current_branch().ok().unwrap(),
-                short_name: short_name,
-                package_name: package_name.to_string(),
-                fully_qualified_name: fqn.clone(),
-                parent_name: Some(parent_name.to_string()),
-                file_path: path.to_string_lossy().to_string(),
-                file_type: lang.get_language().to_string(),
-                symbol_type: node_type.clone().expect("unknown node type").to_string(),
-                modifiers: Json::from(modifiers),
-                line_start: range.start.line as i64,
-                line_end: range.end.line as i64,
-                char_start: range.start.character as i64,
-                char_end: range.end.character as i64,
-                ident_line_start: ident_range.start.line as i64,
-                ident_line_end: ident_range.end.line as i64,
-                ident_char_start: ident_range.start.character as i64,
-                ident_char_end: ident_range.end.character as i64,
-                metadata: Json::from(metadata),
-                last_modified: now as i64,
-            });
-
-            let is_next_type = matches!(
-                node_type,
-                Some(NodeType::Class | NodeType::Interface | NodeType::Enum)
-            );
-
-            (fqn, is_next_type)
-        } else {
-            (parent_name.to_string(), is_type_parent)
-        };
-
-        for child in node.children(&mut node.walk()) {
-            self.dfs(
-                child,
-                lang,
-                &new_parent,
-                new_is_type_parent,
-                symbols,
-                path,
-                content,
-                &package_name,
-                symbol_super_mappings,
-                imports,
-            )?;
+            // Push children in reverse to maintain left-to-right traversal
+            let children: Vec<_> = node.children(&mut node.walk()).collect();
+            for child in children.into_iter().rev() {
+                stack.push((child, new_parent.clone(), new_is_type_parent));
+            }
         }
 
         Ok(())
@@ -305,6 +305,21 @@ impl Indexer {
         entry_name: &str,
         jar_path: &Path,
     ) -> Result<()> {
+        // If this is JDK source and not in allow list, skip
+        if jar_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|n| n == "src.zip")
+            .unwrap_or(false)
+        {
+            if !JAVA_IMPORT_SUBPATHS
+                .iter()
+                .any(|prefix| entry_name.contains(prefix))
+            {
+                return Ok(());
+            }
+        }
+
         let ext = Path::new(entry_name)
             .extension()
             .and_then(|e| e.to_str())
@@ -345,7 +360,8 @@ impl Indexer {
         source_file_path: &str,
         content: &str,
     ) -> Result<(Vec<ExternalSymbol>, Vec<SymbolSuperMapping>)> {
-        let (symbols, mappings) = self.get_symbols_from_tree(tree, lang, jar_path, content)?;
+        let (symbols, mappings) =
+            self.get_symbols_from_tree(tree, lang, jar_path, content, true)?;
 
         let external_symbols = symbols
             .into_iter()

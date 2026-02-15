@@ -827,3 +827,75 @@ async fn test_index_external_dep_jar() {
         }
     );
 }
+
+#[tokio::test]
+async fn test_index_jdk_dep_source_jar() {
+    let db_name = Uuid::new_v4();
+    let db_dir = format!("file:{}?mode=memory&cache=shared", db_name);
+    let repo = Arc::new(Repository::new(&db_dir).await.unwrap());
+    let path = Path::new("tests/fixtures/groovy-gradle-single");
+
+    let gradle_handler = GradleHandler;
+    let dep_jar = gradle_handler
+        .get_jdk_dependency_path(&path)
+        .expect("Failed to get JDK dependency path");
+
+    println!("Result: {:?}", dep_jar);
+
+    assert!(
+        dep_jar.is_some(),
+        "JDK dependency source jar should be found"
+    );
+
+    let vcs = get_vcs_handler(&path);
+    let mut indexer = Indexer::new(Arc::clone(&repo), Arc::clone(&vcs));
+    indexer.register_language("groovy", Arc::new(GroovySupport::new()));
+    indexer.register_language("java", Arc::new(JavaSupport::new()));
+    indexer
+        .index_jar(&dep_jar.unwrap())
+        .await
+        .expect("JAR indexing failed");
+
+    let result = repo
+        .find_external_symbol_by_fqn("java.lang.String")
+        .await
+        .expect("Query failed");
+    assert!(result.is_some(), "External symbol should be found");
+
+    let mut symbol = result.unwrap();
+    symbol.id = None;
+    symbol.last_modified = 0;
+    symbol.jar_path = String::new();
+    symbol.metadata.documentation = None;
+
+    assert_eq!(
+        symbol,
+        ExternalSymbol {
+            id: None,
+            jar_path: String::new(),
+            source_file_path: "java.base/java/lang/String.java".to_string(),
+            short_name: "String".to_string(),
+            fully_qualified_name: "java.lang.String".to_string(),
+            package_name: "java.lang".to_string(),
+            parent_name: Some("java.lang".to_string()),
+            symbol_type: "Class".to_string(),
+            modifiers: Json(vec!["public".to_string(), "final".to_string()]),
+            line_start: 65,
+            line_end: 4916,
+            char_start: 0,
+            char_end: 1,
+            ident_line_start: 141,
+            ident_line_end: 141,
+            ident_char_start: 19,
+            ident_char_end: 25,
+            needs_decompilation: false,
+            metadata: Json(SymbolMetadata {
+                parameters: None,
+                return_type: None,
+                documentation: None,
+                annotations: Some(vec![]),
+            },),
+            last_modified: 0,
+        }
+    );
+}

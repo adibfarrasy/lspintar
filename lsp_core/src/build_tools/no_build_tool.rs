@@ -14,4 +14,8 @@ impl BuildToolHandler for NoBuildTool {
     fn get_dependency_paths(&self, _root: &Path) -> Result<Vec<(PathBuf, Option<PathBuf>)>> {
         Ok(vec![])
     }
+
+    fn get_jdk_dependency_path(&self, _root: &Path) -> Result<Option<PathBuf>> {
+        Ok(None)
+    }
 }

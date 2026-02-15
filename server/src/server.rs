@@ -600,9 +600,16 @@ impl LanguageServer for Backend {
                 .get_dependency_paths(&root)
                 .map_err(|e| panic!("Failed to get dependencies: {e}"));
 
+            let jdk_sources = build_tool
+                .get_jdk_dependency_path(&root)
+                .map_err(|e| panic!("Failed to get JDK sources: {e}"));
+
             *self.indexer.write().await = Some(indexer);
 
-            let jars: Vec<_> = external_deps.unwrap();
+            let mut jars: Vec<_> = external_deps.unwrap();
+            if let Some(src_zip) = jdk_sources.unwrap() {
+                jars.push((src_zip.clone(), Some(src_zip)));
+            }
 
             let total = jars.len();
             let progress = Arc::new(AtomicUsize::new(0));

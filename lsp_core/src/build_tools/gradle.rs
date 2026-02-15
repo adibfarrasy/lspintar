@@ -110,4 +110,55 @@ impl BuildToolHandler for GradleHandler {
             })
             .collect())
     }
+
+    fn get_jdk_dependency_path(&self, root: &Path) -> Result<Option<PathBuf>> {
+        let init_script = r#"
+        allprojects {
+            task lspJdkSources {
+                doLast {
+                    def javaHome = org.gradle.internal.jvm.Jvm.current().javaHome
+                    // Java 9+ location
+                    def libSrcZip = new File(javaHome, 'lib/src.zip')
+                    if (libSrcZip.exists()) {
+                        println libSrcZip.absolutePath
+                        return
+                    }
+                    
+                    // Java 8 location
+                    def srcZip = new File(javaHome, 'src.zip')
+                    if (srcZip.exists()) {
+                        println srcZip.absolutePath
+                    }
+                }
+            }
+        }
+        "#;
+
+        let temp_init = std::env::temp_dir().join("lsp-jdk-init.gradle");
+        std::fs::write(&temp_init, init_script)?;
+
+        let gradle_cmd = if root.join("gradlew").exists() {
+            "./gradlew"
+        } else {
+            "gradle"
+        };
+
+        let output = Command::new(gradle_cmd)
+            .current_dir(root)
+            .args(["-I", temp_init.to_str().unwrap(), "lspJdkSources", "-q"])
+            .output()
+            .context("Failed to execute gradle")?;
+
+        if !output.status.success() {
+            anyhow::bail!("Gradle failed: {}", String::from_utf8_lossy(&output.stderr));
+        }
+
+        let src_zip = String::from_utf8(output.stdout)?
+            .lines()
+            .next()
+            .map(|line| PathBuf::from(line.trim()))
+            .filter(|p| p.exists());
+
+        Ok(src_zip)
+    }
 }
