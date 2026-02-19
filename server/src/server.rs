@@ -583,10 +583,12 @@ impl Backend {
                     Ok(symbols)
                 }
                 None => {
-                    if let Some((_, var_pos)) =
+                    if let Some((var_type, var_pos)) =
                         lang.find_variable_declaration(&tree, &content, &ident, &position)
                     {
                         return Ok(vec![ResolvedSymbol::Local {
+                            name: ident.clone(),
+                            var_type,
                             uri: params.text_document.uri.clone(),
                             position: var_pos,
                         }]);

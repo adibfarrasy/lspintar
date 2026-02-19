@@ -1,4 +1,6 @@
-use tower_lsp::lsp_types::{Location, Position, Range, Url};
+use tower_lsp::lsp_types::{
+    Hover, HoverContents, Location, MarkupContent, MarkupKind, Position, Range, Url,
+};
 
 use crate::{
     lsp_convert::{AsLspHover, AsLspLocation},
@@ -12,7 +14,12 @@ use crate::{
 pub enum ResolvedSymbol {
     Project(Symbol),
     External(ExternalSymbol),
-    Local { uri: Url, position: Position },
+    Local {
+        uri: Url,
+        position: Position,
+        name: String,
+        var_type: Option<String>,
+    },
 }
 
 impl ResolvedSymbol {
@@ -46,7 +53,7 @@ impl AsLspLocation for ResolvedSymbol {
         match self {
             ResolvedSymbol::Project(s) => s.as_lsp_location(),
             ResolvedSymbol::External(s) => s.as_lsp_location(),
-            ResolvedSymbol::Local { uri, position } => {
+            ResolvedSymbol::Local { uri, position, .. } => {
                 Some(Location::new(uri.clone(), Range::new(*position, *position)))
             }
         }
@@ -58,8 +65,18 @@ impl AsLspHover for ResolvedSymbol {
         match self {
             ResolvedSymbol::Project(s) => s.as_lsp_hover(),
             ResolvedSymbol::External(s) => s.as_lsp_hover(),
-            ResolvedSymbol::Local { uri, position } => {
-                todo!()
+            ResolvedSymbol::Local { name, var_type, .. } => {
+                let value = match var_type {
+                    Some(t) => format!("```\n{} {}\n```", t, name),
+                    None => format!("```\n{}\n```", name),
+                };
+                Some(Hover {
+                    contents: HoverContents::Markup(MarkupContent {
+                        kind: MarkupKind::Markdown,
+                        value,
+                    }),
+                    range: None,
+                })
             }
         }
     }

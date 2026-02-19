@@ -52,7 +52,7 @@ async fn test_index_groovy_class() {
             file_path:
                 "tests/fixtures/groovy-gradle-single/src/main/groovy/com/example/User.groovy"
                     .to_string(),
-            file_type: "Groovy".to_string(),
+            file_type: "groovy".to_string(),
             symbol_type: "Class".to_string(),
             modifiers: Json(vec![]),
             line_start: 4,
@@ -109,7 +109,7 @@ async fn test_index_groovy_gradle_single_workspace() {
             file_path:
                 "tests/fixtures/groovy-gradle-single/src/main/groovy/com/example/UserService.groovy"
                     .to_string(),
-            file_type: "Groovy".to_string(),
+            file_type: "groovy".to_string(),
             symbol_type: "Class".to_string(),
             modifiers: Json(vec![]),
             line_start: 8,
@@ -152,7 +152,7 @@ async fn test_index_groovy_gradle_single_workspace() {
             file_path:
                 "tests/fixtures/groovy-gradle-single/src/main/groovy/com/example/Repository.groovy"
                     .to_string(),
-            file_type: "Groovy".to_string(),
+            file_type: "groovy".to_string(),
             symbol_type: "Interface".to_string(),
             modifiers: Json(vec![]),
             line_start: 2,
@@ -195,7 +195,7 @@ async fn test_index_groovy_gradle_single_workspace() {
             file_path:
                 "tests/fixtures/groovy-gradle-single/src/main/groovy/com/example/User.groovy"
                     .to_string(),
-            file_type: "Groovy".to_string(),
+            file_type: "groovy".to_string(),
             symbol_type: "Function".to_string(),
             modifiers: Json(vec![]),
             line_start: 9,
@@ -238,7 +238,7 @@ async fn test_index_groovy_gradle_single_workspace() {
             file_path:
                 "tests/fixtures/groovy-gradle-single/src/main/groovy/com/example/UserService.groovy"
                     .to_string(),
-            file_type: "Groovy".to_string(),
+            file_type: "groovy".to_string(),
             symbol_type: "Field".to_string(),
             modifiers: Json(vec!["private".to_string()]),
             line_start: 11,
@@ -295,7 +295,7 @@ async fn test_index_groovy_class_multi_project() {
             fully_qualified_name: "com.example.core.BaseService".to_string(),
             parent_name: Some("com.example.core".to_string()),
             file_path: "tests/fixtures/groovy-gradle-multi/core/src/main/groovy/com/example/core/BaseService.groovy".to_string(),
-            file_type: "Groovy".to_string(),
+            file_type: "groovy".to_string(),
             symbol_type: "Class".to_string(),
             modifiers: Json(vec!["abstract".to_string()]),
             line_start: 4,
@@ -352,7 +352,7 @@ async fn test_index_groovy_method() {
             fully_qualified_name: "com.example.api.UserController#execute".to_string(),
             parent_name: Some("com.example.api.UserController".to_string()),
             file_path: "tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy".to_string(),
-            file_type: "Groovy".to_string(),
+            file_type: "groovy".to_string(),
             symbol_type: "Function".to_string(),
             modifiers: Json(vec![]),
             line_start: 14,
@@ -409,7 +409,7 @@ async fn test_index_groovy_nested_class() {
             fully_qualified_name: "com.example.api.UserController#ApiResponse".to_string(),
             parent_name: Some("com.example.api.UserController".to_string()),
             file_path: "tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy".to_string(),
-            file_type: "Groovy".to_string(),
+            file_type: "groovy".to_string(),
             symbol_type: "Class".to_string(),
             modifiers: Json(vec!["private".to_string(), "static".to_string()]),
             line_start: 8,
@@ -466,7 +466,7 @@ async fn test_index_groovy_field() {
             fully_qualified_name: "com.example.core.DataProcessor#MAX_BATCH_SIZE".to_string(),
             parent_name: Some("com.example.core.DataProcessor".to_string()),
             file_path: "tests/fixtures/groovy-gradle-multi/core/src/main/groovy/com/example/core/DataProcessor.groovy".to_string(),
-            file_type: "Groovy".to_string(),
+            file_type: "groovy".to_string(),
             symbol_type: "Field".to_string(),
             modifiers: Json(vec!["static".to_string(), "final".to_string()]),
             line_start: 5,
@@ -528,7 +528,7 @@ async fn test_index_groovy_inheritance() {
             fully_qualified_name: "com.example.core.BaseService".to_string(),
             parent_name: Some("com.example.core".to_string()),
             file_path: "tests/fixtures/groovy-gradle-multi/core/src/main/groovy/com/example/core/BaseService.groovy".to_string(),
-            file_type: "Groovy".to_string(),
+            file_type: "groovy".to_string(),
             symbol_type: "Class".to_string(),
             modifiers: Json(vec!["abstract".to_string()]),
             line_start: 4,
@@ -560,7 +560,7 @@ async fn test_index_groovy_inheritance() {
             fully_qualified_name: "com.example.core.DataProcessor".to_string(),
             parent_name: Some("com.example.core".to_string()),
             file_path: "tests/fixtures/groovy-gradle-multi/core/src/main/groovy/com/example/core/DataProcessor.groovy".to_string(),
-            file_type: "Groovy".to_string(),
+            file_type: "groovy".to_string(),
             symbol_type: "Interface".to_string(),
             modifiers: Json(vec![]),
             line_start: 4,
@@ -615,7 +615,7 @@ async fn test_index_kotlin_data_class() {
             parent_name: Some("com.example".to_string()),
             file_path: "tests/fixtures/polyglot-spring/src/main/kotlin/com/example/demo/User.kt"
                 .to_string(),
-            file_type: "Kotlin".to_string(),
+            file_type: "kotlin".to_string(),
             symbol_type: "Class".to_string(),
             modifiers: Json(vec!["data".to_string()]),
             line_start: 2,
@@ -657,7 +657,7 @@ async fn test_index_kotlin_data_class() {
             parent_name: Some("com.example.User".to_string()),
             file_path: "tests/fixtures/polyglot-spring/src/main/kotlin/com/example/demo/User.kt"
                 .to_string(),
-            file_type: "Kotlin".to_string(),
+            file_type: "kotlin".to_string(),
             symbol_type: "Field".to_string(),
             modifiers: Json(vec![]),
             line_start: 2,

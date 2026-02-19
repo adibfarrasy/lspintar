@@ -80,7 +80,7 @@ pub trait LanguageSupport: Send + Sync {
         content: &str,
         var_name: &str,
         position: &Position,
-    ) -> Option<(String, Position)>;
+    ) -> Option<(Option<String>, Position)>;
 
     fn extract_call_arguments(
         &self,

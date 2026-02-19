@@ -217,7 +217,7 @@ impl KotlinSupport {
         content: &str,
         var_name: &str,
         reference_byte: usize,
-    ) -> Option<(String, Position)> {
+    ) -> Option<(Option<String>, Position)> {
         let mut cursor = scope_node.walk();
         if !cursor.goto_first_child() {
             return None;
@@ -242,8 +242,8 @@ impl KotlinSupport {
                                     {
                                         let type_name = type_child
                                             .utf8_text(content.as_bytes())
-                                            .ok()?
-                                            .to_string();
+                                            .ok()
+                                            .map(|s| s.to_string());
 
                                         let (_, var_position) = ts_helper::get_one_with_position(
                                             &child,
@@ -260,7 +260,7 @@ impl KotlinSupport {
                                 for value_child in child.children(&mut value_cursor) {
                                     if value_child.kind() == "call_expression" {
                                         let type_name =
-                                            self.infer_type_from_value(value_child, content)?;
+                                            self.infer_type_from_value(value_child, content);
                                         let identifier = var_child.child_by_field_name("name")?;
                                         let var_position = Position {
                                             line: identifier.start_position().row as u32,
@@ -276,7 +276,10 @@ impl KotlinSupport {
                 "class_parameter" | "parameter" => {
                     if self.declares_variable(child, content, var_name) {
                         let type_node = child.child_by_field_name("type")?;
-                        let type_name = type_node.utf8_text(content.as_bytes()).ok()?.to_string();
+                        let type_name = type_node
+                            .utf8_text(content.as_bytes())
+                            .ok()
+                            .map(|s| s.to_string());
                         let identifier = child.child_by_field_name("name")?;
                         let var_position = Position {
                             line: identifier.start_position().row as u32,
@@ -288,8 +291,10 @@ impl KotlinSupport {
                 "variable_declaration" => {
                     if self.declares_variable(child, content, var_name) {
                         if let Some(type_node) = child.child_by_field_name("type") {
-                            let type_name =
-                                type_node.utf8_text(content.as_bytes()).ok()?.to_string();
+                            let type_name = type_node
+                                .utf8_text(content.as_bytes())
+                                .ok()
+                                .map(|s| s.to_string());
                             let identifier = child.child_by_field_name("name")?;
                             let var_position = Position {
                                 line: identifier.start_position().row as u32,
@@ -646,7 +651,7 @@ impl LanguageSupport for KotlinSupport {
         position: &Position,
     ) -> Option<String> {
         self.find_variable_declaration(tree, content, var_name, position)
-            .map(|(type_name, _)| type_name)
+            .map(|(type_name, _)| type_name)?
     }
 
     fn extract_call_arguments(
@@ -839,7 +844,7 @@ impl LanguageSupport for KotlinSupport {
         content: &str,
         var_name: &str,
         position: &Position,
-    ) -> Option<(String, Position)> {
+    ) -> Option<(Option<String>, Position)> {
         let mut current_node = get_node_at_position(tree, content, position)?;
         if var_name == "this" {
             let mut node = current_node;
@@ -853,7 +858,7 @@ impl LanguageSupport for KotlinSupport {
                     let name = self
                         .get_ident_within_node(&parent, content, &pos)
                         .map(|(name, _)| name)?;
-                    return Some((name, pos));
+                    return Some((Some(name), pos));
                 }
                 node = parent;
             }

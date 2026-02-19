@@ -1,4 +1,4 @@
-use lsp_core::util::strip_comment_signifiers;
+use lsp_core::{node_types::NodeType, util::strip_comment_signifiers};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, types::Json};
 use tower_lsp::lsp_types::{
@@ -81,14 +81,11 @@ impl AsLspLocation for Symbol {
 impl AsLspHover for Symbol {
     fn as_lsp_hover(&self) -> Option<Hover> {
         let mut parts = Vec::new();
-
-        parts.push(format!("```{}", self.file_type.to_lowercase()));
-
+        parts.push(format!("```{}", self.file_type));
         if !self.package_name.is_empty() {
             parts.push(format!("package {}", self.package_name));
             parts.push(String::new());
         }
-
         if let Some(annotations) = &self.metadata.annotations {
             for annotation in annotations {
                 if !annotation.is_empty() {
@@ -97,15 +94,46 @@ impl AsLspHover for Symbol {
             }
         }
 
-        let mut signature_line = String::new();
+        let node_type = NodeType::from_string(&self.symbol_type);
         let modifiers = self.modifiers.iter().cloned().collect::<Vec<_>>().join(" ");
+        let mut signature_line = String::new();
+
         if !modifiers.is_empty() {
             signature_line.push_str(&modifiers);
             signature_line.push(' ');
         }
-        signature_line.push_str(&self.symbol_type.to_lowercase());
-        signature_line.push(' ');
-        signature_line.push_str(&self.short_name);
+
+        match node_type {
+            Some(NodeType::Function) => {
+                if let Some(kw) = NodeType::Function.keyword(&self.file_type) {
+                    signature_line.push_str(kw);
+                    signature_line.push(' ');
+                }
+                if let Some(ret) = &self.metadata.return_type {
+                    signature_line.push_str(ret);
+                    signature_line.push(' ');
+                }
+                signature_line.push_str(&self.short_name);
+            }
+            Some(NodeType::Field) => {
+                if let Some(ret) = &self.metadata.return_type {
+                    signature_line.push_str(ret);
+                    signature_line.push(' ');
+                }
+                signature_line.push_str(&self.short_name);
+            }
+            Some(ref nt) => {
+                if let Some(kw) = nt.keyword(&self.file_type) {
+                    signature_line.push_str(kw);
+                    signature_line.push(' ');
+                }
+                signature_line.push_str(&self.short_name);
+            }
+            None => {
+                signature_line.push_str(&self.short_name);
+            }
+        }
+
         parts.push(signature_line);
 
         if let Some(params) = &self.metadata.parameters {
@@ -120,7 +148,6 @@ impl AsLspHover for Symbol {
                     }
                     s
                 };
-
                 if params.len() > 3 {
                     parts.push("(".to_string());
                     for param in params {
@@ -142,15 +169,12 @@ impl AsLspHover for Symbol {
             parts.push(String::new());
             parts.push("---".to_string());
         }
-
         parts.push("```".to_string());
-
         if let Some(doc) = &self.metadata.documentation {
             if !doc.is_empty() {
                 parts.push(strip_comment_signifiers(doc));
             }
         }
-
         Some(Hover {
             contents: HoverContents::Markup(MarkupContent {
                 kind: MarkupKind::Markdown,

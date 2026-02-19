@@ -10,9 +10,9 @@ pub enum Language {
 impl Display for Language {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
-            Language::Java => write!(f, "Java"),
-            Language::Groovy => write!(f, "Groovy"),
-            Language::Kotlin => write!(f, "Kotlin"),
+            Language::Java => write!(f, "java"),
+            Language::Groovy => write!(f, "groovy"),
+            Language::Kotlin => write!(f, "kotlin"),
         }
     }
 }

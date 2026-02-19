@@ -214,7 +214,7 @@ impl GroovySupport {
         content: &str,
         var_name: &str,
         reference_byte: usize,
-    ) -> Option<(String, Position)> {
+    ) -> Option<(Option<String>, Position)> {
         let mut cursor = scope_node.walk();
         if !cursor.goto_first_child() {
             return None;
@@ -233,7 +233,7 @@ impl GroovySupport {
                             line: type_node.start_position().row as u32,
                             character: type_node.start_position().column as u32,
                         };
-                        let var_type = self.get_type_at_position(child, content, &type_position)?;
+                        let var_type = self.get_type_at_position(child, content, &type_position);
 
                         let (_, var_position) = ts_helper::get_one_with_position(
                             &child,
@@ -537,7 +537,7 @@ impl LanguageSupport for GroovySupport {
         position: &Position,
     ) -> Option<String> {
         self.find_variable_declaration(tree, content, var_name, position)
-            .map(|(type_name, _)| type_name)
+            .map(|(type_name, _)| type_name)?
     }
 
     fn extract_call_arguments(
@@ -687,7 +687,7 @@ impl LanguageSupport for GroovySupport {
         content: &str,
         var_name: &str,
         position: &Position,
-    ) -> Option<(String, Position)> {
+    ) -> Option<(Option<String>, Position)> {
         let mut current_node = get_node_at_position(tree, content, position)?;
         if var_name == "this" {
             let mut node = current_node;
@@ -701,7 +701,7 @@ impl LanguageSupport for GroovySupport {
                     let name = self
                         .get_ident_within_node(&parent, content, &pos)
                         .map(|(name, _)| name)?;
-                    return Some((name, pos));
+                    return Some((Some(name), pos));
                 }
                 node = parent;
             }

@@ -35,4 +35,24 @@ impl NodeType {
             _ => None,
         }
     }
+
+    pub fn keyword(&self, file_type: &str) -> Option<&'static str> {
+        match self {
+            NodeType::Class => Some("class"),
+            NodeType::Interface => match file_type {
+                "kt" => Some("interface"),
+                _ => Some("interface"),
+            },
+            NodeType::Function => match file_type {
+                "kt" => Some("fun"),
+                _ => None,
+            },
+            NodeType::Enum => match file_type {
+                "kt" => Some("enum class"),
+                _ => Some("enum"),
+            },
+            NodeType::Annotation => Some("@interface"),
+            NodeType::Field => None, // just show type + name
+        }
+    }
 }
