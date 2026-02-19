@@ -146,6 +146,7 @@ impl KotlinSupport {
                     ("super_interfaces", None),
                     ("superclass", None),
                     ("return_name", None),
+                    ("annotation", None),
                 ]
                 .into_iter()
                 .for_each(|(name, qual)| {
@@ -534,7 +535,6 @@ impl LanguageSupport for KotlinSupport {
         match node_type {
             Some(_) => ts_helper::get_many(node, source, &GET_ANNOTATIONS_QUERY, Some(1))
                 .into_iter()
-                .map(|i| i.strip_prefix("@").unwrap_or_default().trim().to_string())
                 .collect(),
             None => Vec::new(),
         }

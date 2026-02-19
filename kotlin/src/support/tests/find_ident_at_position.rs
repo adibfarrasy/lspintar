@@ -503,3 +503,104 @@ fn test_return_type_detection() {
     let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
     assert_eq!(ident, Some(("String".to_string(), None)));
 }
+
+#[test]
+fn test_annotation_on_class() {
+    let support = KotlinSupport::new();
+    let content = r#"
+        @Controller
+        class Foo {
+            fun test(): String {
+                return "hello"
+            }
+        }"#;
+    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let pos = find_position(content, "Controller");
+    let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
+    assert_eq!(ident, Some(("Controller".to_string(), None)));
+}
+
+#[test]
+fn test_annotation_on_method() {
+    let support = KotlinSupport::new();
+    let content = r#"
+        class Foo {
+            @GetMapping("/test")
+            fun test(): String {
+                return "hello"
+            }
+        }"#;
+    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let pos = find_position(content, "GetMapping");
+    let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
+    assert_eq!(ident, Some(("GetMapping".to_string(), None)));
+}
+
+#[test]
+fn test_annotation_on_field() {
+    let support = KotlinSupport::new();
+    let content = r#"
+        class Foo {
+            @Autowired
+            val service: String = ""
+        }"#;
+    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let pos = find_position(content, "Autowired");
+    let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
+    assert_eq!(ident, Some(("Autowired".to_string(), None)));
+}
+
+#[test]
+fn test_annotation_with_parameters() {
+    let support = KotlinSupport::new();
+    let content = r#"
+        class Foo {
+            @RequestMapping(value = "/api", method = RequestMethod.GET)
+            fun test(): String {
+                return "hello"
+            }
+        }"#;
+    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let pos = find_position(content, "RequestMapping");
+    let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
+    assert_eq!(ident, Some(("RequestMapping".to_string(), None)));
+}
+
+#[test]
+fn test_annotation_on_parameter() {
+    let support = KotlinSupport::new();
+    let content = r#"
+        class Foo {
+            fun test(@PathVariable id: String): String {
+                return id
+            }
+        }"#;
+    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let pos = find_position(content, "PathVariable");
+    let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
+    assert_eq!(ident, Some(("PathVariable".to_string(), None)));
+}
+
+#[test]
+fn test_multi_annotation_on_class() {
+    let support = KotlinSupport::new();
+    let content = r#"
+        @[Component Service]
+        class Foo {}"#;
+    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let pos = find_position(content, "Component");
+    let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
+    assert_eq!(ident, Some(("Component".to_string(), None)));
+}
+
+#[test]
+fn test_multi_annotation_with_constructor_invocation() {
+    let support = KotlinSupport::new();
+    let content = r#"
+        @[RequestMapping("/api") Service]
+        class Foo {}"#;
+    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let pos = find_position(content, "RequestMapping");
+    let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
+    assert_eq!(ident, Some(("RequestMapping".to_string(), None)));
+}

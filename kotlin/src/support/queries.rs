@@ -87,9 +87,9 @@ pub static GET_SHORT_NAME_QUERY: LazyLock<Query> = LazyLock::new(|| {
         &KOTLIN_TS_LANGUAGE,
         r#"
         [
-        (class_declaration name: (type_identifier) @name)
-        (interface_declaration name: (type_identifier) @name)
-        (function_declaration name: (identifier) @name)
+            (class_declaration name: (type_identifier) @name)
+            (interface_declaration name: (type_identifier) @name)
+            (function_declaration name: (identifier) @name)
         ]
         "#,
     )
@@ -101,10 +101,14 @@ pub static GET_ANNOTATIONS_QUERY: LazyLock<Query> = LazyLock::new(|| {
         &KOTLIN_TS_LANGUAGE,
         r#"
         [
-          (class_declaration (modifiers (annotation) @annotation))
-          (interface_declaration (modifiers (annotation) @annotation))
-          (property_declaration (modifiers (annotation) @annotation))
-          (function_declaration (modifiers (annotation) @annotation))
+            (modifiers [
+              (annotation (user_type (type_identifier) @annotation))
+              (annotation (constructor_invocation (user_type (type_identifier) @annotation)))
+            ])
+            (parameter_modifiers [
+              (annotation (user_type (type_identifier) @annotation))
+              (annotation (constructor_invocation (user_type (type_identifier) @annotation)))
+            ])
         ]
         "#,
     )
@@ -153,6 +157,16 @@ pub static IDENT_QUERY: LazyLock<Query> = LazyLock::new(|| {
           (constructor_invocation 
             (user_type (type_identifier) @superclass)))
         (function_declaration return_type: (user_type (type_identifier) @return_name))
+        [
+            (modifiers [
+              (annotation (user_type (type_identifier) @annotation))
+              (annotation (constructor_invocation (user_type (type_identifier) @annotation)))
+            ])
+            (parameter_modifiers [
+              (annotation (user_type (type_identifier) @annotation))
+              (annotation (constructor_invocation (user_type (type_identifier) @annotation)))
+            ])
+        ]
         "#,
     )
     .unwrap()

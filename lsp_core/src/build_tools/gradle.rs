@@ -21,7 +21,8 @@ impl BuildToolHandler for GradleHandler {
         let init_script = r#"
         allprojects {
             afterEvaluate {
-                if (plugins.hasPlugin('java') || plugins.hasPlugin('groovy')) {
+                if (['java', 'groovy', 'kotlin', 'org.jetbrains.kotlin.jvm']
+                    .any { plugins.hasPlugin(it) }) {
                     task lspClasspath {
                         doLast {
                             def allJars = (configurations.compileClasspath.files + configurations.runtimeClasspath.files).unique()

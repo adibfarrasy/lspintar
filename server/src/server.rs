@@ -74,7 +74,7 @@ impl Backend {
         }
 
         // Wildcard import match
-        if let Some(import) = imports.iter().find(|i| i.split('.').last() == Some("*")) {
+        for import in imports.iter().filter(|i| i.ends_with(".*")) {
             let tmp_fqn = import.replace("*", name);
             if let Some(_) = self
                 .repo
@@ -84,7 +84,6 @@ impl Backend {
             {
                 return Some(tmp_fqn);
             }
-
             if let Ok(Some(_)) = self.repo.find_external_symbol_by_fqn(&tmp_fqn).await {
                 return Some(tmp_fqn);
             }
