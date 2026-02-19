@@ -90,9 +90,6 @@ impl Backend {
             }
         }
 
-        // Implicit import match
-        // TODO: what do?
-
         // Package + name fallback
         let fallback_fqn = package_name
             .map(|pkg| {
