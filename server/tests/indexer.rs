@@ -970,7 +970,12 @@ async fn test_index_external_annotation_dep_jar() {
                 parameters: None,
                 return_type: None,
                 documentation: None,
-                annotations: Some(vec![]),
+                annotations: Some(vec![
+                    "Target".to_string(),
+                    "Retention".to_string(),
+                    "Documented".to_string(),
+                    "Component".to_string()
+                ],),
             },),
             last_modified: 0,
         }
