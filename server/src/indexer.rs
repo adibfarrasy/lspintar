@@ -390,6 +390,7 @@ impl Indexer {
                 needs_decompilation: false,
                 metadata: s.metadata,
                 last_modified: s.last_modified,
+                file_type: lang.get_language().to_string(),
             })
             .collect();
 
@@ -453,11 +454,15 @@ impl Indexer {
                 return_type: None,
             }),
             last_modified: now,
+            file_type: "java".to_string(),
         });
 
         // Methods
         for method in &class.methods {
             let method_name = get_utf8(&class.const_pool, method.name_index)?;
+            let descriptor = get_utf8(&class.const_pool, method.descriptor_index)?;
+            let (params, return_type) = parse_method_descriptor(&descriptor);
+
             symbols.push(ExternalSymbol {
                 id: None,
                 jar_path: jar_path.to_string_lossy().to_string(),
@@ -478,18 +483,22 @@ impl Indexer {
                 ident_char_end: 0,
                 needs_decompilation: true,
                 metadata: Json::from(SymbolMetadata {
-                    annotations: Some(vec![]),
-                    parameters: None,
+                    annotations: None,
+                    parameters: Some(params),
                     documentation: None,
-                    return_type: None,
+                    return_type: Some(return_type),
                 }),
                 last_modified: now,
+                file_type: "java".to_string(),
             });
         }
 
         // Fields
         for field in &class.fields {
             let field_name = get_utf8(&class.const_pool, field.name_index)?;
+            let descriptor = get_utf8(&class.const_pool, field.descriptor_index)?;
+            let field_type = parse_field_descriptor(&descriptor);
+
             symbols.push(ExternalSymbol {
                 id: None,
                 jar_path: jar_path.to_string_lossy().to_string(),
@@ -510,12 +519,13 @@ impl Indexer {
                 ident_char_end: 0,
                 needs_decompilation: true,
                 metadata: Json::from(SymbolMetadata {
-                    annotations: Some(vec![]),
+                    annotations: None,
                     parameters: None,
                     documentation: None,
-                    return_type: None,
+                    return_type: Some(field_type),
                 }),
                 last_modified: now,
+                file_type: "java".to_string(),
             });
         }
 
@@ -600,4 +610,71 @@ fn is_excluded(entry: &walkdir::DirEntry) -> bool {
         .to_str()
         .map(|s| matches!(s, "build" | "target" | ".gradle" | ".git" | "out" | "bin"))
         .unwrap_or(false)
+}
+
+fn parse_field_descriptor(descriptor: &str) -> String {
+    match descriptor {
+        "I" => "int".to_string(),
+        "J" => "long".to_string(),
+        "D" => "double".to_string(),
+        "F" => "float".to_string(),
+        "Z" => "boolean".to_string(),
+        "B" => "byte".to_string(),
+        "C" => "char".to_string(),
+        "S" => "short".to_string(),
+        "V" => "void".to_string(),
+        s if s.starts_with('L') => s[1..].trim_end_matches(';').replace('/', "."),
+        s if s.starts_with('[') => format!("{}[]", parse_field_descriptor(&s[1..])),
+        s => s.to_string(),
+    }
+}
+
+fn parse_method_descriptor(descriptor: &str) -> (Vec<SymbolParameter>, String) {
+    let (params_str, return_str) = descriptor
+        .strip_prefix('(')
+        .and_then(|s| s.split_once(')'))
+        .unwrap_or(("", descriptor));
+
+    let params = parse_params(params_str)
+        .into_iter()
+        .enumerate()
+        .map(|(i, type_name)| SymbolParameter {
+            name: format!("arg{}", i),
+            type_name: Some(type_name),
+            default_value: None,
+        })
+        .collect();
+
+    (params, parse_field_descriptor(return_str))
+}
+
+fn parse_params(params_str: &str) -> Vec<String> {
+    let mut types = Vec::new();
+    let mut chars = params_str.chars().peekable();
+    while let Some(c) = chars.next() {
+        let t = match c {
+            'I' => "int".to_string(),
+            'J' => "long".to_string(),
+            'D' => "double".to_string(),
+            'F' => "float".to_string(),
+            'Z' => "boolean".to_string(),
+            'B' => "byte".to_string(),
+            'C' => "char".to_string(),
+            'S' => "short".to_string(),
+            'L' => {
+                let class: String = chars.by_ref().take_while(|&c| c != ';').collect();
+                class.replace('/', ".")
+            }
+            '[' => {
+                let inner = parse_params(&chars.by_ref().collect::<String>());
+                if let Some(first) = inner.into_iter().next() {
+                    types.push(format!("{}[]", first));
+                }
+                break;
+            }
+            _ => c.to_string(),
+        };
+        types.push(t);
+    }
+    types
 }

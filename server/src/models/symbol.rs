@@ -1,8 +1,11 @@
+use lsp_core::util::strip_comment_signifiers;
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, types::Json};
-use tower_lsp::lsp_types::{Location, Position, Range, Url};
+use tower_lsp::lsp_types::{
+    Hover, HoverContents, Location, MarkupContent, MarkupKind, Position, Range, Url,
+};
 
-use crate::as_lsp_location::AsLspLocation;
+use crate::lsp_convert::{AsLspHover, AsLspLocation};
 
 #[derive(Debug, Clone, FromRow, PartialEq, Eq)]
 pub struct Symbol {
@@ -71,6 +74,89 @@ impl AsLspLocation for Symbol {
                     character: self.ident_char_end as u32,
                 },
             },
+        })
+    }
+}
+
+impl AsLspHover for Symbol {
+    fn as_lsp_hover(&self) -> Option<Hover> {
+        let mut parts = Vec::new();
+
+        parts.push(format!("```{}", self.file_type.to_lowercase()));
+
+        if !self.package_name.is_empty() {
+            parts.push(format!("package {}", self.package_name));
+            parts.push(String::new());
+        }
+
+        if let Some(annotations) = &self.metadata.annotations {
+            for annotation in annotations {
+                if !annotation.is_empty() {
+                    parts.push(annotation.clone());
+                }
+            }
+        }
+
+        let mut signature_line = String::new();
+        let modifiers = self.modifiers.iter().cloned().collect::<Vec<_>>().join(" ");
+        if !modifiers.is_empty() {
+            signature_line.push_str(&modifiers);
+            signature_line.push(' ');
+        }
+        signature_line.push_str(&self.symbol_type.to_lowercase());
+        signature_line.push(' ');
+        signature_line.push_str(&self.short_name);
+        parts.push(signature_line);
+
+        if let Some(params) = &self.metadata.parameters {
+            if !params.is_empty() {
+                let format_param = |p: &SymbolParameter| {
+                    let mut s = match &p.type_name {
+                        Some(t) => format!("{} {}", t, p.name),
+                        None => p.name.clone(),
+                    };
+                    if let Some(default) = &p.default_value {
+                        s.push_str(&format!(" = {}", default));
+                    }
+                    s
+                };
+
+                if params.len() > 3 {
+                    parts.push("(".to_string());
+                    for param in params {
+                        parts.push(format!("    {},", format_param(param)));
+                    }
+                    parts.push(")".to_string());
+                } else {
+                    let params_str = params
+                        .iter()
+                        .map(format_param)
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    parts.push(format!("({})", params_str));
+                }
+            }
+        }
+
+        if self.metadata.documentation.is_some() {
+            parts.push(String::new());
+            parts.push("---".to_string());
+        }
+
+        parts.push("```".to_string());
+
+        if let Some(doc) = &self.metadata.documentation {
+            if !doc.is_empty() {
+                parts.push(strip_comment_signifiers(doc));
+            }
+        }
+
+        Some(Hover {
+            contents: HoverContents::Markup(MarkupContent {
+                kind: MarkupKind::Markdown,
+                value: parts.join("\n"),
+            }),
+            range: None,
         })
     }
 }

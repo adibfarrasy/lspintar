@@ -24,7 +24,9 @@ use tower_lsp::{jsonrpc::Result, lsp_types::request::GotoImplementationResponse}
 use tree_sitter::Tree;
 
 use crate::{
-    Indexer, Repository, as_lsp_location::AsLspLocation, enums::ResolvedSymbol,
+    Indexer, Repository,
+    enums::ResolvedSymbol,
+    lsp_convert::{AsLspHover, AsLspLocation},
     models::symbol::Symbol,
 };
 
@@ -302,44 +304,6 @@ impl Backend {
         }
     }
 
-    #[tracing::instrument(skip_all)]
-    async fn symbol_to_defn_response(
-        &self,
-        fqn: String,
-        branch: &str,
-    ) -> Result<GotoDefinitionResponse> {
-        if let Ok(Some(symbol)) = self.repo.find_symbol_by_fqn_and_branch(&fqn, branch).await {
-            return symbol
-                .as_lsp_location()
-                .map(GotoDefinitionResponse::from)
-                .ok_or_else(|| {
-                    tower_lsp::jsonrpc::Error::invalid_params(
-                        "Failed to convert to location".to_string(),
-                    )
-                });
-        }
-
-        let external_symbol = self
-            .repo
-            .find_external_symbol_by_fqn(&fqn)
-            .await
-            .map_err(|e| {
-                tower_lsp::jsonrpc::Error::invalid_params(format!("Failed to find symbol: {}", e))
-            })?
-            .ok_or_else(|| {
-                tower_lsp::jsonrpc::Error::invalid_params(format!("Symbol not found for {}", fqn))
-            })?;
-
-        external_symbol
-            .as_lsp_location()
-            .map(GotoDefinitionResponse::from)
-            .ok_or_else(|| {
-                tower_lsp::jsonrpc::Error::invalid_params(
-                    "Failed to convert to location".to_string(),
-                )
-            })
-    }
-
     fn resolved_symbols_to_impl_response(
         &self,
         implementations: Vec<ResolvedSymbol>,
@@ -398,9 +362,11 @@ impl Backend {
                     None => return vec![],
                 };
 
-                current_type_fqn = if let Some(return_type) = &resolved.metadata().return_type {
+                current_type_fqn = if let Some(return_type) =
+                    resolved.metadata().and_then(|m| m.return_type.as_ref())
+                {
                     // For methods/fields, resolve their return/field type
-                    let parent_package = resolved.package_name().to_string();
+                    let parent_package = resolved.package_name().unwrap_or_default().to_string();
                     match self
                         .resolve_fqn(return_type, imports.clone(), Some(parent_package), branch)
                         .await
@@ -410,7 +376,7 @@ impl Backend {
                     }
                 } else {
                     // For types (Class/Interface/Enum), use their FQN directly
-                    resolved.fully_qualified_name().to_string()
+                    resolved.package_name().unwrap_or_default().to_string()
                 };
             }
         }
@@ -436,8 +402,7 @@ impl Backend {
             .into_iter()
             .filter(|s| {
                 s.metadata()
-                    .parameters
-                    .as_ref()
+                    .and_then(|m| m.parameters.as_ref())
                     .map_or(false, |params| params.len() == arg_count)
             })
             .collect();
@@ -469,8 +434,8 @@ impl Backend {
         }
 
         for resolved in arity_matches {
-            let params = &resolved.metadata().parameters;
-            let pkg_name = resolved.package_name();
+            let params = &resolved.metadata().and_then(|m| m.parameters.as_ref());
+            let pkg_name = resolved.package_name().unwrap_or_default();
 
             if let Some(params) = params {
                 let mut all_match = true;
@@ -530,8 +495,138 @@ impl Backend {
                     .parameters
                     .as_ref()
                     .map_or(false, |params| params.len() == expected_param_count),
+                ResolvedSymbol::Local { .. } => false,
             })
             .collect()
+    }
+
+    async fn resolve_symbol_at_position(
+        &self,
+        params: &TextDocumentPositionParams,
+        branch: &str,
+    ) -> Result<Vec<ResolvedSymbol>> {
+        let path = PathBuf::from_str(params.text_document.uri.path()).unwrap();
+
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .ok_or_else(|| tower_lsp::jsonrpc::Error::invalid_params("No file extension"))?;
+
+        let lang = self.languages.get(ext).ok_or_else(|| {
+            tower_lsp::jsonrpc::Error::invalid_params("Failed to get language support")
+        })?;
+
+        let (tree, content) = lang
+            .parse(&path)
+            .ok_or_else(|| tower_lsp::jsonrpc::Error::invalid_params("Failed to parse file"))?;
+
+        let imports = lang.get_imports(&tree, &content);
+        let package_name = lang.get_package_name(&tree, &content);
+        let position = params.position;
+
+        if let Some(type_name) = lang.get_type_at_position(tree.root_node(), &content, &position) {
+            let fqn = self
+                .resolve_fqn(&type_name, imports, package_name, branch)
+                .await
+                .ok_or_else(|| {
+                    tower_lsp::jsonrpc::Error::invalid_params("Failed to find FQN by location")
+                })?;
+
+            return self.fqn_to_symbols(fqn, branch).await;
+        }
+
+        if let Some((ident, qualifier)) = lang.find_ident_at_position(&tree, &content, &position) {
+            match qualifier {
+                Some(q) => {
+                    let symbols = self
+                        .resolve_type_member_chain(
+                            &q,
+                            &ident,
+                            &lang,
+                            &tree,
+                            &content,
+                            imports.clone(),
+                            branch,
+                            &position,
+                            package_name.clone(),
+                        )
+                        .await;
+
+                    if symbols.is_empty() {
+                        return Err(tower_lsp::jsonrpc::Error::invalid_params(format!(
+                            "Qualifier {q} found but failed to resolve"
+                        )));
+                    }
+
+                    if symbols.len() == 1 {
+                        return Ok(symbols);
+                    }
+
+                    if let Some(args) = lang.extract_call_arguments(&tree, &content, &position) {
+                        if let Some(symbol) = self
+                            .select_best_overload(
+                                symbols.clone(),
+                                args,
+                                lang,
+                                &tree,
+                                &content,
+                                &imports,
+                                package_name,
+                                branch,
+                            )
+                            .await
+                        {
+                            return Ok(vec![symbol]);
+                        }
+                    }
+
+                    Ok(symbols)
+                }
+                None => {
+                    if let Some((_, var_pos)) =
+                        lang.find_variable_declaration(&tree, &content, &ident, &position)
+                    {
+                        return Ok(vec![ResolvedSymbol::Local {
+                            uri: params.text_document.uri.clone(),
+                            position: var_pos,
+                        }]);
+                    }
+
+                    let fqn = self
+                        .resolve_fqn(&ident, imports, package_name, branch)
+                        .await
+                        .ok_or_else(|| {
+                            tower_lsp::jsonrpc::Error::invalid_params(
+                                "Failed to find FQN by location",
+                            )
+                        })?;
+
+                    self.fqn_to_symbols(fqn, branch).await
+                }
+            }
+        } else {
+            Err(tower_lsp::jsonrpc::Error::invalid_params(
+                "Failed to get ident/type name",
+            ))
+        }
+    }
+
+    #[tracing::instrument(skip_all)]
+    async fn fqn_to_symbols(&self, fqn: String, branch: &str) -> Result<Vec<ResolvedSymbol>> {
+        if let Ok(Some(symbol)) = self.repo.find_symbol_by_fqn_and_branch(&fqn, branch).await {
+            return Ok(vec![ResolvedSymbol::Project(symbol)]);
+        }
+        let external_symbol = self
+            .repo
+            .find_external_symbol_by_fqn(&fqn)
+            .await
+            .map_err(|e| {
+                tower_lsp::jsonrpc::Error::invalid_params(format!("Failed to find symbol: {}", e))
+            })?
+            .ok_or_else(|| {
+                tower_lsp::jsonrpc::Error::invalid_params(format!("Symbol not found for {}", fqn))
+            })?;
+        Ok(vec![ResolvedSymbol::External(external_symbol)])
     }
 }
 
@@ -670,154 +765,21 @@ impl LanguageServer for Backend {
                 ))
             })?;
 
-        let path = PathBuf::from_str(
-            params
-                .text_document_position_params
-                .text_document
-                .uri
-                .path(),
-        )
-        .unwrap();
+        let symbols = self
+            .resolve_symbol_at_position(&params.text_document_position_params, &branch)
+            .await?;
 
-        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-            let lang = self.languages.get(ext).ok_or_else(|| {
-                tower_lsp::jsonrpc::Error::invalid_params(
-                    format!("Failed to get language support",),
-                )
-            })?;
-
-            let (tree, content) = lang.parse(&path).ok_or_else(|| {
-                tower_lsp::jsonrpc::Error::invalid_params(format!("Failed to parse file"))
-            })?;
-
-            let imports = lang.get_imports(&tree, &content);
-            let package_name = lang.get_package_name(&tree, &content);
-
-            let position = params.text_document_position_params.position;
-
-            if let Some(type_name) =
-                lang.get_type_at_position(tree.root_node(), &content, &position)
-            {
-                let fqn = self
-                    .resolve_fqn(&type_name, imports, package_name, &branch)
-                    .await
-                    .ok_or(tower_lsp::jsonrpc::Error::invalid_params(format!(
-                        "Failed to find FQN by location",
-                    )))?;
-
-                return Ok(Some(self.symbol_to_defn_response(fqn, &branch).await?));
-            };
-
-            if let Some((ident, qualifier)) =
-                lang.find_ident_at_position(&tree, &content, &position)
-            {
-                match qualifier {
-                    Some(q) => {
-                        let symbols = self
-                            .resolve_type_member_chain(
-                                &q,
-                                &ident,
-                                &lang,
-                                &tree,
-                                &content,
-                                imports.clone(),
-                                &branch,
-                                &position,
-                                package_name.clone(),
-                            )
-                            .await;
-
-                        if !symbols.is_empty() {
-                            if symbols.len() == 1 {
-                                let symbol = symbols.iter().next().unwrap();
-                                return Ok(Some(
-                                    symbol
-                                        .as_lsp_location()
-                                        .map(GotoDefinitionResponse::from)
-                                        .ok_or_else(|| {
-                                            tower_lsp::jsonrpc::Error::invalid_params(
-                                                "Failed to convert to location".to_string(),
-                                            )
-                                        })?,
-                                ));
-                            }
-
-                            let call_args = lang.extract_call_arguments(&tree, &content, &position);
-                            if let Some(args) = call_args {
-                                if let Some(symbol) = self
-                                    .select_best_overload(
-                                        symbols.clone(),
-                                        args,
-                                        lang,
-                                        &tree,
-                                        &content,
-                                        &imports,
-                                        package_name,
-                                        &branch,
-                                    )
-                                    .await
-                                {
-                                    return Ok(Some(
-                                        symbol
-                                            .as_lsp_location()
-                                            .map(GotoDefinitionResponse::from)
-                                            .ok_or_else(|| {
-                                                tower_lsp::jsonrpc::Error::invalid_params(
-                                                    "Failed to convert to location".to_string(),
-                                                )
-                                            })?,
-                                    ));
-                                }
-                            }
-
-                            // No call context, return all overloads
-                            let locations: Vec<Location> = symbols
-                                .into_iter()
-                                .filter_map(|s| s.as_lsp_location())
-                                .collect();
-
-                            if !locations.is_empty() {
-                                return Ok(Some(GotoDefinitionResponse::Array(locations)));
-                            }
-                        }
-
-                        return Err(tower_lsp::jsonrpc::Error::invalid_params(format!(
-                            "Qualifier {q} found but failed to resolve"
-                        )));
-                    }
-                    None => {
-                        if let Some((_, var_pos)) =
-                            lang.find_variable_declaration(&tree, &content, &ident, &position)
-                        {
-                            let location = Location::new(
-                                params
-                                    .text_document_position_params
-                                    .text_document
-                                    .uri
-                                    .clone(),
-                                Range::new(var_pos, var_pos),
-                            );
-                            return Ok(Some(GotoDefinitionResponse::from(location)));
-                        }
-
-                        let fqn = self
-                            .resolve_fqn(&ident, imports, package_name, &branch)
-                            .await
-                            .ok_or(tower_lsp::jsonrpc::Error::invalid_params(format!(
-                                "Failed to find FQN by location",
-                            )))?;
-
-                        return Ok(Some(self.symbol_to_defn_response(fqn, &branch).await?));
-                    }
-                }
-            } else {
-                return Err(tower_lsp::jsonrpc::Error::invalid_params(
-                    "Failed to get ident/type name".to_string(),
-                ));
-            };
-        };
-
-        Ok(None)
+        let locations: Vec<Location> = symbols
+            .into_iter()
+            .filter_map(|s| s.as_lsp_location())
+            .collect();
+        match locations.len() {
+            0 => Ok(None),
+            1 => Ok(Some(GotoDefinitionResponse::from(
+                locations.into_iter().next().unwrap(),
+            ))),
+            _ => Ok(Some(GotoDefinitionResponse::Array(locations))),
+        }
     }
 
     async fn goto_implementation(
@@ -957,8 +919,39 @@ impl LanguageServer for Backend {
         Ok(None)
     }
 
+    #[tracing::instrument(skip_all)]
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
-        Ok(None)
+        let branch = self
+            .vcs_handler
+            .read()
+            .await
+            .as_ref()
+            .ok_or_else(|| tower_lsp::jsonrpc::Error::invalid_params("VCS handler not available"))?
+            .get_current_branch()
+            .map_err(|e| {
+                tower_lsp::jsonrpc::Error::invalid_params(format!(
+                    "Failed to get current branch: {}",
+                    e
+                ))
+            })?;
+
+        let symbols = self
+            .resolve_symbol_at_position(&params.text_document_position_params, &branch)
+            .await;
+
+        let Ok(symbols) = symbols else {
+            return Ok(None);
+        };
+
+        let symbol = symbols
+            .into_iter()
+            .find(|s| !matches!(s, ResolvedSymbol::Local { .. }));
+
+        let Some(symbol) = symbol else {
+            return Ok(None);
+        };
+
+        Ok(symbol.as_lsp_hover())
     }
 
     async fn shutdown(&self) -> Result<()> {

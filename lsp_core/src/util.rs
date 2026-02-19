@@ -135,3 +135,63 @@ pub fn execute_with_timeout(
         }
     }
 }
+
+/// Strip comment signifiers from documentation text
+/// Removes /*, *, */, // while preserving multi-line format
+#[tracing::instrument(skip_all)]
+pub fn strip_comment_signifiers(docs: &str) -> String {
+    let mut lines: Vec<String> = docs
+        .lines()
+        .map(|line| {
+            let trimmed = line.trim();
+
+            // Remove /* at start of line
+            let without_start = if trimmed.starts_with("/**") {
+                trimmed.strip_prefix("/**").unwrap_or(trimmed).trim()
+            } else if trimmed.starts_with("/*") {
+                trimmed.strip_prefix("/*").unwrap_or(trimmed).trim()
+            } else {
+                trimmed
+            };
+
+            // Remove */ at end of line
+            let without_end = if without_start.ends_with("*/") {
+                without_start
+                    .strip_suffix("*/")
+                    .unwrap_or(without_start)
+                    .trim()
+            } else {
+                without_start
+            };
+
+            // Remove leading * or // with more aggressive matching
+            let without_prefix = if without_end.starts_with("* ") {
+                without_end.strip_prefix("* ").unwrap_or(without_end)
+            } else if without_end == "*" {
+                // Handle standalone asterisks
+                ""
+            } else if without_end.starts_with("*") && without_end.len() > 1 {
+                // Handle * immediately followed by content
+                &without_end[1..]
+            } else if without_end.starts_with("// ") {
+                without_end.strip_prefix("// ").unwrap_or(without_end)
+            } else if without_end.starts_with("//") {
+                without_end.strip_prefix("//").unwrap_or(without_end)
+            } else {
+                without_end
+            };
+
+            without_prefix.trim().to_string()
+        })
+        .collect();
+
+    // Remove empty lines at start and end
+    while lines.first().map_or(false, |line| line.is_empty()) {
+        lines.remove(0);
+    }
+    while lines.last().map_or(false, |line| line.is_empty()) {
+        lines.pop();
+    }
+
+    lines.join("\n")
+}

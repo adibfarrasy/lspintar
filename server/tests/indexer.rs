@@ -753,6 +753,7 @@ async fn test_index_external_dep_source_jar() {
                 annotations: Some(vec![]),
             },),
             last_modified: 0,
+            file_type: "java".to_string(),
         }
     );
 }
@@ -824,6 +825,7 @@ async fn test_index_external_dep_jar() {
                 annotations: Some(vec![]),
             },),
             last_modified: 0,
+            file_type: "java".to_string(),
         }
     );
 }
@@ -896,6 +898,7 @@ async fn test_index_jdk_dep_source_jar() {
                 annotations: Some(vec![]),
             },),
             last_modified: 0,
+            file_type: "java".to_string(),
         }
     );
 }
@@ -978,6 +981,7 @@ async fn test_index_external_annotation_dep_jar() {
                 ],),
             },),
             last_modified: 0,
+            file_type: "java".to_string(),
         }
     );
 }

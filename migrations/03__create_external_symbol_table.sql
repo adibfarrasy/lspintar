@@ -7,6 +7,7 @@ CREATE TABLE external_symbols (
     package_name TEXT NOT NULL,
     parent_name TEXT,
     symbol_type TEXT NOT NULL,
+    file_type TEXT NOT NULL,
     modifiers TEXT NOT NULL DEFAULT '[]',
     
     -- Locations
