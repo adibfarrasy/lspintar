@@ -6,7 +6,7 @@ use kotlin::KotlinSupport;
 use lsp_core::{
     build_tools::get_build_tool,
     language_support::LanguageSupport,
-    lsp_info, lsp_logging, lsp_progress, lsp_progress_begin, lsp_progress_end,
+    lsp_error, lsp_info, lsp_logging, lsp_progress, lsp_progress_begin, lsp_progress_end,
     util::capitalize,
     vcs::{VcsHandler, get_vcs_handler},
 };
@@ -686,15 +686,24 @@ impl LanguageServer for Backend {
             lsp_info!("Indexing...");
             lsp_progress_begin!("indexing", "Indexing");
             lsp_progress!("indexing", "Indexing workspace...", 0.);
-            let _ = indexer
-                .index_workspace(&root)
-                .await
-                .map_err(|e| panic!("Failed to index workspace: {e}"));
+            if let Err(e) = indexer.index_workspace(&root).await {
+                let message = format!("Failed to index workspace: {e}");
+                lsp_progress_end!("indexing");
+                lsp_error!("{}", message);
+
+                // give the channel a moment to flush
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                panic!("{}", message);
+            }
             lsp_progress!("indexing", "Indexing dependencies...", 50.);
 
-            let external_deps = build_tool
-                .get_dependency_paths(&root)
-                .map_err(|e| panic!("Failed to get dependencies: {e}"));
+            let external_deps = build_tool.get_dependency_paths(&root).unwrap_or_else(|e| {
+                let message = format!("Failed to get dependencies: {e}");
+                lsp_progress_end!("indexing");
+                lsp_error!("{}", message);
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                panic!("{}", message)
+            });
 
             let jdk_sources = build_tool
                 .get_jdk_dependency_path(&root)
@@ -702,7 +711,7 @@ impl LanguageServer for Backend {
 
             *self.indexer.write().await = Some(indexer);
 
-            let mut jars: Vec<_> = external_deps.unwrap();
+            let mut jars: Vec<_> = external_deps;
             if let Some(src_zip) = jdk_sources.unwrap() {
                 jars.push((src_zip.clone(), Some(src_zip)));
             }
