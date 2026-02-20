@@ -13,9 +13,9 @@ use crate::{
     constants::GROOVY_IMPLICIT_IMPORTS,
     support::queries::{
         DECLARES_VARIABLE_QUERY, GET_ANNOTATIONS_QUERY, GET_EXTENDS_QUERY, GET_FIELD_RETURN_QUERY,
-        GET_FIELD_SHORT_NAME_QUERY, GET_FUNCTION_RETURN_QUERY, GET_GROOVYDOC_QUERY,
-        GET_IMPLEMENTS_QUERY, GET_IMPORTS_QUERY, GET_MODIFIERS_QUERY, GET_PACKAGE_NAME_QUERY,
-        GET_PARAMETERS_QUERY, GET_SHORT_NAME_QUERY, IDENT_QUERY,
+        GET_FUNCTION_RETURN_QUERY, GET_GROOVYDOC_QUERY, GET_IMPLEMENTS_QUERY, GET_IMPORTS_QUERY,
+        GET_MODIFIERS_QUERY, GET_PACKAGE_NAME_QUERY, GET_PARAMETERS_QUERY, GET_SHORT_NAME_QUERY,
+        IDENT_QUERY,
     },
 };
 
@@ -352,7 +352,7 @@ impl LanguageSupport for GroovySupport {
 
     fn get_ident_range(&self, node: &Node) -> Option<Range> {
         let ident_node = match node.kind() {
-            "class_declaration" | "method_declaration" => node.child_by_field_name("name")?,
+            "class_declaration" | "function_declaration" => node.child_by_field_name("name")?,
             "field_declaration" | "constant_declaration" => {
                 let declarator = node
                     .children(&mut node.walk())
@@ -398,13 +398,8 @@ impl LanguageSupport for GroovySupport {
     }
 
     fn get_short_name(&self, node: &Node, source: &str) -> Option<String> {
-        let node_type = self.get_type(node);
-
-        match node_type {
-            Some(NodeType::Field) => ts_helper::get_one(node, source, &GET_FIELD_SHORT_NAME_QUERY),
-            Some(_) => ts_helper::get_one(node, source, &GET_SHORT_NAME_QUERY),
-            None => None,
-        }
+        ts_helper::get_one(node, source, &GET_SHORT_NAME_QUERY)
+            .map(|name| name.trim_matches(|c| c == '\'' || c == '"').to_string())
     }
 
     fn get_extends(&self, node: &Node, source: &str) -> Option<String> {

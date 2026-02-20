@@ -70,17 +70,6 @@ pub static DECLARES_VARIABLE_QUERY: LazyLock<Query> = LazyLock::new(|| {
     .unwrap()
 });
 
-pub static GET_FIELD_SHORT_NAME_QUERY: LazyLock<Query> = LazyLock::new(|| {
-    Query::new(
-        &GROOVY_TS_LANGUAGE,
-        r#"
-        (field_declaration (variable_declarator name: (identifier) @name))
-        (constant_declaration (variable_declarator name: (identifier) @name))
-        "#,
-    )
-    .unwrap()
-});
-
 pub static GET_SHORT_NAME_QUERY: LazyLock<Query> = LazyLock::new(|| {
     Query::new(
         &GROOVY_TS_LANGUAGE,
@@ -89,8 +78,10 @@ pub static GET_SHORT_NAME_QUERY: LazyLock<Query> = LazyLock::new(|| {
         (class_declaration name: (identifier) @name)
         (interface_declaration name: (identifier) @name)
         (enum_declaration name: (identifier) @name)
-        (function_declaration name: (identifier) @name)
+        (function_declaration name: [(identifier) (string_literal)] @name)
         (annotation_type_declaration name: (identifier) @name)
+        (field_declaration (variable_declarator name: (identifier) @name))
+        (constant_declaration (variable_declarator name: (identifier) @name))
         ]
         "#,
     )

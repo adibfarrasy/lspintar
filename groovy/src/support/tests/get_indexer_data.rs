@@ -116,6 +116,12 @@ fn test_get_short_name() {
     let node = find_node_by_kind(parsed.0.root_node(), "field_declaration").unwrap();
     let node_name = support.get_short_name(&node, &parsed.1);
     assert_eq!(node_name, Some("bar".to_string()));
+
+    let content = "def 'my string method'() { return 42 }";
+    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let node = find_node_by_kind(parsed.0.root_node(), "function_declaration").unwrap();
+    let short_name = support.get_short_name(&node, &parsed.1);
+    assert_eq!(short_name, Some("my string method".to_string()));
 }
 
 #[test]

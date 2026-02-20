@@ -1,4 +1,4 @@
-use sqlx::SqlitePool;
+use sqlx::{SqlitePool, sqlite::SqlitePoolOptions};
 
 use crate::models::{external_symbol::ExternalSymbol, symbol::Symbol};
 
@@ -9,7 +9,10 @@ pub struct Repository {
 
 impl Repository {
     pub async fn new(path: &str) -> Result<Self, sqlx::Error> {
-        let pool = SqlitePool::connect(&format!("sqlite:{}", path)).await?;
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect(&format!("sqlite:{}", path))
+            .await?;
         sqlx::migrate!("../migrations").run(&pool).await?;
         Ok(Self { pool })
     }

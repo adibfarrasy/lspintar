@@ -2,12 +2,22 @@ use classfile_parser::{
     ClassAccessFlags, class_parser, constant_info::ConstantInfo, field_info::FieldAccessFlags,
     method_info::MethodAccessFlags,
 };
+use futures::{StreamExt, TryStreamExt, stream};
 use java::JAVA_IMPLICIT_IMPORTS;
 use lsp_core::{
     language_support::LanguageSupport, node_types::NodeType, util::naive_resolve_fqn,
     vcs::VcsHandler,
 };
-use std::{collections::HashMap, fs::File, io::Read, path::Path, sync::Arc};
+use std::{
+    collections::HashMap,
+    fs::File,
+    io::Read,
+    path::Path,
+    sync::{
+        Arc,
+        atomic::{AtomicI32, Ordering},
+    },
+};
 use zip::ZipArchive;
 
 use crate::{
@@ -46,21 +56,53 @@ impl Indexer {
         self.languages.insert(ext.to_string(), lang.clone());
     }
 
-    pub async fn index_workspace(&self, path: &Path) -> Result<()> {
-        for entry in WalkDir::new(path)
+    pub async fn index_workspace<F>(&self, path: &Path, on_progress: F) -> Result<()>
+    where
+        F: FnMut(i32, i32) + Send + 'static,
+    {
+        let files: Vec<_> = WalkDir::new(path)
             .follow_links(true)
             .into_iter()
             .filter_entry(|e| !is_excluded(e))
-        {
-            let entry = entry?;
-            if entry.file_type().is_file() {
-                self.index_file(&entry.path()).await?;
-            }
-        }
-        Ok(())
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_file())
+            .collect();
+
+        let total = files.len() as i32;
+        let progress_count = Arc::new(AtomicI32::new(0));
+        let on_progress = Arc::new(std::sync::Mutex::new(on_progress));
+
+        let (mut all_symbols, mut all_supers) = (vec![], vec![]);
+
+        stream::iter(files)
+            .map(|entry| {
+                let indexer = Arc::new(self.clone());
+                let progress_count = Arc::clone(&progress_count);
+                let on_progress = Arc::clone(&on_progress);
+                async move {
+                    let result = indexer.index_file(entry.path()).await?;
+                    let done = progress_count.fetch_add(1, Ordering::Relaxed) + 1;
+                    on_progress.lock().unwrap()(done, total);
+                    Ok::<Option<(Vec<Symbol>, Vec<SymbolSuperMapping>)>, anyhow::Error>(result)
+                }
+            })
+            .buffer_unordered(num_cpus::get())
+            .try_for_each(|result| {
+                if let Some((symbols, supers)) = result {
+                    all_symbols.extend(symbols);
+                    all_supers.extend(supers);
+                }
+                futures::future::ok(())
+            })
+            .await?;
+
+        self.insert_indexes(all_symbols, all_supers).await
     }
 
-    pub async fn index_file(&self, path: &Path) -> Result<()> {
+    pub async fn index_file(
+        &self,
+        path: &Path,
+    ) -> Result<Option<(Vec<Symbol>, Vec<SymbolSuperMapping>)>> {
         if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
             if self.languages.contains_key(ext) {
                 let lang = self
@@ -71,27 +113,35 @@ impl Indexer {
                     .parse(&path)
                     .ok_or_else(|| anyhow!("failed to parse file: {}", path.display()))?;
 
-                let data =
-                    self.get_symbols_from_tree(&parsed.0, lang.as_ref(), &path, &parsed.1, false)?;
-
-                self.repo.insert_symbols(&data.0).await?;
-
-                if !data.1.is_empty() {
-                    let mappings = data
-                        .1
-                        .iter()
-                        .map(|mapping| {
-                            (
-                                &*mapping.symbol_fqn,
-                                &*mapping.super_short_name,
-                                mapping.super_fqn.as_deref(),
-                            )
-                        })
-                        .collect();
-
-                    self.repo.insert_symbol_super_mappings(mappings).await?;
+                if let Ok(result) =
+                    self.get_symbols_from_tree(&parsed.0, lang.as_ref(), &path, &parsed.1, false)
+                {
+                    return Ok(Some(result));
                 }
             }
+        }
+
+        Ok(None)
+    }
+
+    async fn insert_indexes(
+        &self,
+        symbols: Vec<Symbol>,
+        supers: Vec<SymbolSuperMapping>,
+    ) -> Result<()> {
+        self.repo.insert_symbols(&symbols).await?;
+        if !supers.is_empty() {
+            let mappings = supers
+                .iter()
+                .map(|mapping| {
+                    (
+                        &*mapping.symbol_fqn,
+                        &*mapping.super_short_name,
+                        mapping.super_fqn.as_deref(),
+                    )
+                })
+                .collect();
+            self.repo.insert_symbol_super_mappings(mappings).await?;
         }
         Ok(())
     }
@@ -153,15 +203,17 @@ impl Indexer {
                 if is_external && !modifiers.contains(&"public".to_string()) {
                     (parent_name.clone(), is_type_parent)
                 } else {
-                    let short_name = lang
-                        .get_short_name(&node, content)
-                        .context("Failed to get short name")?;
+                    let short_name = lang.get_short_name(&node, content).context(format!(
+                        "Failed to get short name for node {:?} in path {:?}",
+                        node, path
+                    ))?;
                     let sep = if is_type_parent { "#" } else { "." };
                     let fqn = format!("{}{}{}", parent_name, sep, short_name);
                     let range = lang.get_range(&node).context("Failed to get range")?;
-                    let ident_range = lang
-                        .get_ident_range(&node)
-                        .context("Failed to get ident range")?;
+                    let ident_range = lang.get_ident_range(&node).context(format!(
+                        "Failed to get ident range for node {:?} in path {:?}",
+                        node, path
+                    ))?;
                     let now = SystemTime::now()
                         .duration_since(UNIX_EPOCH)
                         .context("Failed to get duration")?
@@ -203,7 +255,10 @@ impl Indexer {
                         Some(NodeType::Function) => {
                             let symbol_params = lang
                                 .get_parameters(&node, content)
-                                .context("failed to get function params")?
+                                .context(format!(
+                                    "failed to get function params for node {:?} in path {:?}",
+                                    node, path
+                                ))?
                                 .into_iter()
                                 .map(|(name, type_name, default_value)| SymbolParameter {
                                     name,
@@ -215,10 +270,7 @@ impl Indexer {
                             metadata.return_type = lang.get_return(&node, content);
                         }
                         Some(NodeType::Field) => {
-                            let ret = lang
-                                .get_return(&node, content)
-                                .context("failed to get function return type")?;
-                            metadata.return_type = Some(ret);
+                            metadata.return_type = lang.get_return(&node, content);
                         }
                         _ => (),
                     };

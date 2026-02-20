@@ -683,56 +683,77 @@ impl LanguageServer for Backend {
 
             let indexing_start = Instant::now();
 
+            let token = format!("indexing-{}", uuid::Uuid::new_v4());
+            let token_clone = token.clone();
             lsp_info!("Indexing...");
-            lsp_progress_begin!("indexing", "Indexing");
-            lsp_progress!("indexing", "Indexing workspace...", 0.);
-            if let Err(e) = indexer.index_workspace(&root).await {
+            lsp_progress_begin!(&token, "Indexing");
+            lsp_progress!(&token, "Indexing workspace...", 0.);
+            let msg = "(1/2) Indexing workspace";
+            if let Err(e) = indexer
+                .index_workspace(&root, move |completed, total| {
+                    lsp_progress!(
+                        &token_clone,
+                        &format!("{} ({}/{})", msg, completed, total),
+                        (completed as f32 / total as f32) * 100.0
+                    );
+                })
+                .await
+            {
                 let message = format!("Failed to index workspace: {e}");
-                lsp_progress_end!("indexing");
+                lsp_progress_end!(&token);
                 lsp_error!("{}", message);
-
-                // give the channel a moment to flush
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 panic!("{}", message);
-            }
-            lsp_progress!("indexing", "Indexing dependencies...", 50.);
+            };
+            lsp_progress!(&token, "Indexing dependencies...", 50.);
 
-            let external_deps = build_tool.get_dependency_paths(&root).unwrap_or_else(|e| {
-                let message = format!("Failed to get dependencies: {e}");
-                lsp_progress_end!("indexing");
-                lsp_error!("{}", message);
-                std::thread::sleep(std::time::Duration::from_millis(100));
-                panic!("{}", message)
-            });
+            let external_deps = match build_tool.get_dependency_paths(&root) {
+                Ok(deps) => deps,
+                Err(e) => {
+                    let message = format!("Failed to get dependencies: {e}");
+                    lsp_progress_end!(&token);
+                    lsp_error!("{}", message);
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    panic!("{}", message);
+                }
+            };
 
-            let jdk_sources = build_tool
-                .get_jdk_dependency_path(&root)
-                .map_err(|e| panic!("Failed to get JDK sources: {e}"));
+            let jdk_sources = match build_tool.get_jdk_dependency_path(&root) {
+                Ok(deps) => deps,
+                Err(e) => {
+                    let message = format!("Failed to get JDK sources: {e}");
+                    lsp_progress_end!(&token);
+                    lsp_error!("{}", message);
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    panic!("{}", message);
+                }
+            };
 
             *self.indexer.write().await = Some(indexer);
 
             let mut jars: Vec<_> = external_deps;
-            if let Some(src_zip) = jdk_sources.unwrap() {
+            if let Some(src_zip) = jdk_sources {
                 jars.push((src_zip.clone(), Some(src_zip)));
             }
 
             let total = jars.len();
             let progress = Arc::new(AtomicUsize::new(0));
 
+            let msg = "(2/2) Indexing JARs";
             stream::iter(jars.clone())
                 .map(|(byte_jar, src_jar)| {
                     let indexer = Arc::clone(&self.indexer);
                     let progress = Arc::clone(&progress);
+                    let token = token.clone();
                     async move {
                         let jar = src_jar.as_ref().unwrap_or(&byte_jar);
                         let result = indexer.write().await.as_mut().unwrap().index_jar(jar).await;
                         let completed =
                             progress.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-                        let percent = 50.0 + (completed as f32 / total as f32) * 50.0;
                         lsp_progress!(
-                            "indexing",
-                            &format!("Indexing JARs ({}/{})", completed, total),
-                            percent
+                            &token,
+                            &format!("{} ({}/{})", msg, completed, total),
+                            (completed as f32 / total as f32) * 100.0
                         );
 
                         result
@@ -746,12 +767,12 @@ impl LanguageServer for Backend {
                 })
                 .await;
 
-            lsp_progress!("indexing", "Finalizing...", 100.);
+            lsp_progress!(&token, "Finalizing...", 100.);
             lsp_info!(
                 "Indexing finished in {:.2}s",
                 indexing_start.elapsed().as_secs_f64()
             );
-            lsp_progress_end!("indexing");
+            lsp_progress_end!(&token);
 
             *self.vcs_handler.write().await = Some(vcs);
             *self.workspace_root.write().await = Some(root);

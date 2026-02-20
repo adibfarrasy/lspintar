@@ -445,7 +445,7 @@ impl LanguageSupport for KotlinSupport {
 
     fn get_ident_range(&self, node: &Node) -> Option<Range> {
         let ident_node = match node.kind() {
-            "class_declaration" | "method_declaration" => node.child_by_field_name("name")?,
+            "class_declaration" | "function_declaration" => node.child_by_field_name("name")?,
             "field_declaration" | "constant_declaration" => {
                 let declarator = node
                     .children(&mut node.walk())

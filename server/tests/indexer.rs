@@ -28,7 +28,10 @@ async fn test_index_groovy_class() {
     let vcs = get_vcs_handler(&path);
     let mut indexer = Indexer::new(Arc::clone(&repo), Arc::clone(&vcs));
     indexer.register_language("groovy", Arc::new(GroovySupport::new()));
-    indexer.index_file(&path).await.expect("Indexing failed");
+    indexer
+        .index_workspace(&path, |_, _| {})
+        .await
+        .expect("Indexing failed");
 
     let result = repo
         .find_symbol_by_fqn_and_branch("com.example.User", "NONE")
@@ -83,7 +86,7 @@ async fn test_index_groovy_gradle_single_workspace() {
     let mut indexer = Indexer::new(Arc::clone(&repo), Arc::clone(&vcs));
     indexer.register_language("groovy", Arc::new(GroovySupport::new()));
     indexer
-        .index_workspace(&path)
+        .index_workspace(&path, |_, _| {})
         .await
         .expect("Indexing failed");
 
@@ -271,7 +274,7 @@ async fn test_index_groovy_class_multi_project() {
     let mut indexer = Indexer::new(Arc::clone(&repo), Arc::clone(&vcs));
     indexer.register_language("groovy", Arc::new(GroovySupport::new()));
     indexer
-        .index_workspace(&path)
+        .index_workspace(&path, |_, _| {})
         .await
         .expect("Indexing failed");
 
@@ -328,7 +331,7 @@ async fn test_index_groovy_method() {
     let mut indexer = Indexer::new(Arc::clone(&repo), Arc::clone(&vcs));
     indexer.register_language("groovy", Arc::new(GroovySupport::new()));
     indexer
-        .index_workspace(&path)
+        .index_workspace(&path, |_, _| {})
         .await
         .expect("Indexing failed");
 
@@ -385,7 +388,7 @@ async fn test_index_groovy_nested_class() {
     let mut indexer = Indexer::new(Arc::clone(&repo), Arc::clone(&vcs));
     indexer.register_language("groovy", Arc::new(GroovySupport::new()));
     indexer
-        .index_workspace(&path)
+        .index_workspace(&path, |_, _| {})
         .await
         .expect("Indexing failed");
 
@@ -442,7 +445,7 @@ async fn test_index_groovy_field() {
     let mut indexer = Indexer::new(Arc::clone(&repo), Arc::clone(&vcs));
     indexer.register_language("groovy", Arc::new(GroovySupport::new()));
     indexer
-        .index_workspace(&path)
+        .index_workspace(&path, |_, _| {})
         .await
         .expect("Indexing failed");
 
@@ -499,7 +502,7 @@ async fn test_index_groovy_inheritance() {
     let mut indexer = Indexer::new(Arc::clone(&repo), Arc::clone(&vcs));
     indexer.register_language("groovy", Arc::new(GroovySupport::new()));
     indexer
-        .index_workspace(&path)
+        .index_workspace(&path, |_, _| {})
         .await
         .expect("Indexing failed");
 
@@ -592,7 +595,10 @@ async fn test_index_kotlin_data_class() {
     let vcs = get_vcs_handler(&path);
     let mut indexer = Indexer::new(Arc::clone(&repo), Arc::clone(&vcs));
     indexer.register_language("kt", Arc::new(KotlinSupport::new()));
-    indexer.index_file(&path).await.expect("Indexing failed");
+    indexer
+        .index_workspace(&path, |_, _| {})
+        .await
+        .expect("Indexing failed");
 
     let result = repo
         .find_symbol_by_fqn_and_branch("com.example.User", "NONE")

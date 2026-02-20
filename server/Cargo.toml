@@ -6,7 +6,6 @@ edition = "2024"
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 pretty_assertions = "1.4"
-uuid = { version = "1", features = ["v4"] }
 
 [dependencies]
 lsp_core = { path = "../lsp_core" }
@@ -39,3 +38,4 @@ bincode = { workspace = true }
 sha2 = { workspace = true }
 tempfile = { workspace = true }
 classfile-parser = "0.3.8"
+uuid = { version = "1", features = ["v4"] }
