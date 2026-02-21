@@ -10,7 +10,7 @@ pub struct Repository {
 impl Repository {
     pub async fn new(path: &str) -> Result<Self, sqlx::Error> {
         let pool = SqlitePoolOptions::new()
-            .max_connections(1)
+            .max_connections(num_cpus::get() as u32)
             .connect(&format!("sqlite:{}", path))
             .await?;
         sqlx::migrate!("../migrations").run(&pool).await?;

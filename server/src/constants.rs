@@ -2,6 +2,7 @@ use std::{env, path::PathBuf, sync::OnceLock};
 
 pub static CACHE_DIR: OnceLock<PathBuf> = OnceLock::new();
 pub static CFR_JAR_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
+pub const MAX_LINE_COUNT: usize = 10_000;
 
 pub fn get_cache_dir() -> &'static PathBuf {
     CACHE_DIR.get_or_init(|| {

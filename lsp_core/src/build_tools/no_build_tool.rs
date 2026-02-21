@@ -11,7 +11,10 @@ impl BuildToolHandler for NoBuildTool {
         true
     }
 
-    fn get_dependency_paths(&self, _root: &Path) -> Result<Vec<(PathBuf, Option<PathBuf>)>> {
+    fn get_dependency_paths(
+        &self,
+        _root: &Path,
+    ) -> Result<Vec<(Option<PathBuf>, Option<PathBuf>)>> {
         Ok(vec![])
     }
 

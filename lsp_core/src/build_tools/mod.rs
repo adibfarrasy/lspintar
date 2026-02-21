@@ -26,6 +26,6 @@ pub fn get_build_tool(root: &Path) -> Arc<dyn BuildToolHandler> {
 
 pub trait BuildToolHandler: Send + Sync {
     fn is_project(&self, root: &Path) -> bool;
-    fn get_dependency_paths(&self, root: &Path) -> Result<Vec<(PathBuf, Option<PathBuf>)>>;
+    fn get_dependency_paths(&self, root: &Path) -> Result<Vec<(Option<PathBuf>, Option<PathBuf>)>>;
     fn get_jdk_dependency_path(&self, root: &Path) -> Result<Option<PathBuf>>;
 }

@@ -1,8 +1,6 @@
 use std::sync::OnceLock;
 use tokio::sync::mpsc;
 use tower_lsp::Client;
-use tower_lsp::lsp_types::WorkDoneProgressCreateParams;
-use tower_lsp::lsp_types::request::WorkDoneProgressCreate;
 use tower_lsp::lsp_types::{
     MessageType, NumberOrString, ProgressParams, ProgressParamsValue, WorkDoneProgress,
     WorkDoneProgressBegin, WorkDoneProgressEnd, WorkDoneProgressReport, notification::Progress,
@@ -67,31 +65,27 @@ impl LoggingService {
     pub fn new(client: Client) -> Self {
         let (sender, receiver) = mpsc::channel(1000);
 
-        tokio::spawn(Self::message_handler(client, receiver));
+        tokio::spawn(async move {
+            Self::message_handler(client, receiver).await;
+        });
 
         Self { sender }
     }
 
     pub fn send(&self, message: LogMessage) {
-        let _ = self.sender.try_send(message);
+        let sender = self.sender.clone();
+        tokio::spawn(async move {
+            let _ = sender.send(message).await;
+        });
     }
 
     async fn message_handler(client: Client, mut receiver: mpsc::Receiver<LogMessage>) {
         while let Some(message) = receiver.recv().await {
+            let client = client.clone();
             if message.message_type == MessageType::INFO && message.content.contains('\x1F') {
                 let parts: Vec<&str> = message.content.split('\x1F').collect();
 
                 if parts[0] == "BEGIN" && parts.len() == 3 {
-                    let token = NumberOrString::String(parts[1].to_string());
-
-                    let create_params = WorkDoneProgressCreateParams {
-                        token: token.clone(),
-                    };
-
-                    let _ = client
-                        .send_request::<WorkDoneProgressCreate>(create_params)
-                        .await;
-
                     let _ = client
                         .send_notification::<Progress>(ProgressParams {
                             token: NumberOrString::String(parts[1].to_string()),
@@ -115,18 +109,18 @@ impl LoggingService {
                         .await;
                 } else if parts.len() == 3 {
                     if let Ok(percent) = parts[2].parse::<f32>() {
-                        let _ = client
-                            .send_notification::<Progress>(ProgressParams {
-                                token: NumberOrString::String(parts[0].to_string()),
-                                value: ProgressParamsValue::WorkDone(WorkDoneProgress::Report(
-                                    WorkDoneProgressReport {
-                                        percentage: Some(percent as u32),
-                                        message: Some(parts[1].to_string()),
-                                        ..Default::default()
-                                    },
-                                )),
-                            })
-                            .await;
+                        let client = client.clone();
+                        let params = ProgressParams {
+                            token: NumberOrString::String(parts[0].to_string()),
+                            value: ProgressParamsValue::WorkDone(WorkDoneProgress::Report(
+                                WorkDoneProgressReport {
+                                    percentage: Some(percent as u32),
+                                    message: Some(parts[1].to_string()),
+                                    ..Default::default()
+                                },
+                            )),
+                        };
+                        let _ = client.send_notification::<Progress>(params).await;
                     }
                 }
             } else {
@@ -149,6 +143,8 @@ pub fn log_message(message: LogMessage) {
     debug!("{}", message.content.clone());
     if let Some(service) = LOGGING_SERVICE.get() {
         service.send(message);
+    } else {
+        tracing::warn!("LOGGING_SERVICE not initialized, dropping message");
     }
 }
 

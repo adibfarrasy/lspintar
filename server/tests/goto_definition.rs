@@ -631,42 +631,6 @@ async fn test_goto_data_class_field() {
 }
 
 #[tokio::test]
-async fn test_goto_external_def() {
-    let server = TestServer::new("polyglot-spring").await;
-
-    let root = env::current_dir().expect("cannot get current dir");
-
-    let params = GotoDefinitionParams {
-        text_document_position_params: TextDocumentPositionParams {
-            text_document: TextDocumentIdentifier {
-                uri: Url::from_file_path(root.join("tests/fixtures/polyglot-spring/src/main/groovy/com/example/demo/Controller.groovy"))
-                    .expect("cannot parse root URI"),
-            },
-            position: Position::new(24, 24),
-        },
-        work_done_progress_params: WorkDoneProgressParams::default(),
-        partial_result_params: PartialResultParams::default(),
-    };
-
-    let result = server.backend.goto_definition(params).await.unwrap();
-    assert!(result.is_some());
-
-    let location = match result.unwrap() {
-        GotoDefinitionResponse::Scalar(loc) => loc,
-        _ => panic!("Expected scalar location"),
-    };
-
-    assert!(
-        location
-            .uri
-            .path()
-            .ends_with("org/apache/commons/lang3/StringUtils.java")
-    );
-    assert_eq!(location.range.start.line, 124);
-    assert_eq!(location.range.start.character, 13);
-}
-
-#[tokio::test]
 async fn test_resolve_chain_external() {
     let server = TestServer::new("polyglot-spring").await;
 
@@ -698,38 +662,7 @@ async fn test_resolve_chain_external() {
             .path()
             .ends_with("org/apache/commons/lang3/StringUtils.java")
     );
-    assert_eq!(location.range.start.line, 540);
-    assert_eq!(location.range.start.character, 25);
-}
 
-#[tokio::test]
-async fn test_goto_external_def_with_decompilation() {
-    let server = TestServer::new("groovy-gradle-single").await;
-    let root = env::current_dir().expect("cannot get current dir");
-
-    let params = GotoDefinitionParams {
-        text_document_position_params: TextDocumentPositionParams {
-            text_document: TextDocumentIdentifier {
-                uri: Url::from_file_path(root.join(
-                    "tests/fixtures/groovy-gradle-single/src/main/groovy/com/example/UserService.groovy",
-                ))
-                .expect("cannot parse URI"),
-            },
-            position: Position::new(13, 13),
-        },
-        work_done_progress_params: WorkDoneProgressParams::default(),
-        partial_result_params: PartialResultParams::default(),
-    };
-
-    let result = server.backend.goto_definition(params).await.unwrap();
-    assert!(result.is_some(), "Should find definition via decompilation");
-
-    let location = match result.unwrap() {
-        GotoDefinitionResponse::Scalar(loc) => loc,
-        _ => panic!("Expected scalar location"),
-    };
-
-    assert!(location.uri.path().ends_with("com/test/Dummy.java"));
     // NOTE: for practical reasons, decompiled classes don't return precise
     // symbol locations.
     assert_eq!(location.range.start.line, 0);

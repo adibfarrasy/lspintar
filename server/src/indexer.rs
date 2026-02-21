@@ -2,7 +2,7 @@ use classfile_parser::{
     ClassAccessFlags, class_parser, constant_info::ConstantInfo, field_info::FieldAccessFlags,
     method_info::MethodAccessFlags,
 };
-use futures::{StreamExt, TryStreamExt, stream};
+use futures::{StreamExt, stream};
 use java::JAVA_IMPLICIT_IMPORTS;
 use lsp_core::{
     language_support::LanguageSupport, node_types::NodeType, util::naive_resolve_fqn,
@@ -12,7 +12,8 @@ use std::{
     collections::HashMap,
     fs::File,
     io::Read,
-    path::Path,
+    panic,
+    path::{Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicI32, Ordering},
@@ -21,6 +22,7 @@ use std::{
 use zip::ZipArchive;
 
 use crate::{
+    constants::MAX_LINE_COUNT,
     models::{
         external_symbol::ExternalSymbol,
         symbol::{Symbol, SymbolMetadata, SymbolParameter},
@@ -74,32 +76,39 @@ impl Indexer {
 
         let (mut all_symbols, mut all_supers) = (vec![], vec![]);
 
-        stream::iter(files)
+        let results: Vec<_> = stream::iter(files)
             .map(|entry| {
                 let indexer = Arc::new(self.clone());
                 let progress_count = Arc::clone(&progress_count);
                 let on_progress = Arc::clone(&on_progress);
                 async move {
-                    let result = indexer.index_file(entry.path()).await?;
+                    let result =
+                        tokio::task::spawn_blocking(move || indexer.index_file(entry.path())).await;
                     let done = progress_count.fetch_add(1, Ordering::Relaxed) + 1;
                     on_progress.lock().unwrap()(done, total);
+                    let result = result??;
                     Ok::<Option<(Vec<Symbol>, Vec<SymbolSuperMapping>)>, anyhow::Error>(result)
                 }
             })
-            .buffer_unordered(num_cpus::get())
-            .try_for_each(|result| {
-                if let Some((symbols, supers)) = result {
+            .buffer_unordered(num_cpus::get() - 1)
+            .collect()
+            .await;
+
+        for result in results {
+            match result {
+                Ok(Some((symbols, supers))) => {
                     all_symbols.extend(symbols);
                     all_supers.extend(supers);
                 }
-                futures::future::ok(())
-            })
-            .await?;
+                Err(e) => tracing::warn!("Failed to index file: {e}"),
+                _ => {}
+            }
+        }
 
         self.insert_indexes(all_symbols, all_supers).await
     }
 
-    pub async fn index_file(
+    pub fn index_file(
         &self,
         path: &Path,
     ) -> Result<Option<(Vec<Symbol>, Vec<SymbolSuperMapping>)>> {
@@ -200,7 +209,7 @@ impl Indexer {
                 let node_type = lang.get_type(&node);
                 let modifiers = lang.get_modifiers(&node, content);
 
-                if is_external && !modifiers.contains(&"public".to_string()) {
+                if is_external && modifiers.contains(&"private".to_string()) {
                     (parent_name.clone(), is_type_parent)
                 } else {
                     let short_name = lang.get_short_name(&node, content).context(format!(
@@ -319,49 +328,76 @@ impl Indexer {
         Ok(())
     }
 
-    pub async fn index_jar(&self, jar_path: &Path) -> Result<()> {
+    fn extract_jar_symbols(
+        &self,
+        jar_path: &Path,
+    ) -> Result<(Vec<ExternalSymbol>, Vec<SymbolSuperMapping>)> {
         let file = File::open(jar_path)?;
         let mut archive = ZipArchive::new(file)?;
 
-        for i in 0..archive.len() {
-            let entry_name = {
-                let entry = archive.by_index(i)?;
-                entry.name().to_string()
-            };
+        let entries: Vec<(String, Vec<u8>)> = (0..archive.len())
+            .filter_map(|i| {
+                let mut entry = archive.by_index(i).ok()?;
+                let name = entry.name().to_string();
+                if name.ends_with("module-info.class") {
+                    return None;
+                }
+                let ext = Path::new(&name).extension().and_then(|s| s.to_str());
+                if !matches!(ext, Some("class" | "java" | "groovy" | "kt")) {
+                    return None;
+                }
+                let mut buffer = Vec::new();
+                entry.read_to_end(&mut buffer).ok()?;
+                Some((name, buffer))
+            })
+            .collect();
 
-            if entry_name.ends_with("module-info.class") {
-                continue;
-            }
+        let (all_symbols, all_mappings) = entries
+            .into_iter()
+            .filter_map(|(entry_name, buffer)| {
+                if buffer.iter().filter(|&&b| b == b'\n').count() > MAX_LINE_COUNT {
+                    return None;
+                }
+                let ext = Path::new(&entry_name).extension().and_then(|s| s.to_str());
+                match ext {
+                    Some("class") => {
+                        let symbols = self
+                            .extract_class_metadata(&buffer, &entry_name, jar_path)
+                            .ok()?;
+                        Some((symbols, vec![]))
+                    }
+                    Some("java" | "groovy" | "kt") => {
+                        let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                            self.extract_source_symbols(buffer, &entry_name, jar_path)
+                        }));
 
-            let path = Path::new(&entry_name).extension().and_then(|s| s.to_str());
+                        match result {
+                            Ok(Ok(r)) => Some(r),
+                            Ok(Err(_)) => None,
+                            Err(_) => {
+                                tracing::error!("Panic in {entry_name}");
+                                None
+                            }
+                        }
+                    }
+                    _ => None,
+                }
+            })
+            .fold((vec![], vec![]), |(mut s, mut m), (s2, m2)| {
+                s.extend(s2);
+                m.extend(m2);
+                (s, m)
+            });
 
-            let mut entry = archive.by_index(i)?;
-            let mut buffer = Vec::new();
-            entry.read_to_end(&mut buffer)?;
-
-            if matches!(path, Some("class")) {
-                let symbols = self.extract_class_metadata(&buffer, &entry_name, jar_path)?;
-                self.repo.insert_external_symbols(&symbols).await?;
-            } else if matches!(path, Some("java" | "groovy" | "kt")) {
-                self.index_jar_source_content(
-                    Some(String::from_utf8(buffer)?),
-                    &entry_name,
-                    jar_path,
-                )
-                .await?;
-            }
-        }
-
-        Ok(())
+        Ok((all_symbols, all_mappings))
     }
 
-    async fn index_jar_source_content(
+    fn extract_source_symbols(
         &self,
-        content: Option<String>,
+        buffer: Vec<u8>,
         entry_name: &str,
         jar_path: &Path,
-    ) -> Result<()> {
-        // If this is JDK source and not in allow list, skip
+    ) -> Result<(Vec<ExternalSymbol>, Vec<SymbolSuperMapping>)> {
         if jar_path
             .file_name()
             .and_then(|n| n.to_str())
@@ -372,40 +408,29 @@ impl Indexer {
                 .iter()
                 .any(|prefix| entry_name.contains(&prefix.replace(".", "/").trim_end_matches("*")))
             {
-                return Ok(());
+                return Ok((vec![], vec![]));
             }
         }
-
         let ext = Path::new(entry_name)
             .extension()
             .and_then(|e| e.to_str())
             .ok_or(anyhow!("No extension"))?;
-
-        if let Some(lang) = self.languages.get(ext) {
-            let parsed = lang
-                .parse_str(&content.unwrap_or_default())
-                .ok_or(anyhow!("Cannot parse content"))?;
-
-            let (external_symbols, mappings) = self.get_external_symbols_from_tree(
-                &parsed.0,
-                lang.as_ref(),
-                jar_path,
-                entry_name,
-                &parsed.1,
-            )?;
-
-            self.repo.insert_external_symbols(&external_symbols).await?;
-
-            if !mappings.is_empty() {
-                let mapping_refs = mappings
-                    .iter()
-                    .map(|m| (&*m.symbol_fqn, &*m.super_short_name, m.super_fqn.as_deref()))
-                    .collect();
-                self.repo.insert_symbol_super_mappings(mapping_refs).await?;
-            }
-        }
-
-        Ok(())
+        let Some(lang) = self.languages.get(ext) else {
+            return Ok((vec![], vec![]));
+        };
+        let content =
+            String::from_utf8(buffer).map_err(|e| anyhow!("Invalid UTF-8 in {entry_name}: {e}"))?;
+        let parsed = lang
+            .parse_str(&content)
+            .ok_or(anyhow!("Cannot parse content"))?;
+        let (symbols, mappings) = self.get_external_symbols_from_tree(
+            &parsed.0,
+            lang.as_ref(),
+            jar_path,
+            entry_name,
+            &parsed.1,
+        )?;
+        Ok((symbols, mappings))
     }
 
     fn get_external_symbols_from_tree(
@@ -459,6 +484,10 @@ impl Indexer {
             .map_err(|e| anyhow!("Failed to parse class: {:?}", e))?
             .1;
 
+        if !class.access_flags.contains(ClassAccessFlags::PUBLIC) {
+            return Ok(vec![]);
+        }
+
         let mut symbols = Vec::new();
 
         let class_name = get_class_name(&class.const_pool, class.this_class)?.replace('/', ".");
@@ -511,6 +540,10 @@ impl Indexer {
 
         // Methods
         for method in &class.methods {
+            if method.access_flags.contains(MethodAccessFlags::PRIVATE) {
+                continue;
+            }
+
             let method_name = get_utf8(&class.const_pool, method.name_index)?;
             let descriptor = get_utf8(&class.const_pool, method.descriptor_index)?;
             let (params, return_type) = parse_method_descriptor(&descriptor);
@@ -547,6 +580,10 @@ impl Indexer {
 
         // Fields
         for field in &class.fields {
+            if field.access_flags.contains(FieldAccessFlags::PRIVATE) {
+                continue;
+            }
+
             let field_name = get_utf8(&class.const_pool, field.name_index)?;
             let descriptor = get_utf8(&class.const_pool, field.descriptor_index)?;
             let field_type = parse_field_descriptor(&descriptor);
@@ -582,6 +619,74 @@ impl Indexer {
         }
 
         Ok(symbols)
+    }
+
+    pub async fn index_external_deps<F>(
+        &self,
+        jars: Vec<(Option<PathBuf>, Option<PathBuf>)>,
+        on_progress: F,
+    ) where
+        F: FnMut(i32, i32) + Send + 'static,
+    {
+        let jars: Vec<_> = jars
+            .into_iter()
+            .filter(|(byte_jar, _)| !should_skip_jar(byte_jar.as_deref()))
+            .collect();
+
+        let total = jars.len() as i32;
+        let progress_count = Arc::new(AtomicI32::new(0));
+        let on_progress = Arc::new(std::sync::Mutex::new(on_progress));
+
+        let results: Vec<_> = stream::iter(jars)
+            .map(|(byte_jar, src_jar)| {
+                let indexer = Arc::new(self.clone());
+                let progress_count = Arc::clone(&progress_count);
+                let on_progress = Arc::clone(&on_progress);
+                async move {
+                    // NOTE: prefer byte jars as it's indexed much faster
+                    let jar = match (byte_jar, src_jar) {
+                        (Some(byte), _) => byte,
+                        (None, Some(src)) => src.clone(),
+                        (None, None) => unreachable!(),
+                    };
+                    let result =
+                        tokio::task::spawn_blocking(move || indexer.extract_jar_symbols(&jar))
+                            .await;
+                    let done = progress_count.fetch_add(1, Ordering::Relaxed) + 1;
+                    on_progress.lock().unwrap()(done, total);
+                    result?
+                }
+            })
+            .buffer_unordered(num_cpus::get())
+            .collect()
+            .await;
+
+        let (all_symbols, all_mappings) = results
+            .into_iter()
+            .filter_map(|r: Result<_>| {
+                r.map_err(|e| tracing::warn!("Failed to index jar: {e}"))
+                    .ok()
+            })
+            .fold((vec![], vec![]), |(mut symbols, mut mappings), (s, m)| {
+                symbols.extend(s);
+                mappings.extend(m);
+                (symbols, mappings)
+            });
+
+        for chunk in all_symbols.chunks(1000) {
+            if let Err(e) = self.repo.insert_external_symbols(chunk).await {
+                tracing::warn!("Failed to insert symbols: {e}");
+            }
+        }
+        let all_mapping_refs: Vec<_> = all_mappings
+            .iter()
+            .map(|m| (&*m.symbol_fqn, &*m.super_short_name, m.super_fqn.as_deref()))
+            .collect();
+        for chunk in all_mapping_refs.chunks(1000) {
+            if let Err(e) = self.repo.insert_symbol_super_mappings(chunk.to_vec()).await {
+                tracing::warn!("Failed to insert mappings: {e}");
+            }
+        }
     }
 }
 
@@ -729,4 +834,15 @@ fn parse_params(params_str: &str) -> Vec<String> {
         types.push(t);
     }
     types
+}
+
+fn should_skip_jar(path_opt: Option<&Path>) -> bool {
+    if let Some(path) = path_opt {
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        name.ends_with("-tests.jar")
+            || name.ends_with("-test.jar")
+            || name.ends_with("-javadoc.jar")
+    } else {
+        false
+    }
 }

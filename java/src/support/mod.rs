@@ -4,13 +4,13 @@ use lsp_core::{
     node_types::NodeType,
     ts_helper::{self, get_node_at_position, node_contains_position},
 };
-use std::{fs, path::Path, sync::Mutex};
+use std::{cell::RefCell, fs, path::Path};
 
 use tower_lsp::lsp_types::{Position, Range};
 use tree_sitter::{Node, Parser, Point, Query, QueryCursor, QueryMatch, StreamingIterator, Tree};
 
 use crate::{
-    constants::JAVA_IMPLICIT_IMPORTS,
+    constants::{JAVA_IMPLICIT_IMPORTS, PARSE_TIMEOUT_MICROS},
     support::queries::{
         DECLARES_VARIABLE_QUERY, GET_ANNOTATIONS_QUERY, GET_EXTENDS_QUERY, GET_FIELD_RETURN_QUERY,
         GET_FIELD_SHORT_NAME_QUERY, GET_FUNCTION_RETURN_QUERY, GET_IMPLEMENTS_QUERY,
@@ -21,19 +21,11 @@ use crate::{
 
 mod queries;
 
-pub struct JavaSupport {
-    parser: Mutex<Parser>,
-}
+pub struct JavaSupport;
 
 impl JavaSupport {
     pub fn new() -> Self {
-        let mut parser = Parser::new();
-        parser
-            .set_language(&tree_sitter_java::LANGUAGE.into())
-            .unwrap();
-        Self {
-            parser: Mutex::new(parser),
-        }
+        Self
     }
 
     fn try_extract_ident_result(
@@ -329,11 +321,19 @@ impl LanguageSupport for JavaSupport {
     }
 
     fn parse_str(&self, content: &str) -> Option<ParseResult> {
-        self.parser
-            .try_lock()
-            .expect("failed to get parser")
-            .parse(content, None)
-            .map(|tree| (tree, content.to_string()))
+        thread_local! {
+            static PARSER: RefCell<Parser> = RefCell::new({
+                let mut p = Parser::new();
+                p.set_language(&tree_sitter_java::LANGUAGE.into()).unwrap();
+                p.set_timeout_micros(PARSE_TIMEOUT_MICROS);
+                p
+            });
+        }
+        PARSER.with(|p| {
+            p.borrow_mut()
+                .parse(content, None)
+                .map(|tree| (tree, content.to_string()))
+        })
     }
 
     fn get_range(&self, node: &Node) -> Option<Range> {

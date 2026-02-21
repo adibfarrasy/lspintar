@@ -10,3 +10,5 @@ pub const KOTLIN_IMPLICIT_IMPORTS: [&str; 10] = [
     "java.lang.*",
     "kotlin.jvm.*",
 ];
+
+pub const PARSE_TIMEOUT_MICROS: u64 = 10_000;

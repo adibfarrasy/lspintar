@@ -17,7 +17,7 @@ impl BuildToolHandler for GradleHandler {
             || root.join("settings.gradle.kts").exists()
     }
 
-    fn get_dependency_paths(&self, root: &Path) -> Result<Vec<(PathBuf, Option<PathBuf>)>> {
+    fn get_dependency_paths(&self, root: &Path) -> Result<Vec<(Option<PathBuf>, Option<PathBuf>)>> {
         let init_script = r#"
         allprojects {
             afterEvaluate {
@@ -89,7 +89,7 @@ impl BuildToolHandler for GradleHandler {
                 .filter(|p| p.exists())
                 .partition(|p| p.to_string_lossy().contains("-sources.jar"));
 
-        if bytecode_jars.is_empty() || source_jars.is_empty() {
+        if bytecode_jars.is_empty() && source_jars.is_empty() {
             return Ok(vec![]);
         }
 
@@ -103,17 +103,32 @@ impl BuildToolHandler for GradleHandler {
             })
             .collect();
 
-        Ok(bytecode_jars
+        let bytecode_map: HashMap<String, PathBuf> = bytecode_jars
             .into_iter()
-            .map(|bytecode| {
-                let source = bytecode
-                    .file_stem()
+            .filter_map(|path| {
+                path.file_stem()
                     .and_then(|s| s.to_str())
-                    .and_then(|bytecode_name| source_map.get(bytecode_name).cloned());
-
-                (bytecode, source)
+                    .map(|name| name.to_string())
+                    .map(|base_name| (base_name, path))
             })
-            .collect())
+            .collect();
+
+        let mut pairs: Vec<(Option<PathBuf>, Option<PathBuf>)> = source_map
+            .iter()
+            .map(|(base_name, src)| {
+                let byte = bytecode_map.get(base_name).cloned();
+                (byte, Some(src.clone()))
+            })
+            .collect();
+
+        // bytecode-only jars (no source)
+        for (base_name, byte) in &bytecode_map {
+            if !source_map.contains_key(base_name) {
+                pairs.push((Some(byte.clone()), None));
+            }
+        }
+
+        Ok(pairs)
     }
 
     fn get_jdk_dependency_path(&self, root: &Path) -> Result<Option<PathBuf>> {

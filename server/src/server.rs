@@ -12,15 +12,19 @@ use lsp_core::{
 };
 use std::{
     collections::{HashMap, HashSet},
-    path::PathBuf,
+    path::{Path, PathBuf},
     str::FromStr,
-    sync::{Arc, atomic::AtomicUsize},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
     time::Instant,
 };
 use tokio::sync::RwLock;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{LanguageServer, lsp_types::request::GotoImplementationParams};
 use tower_lsp::{jsonrpc::Result, lsp_types::request::GotoImplementationResponse};
+use tracing::debug;
 use tree_sitter::Tree;
 
 use crate::{
@@ -618,6 +622,7 @@ impl Backend {
         if let Ok(Some(symbol)) = self.repo.find_symbol_by_fqn_and_branch(&fqn, branch).await {
             return Ok(vec![ResolvedSymbol::Project(symbol)]);
         }
+
         let external_symbol = self
             .repo
             .find_external_symbol_by_fqn(&fqn)
@@ -629,6 +634,16 @@ impl Backend {
                 tower_lsp::jsonrpc::Error::invalid_params(format!("Symbol not found for {}", fqn))
             })?;
         Ok(vec![ResolvedSymbol::External(external_symbol)])
+    }
+
+    fn is_cache_dir(&self, path: Option<&Path>) -> bool {
+        path.map(|p| {
+            return p
+                .components()
+                .any(|c| matches!(c.as_os_str().to_str(), Some(".gradle" | ".m2" | "caches")));
+        });
+
+        false
     }
 }
 
@@ -646,7 +661,15 @@ impl LanguageServer for Backend {
             });
 
         if let Some(root) = workspace_root {
+            if self.is_cache_dir(Some(&root)) {
+                debug!("not a project directory, shutting down: {:?}", root);
+                std::process::exit(0);
+            }
+
             *self.workspace_root.write().await = Some(root);
+        } else {
+            debug!("workspace root not found, shutting down");
+            std::process::exit(0);
         }
 
         Ok(InitializeResult {
@@ -671,111 +694,105 @@ impl LanguageServer for Backend {
 
     async fn initialized(&self, _: InitializedParams) {
         let workspace_root = self.workspace_root.read().await.clone();
+
         if let Some(root) = workspace_root {
+            let repo = Arc::clone(&self.repo);
+            let indexer_lock = Arc::clone(&self.indexer);
+            let vcs_handler_lock = Arc::clone(&self.vcs_handler);
+            let workspace_root_lock = Arc::clone(&self.workspace_root);
+            let languages: Vec<_> = self
+                .languages
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+
             let vcs = get_vcs_handler(&root);
             let build_tool = get_build_tool(&root);
 
-            let mut indexer = Indexer::new(Arc::clone(&self.repo), Arc::clone(&vcs));
-
-            self.languages.iter().for_each(|(k, v)| {
+            let mut indexer = Indexer::new(Arc::clone(&repo), Arc::clone(&vcs));
+            languages.iter().for_each(|(k, v)| {
                 indexer.register_language(k, v.clone());
             });
 
             let indexing_start = Instant::now();
 
-            let token = format!("indexing-{}", uuid::Uuid::new_v4());
-            let token_clone = token.clone();
-            lsp_info!("Indexing...");
-            lsp_progress_begin!(&token, "Indexing");
-            lsp_progress!(&token, "Indexing workspace...", 0.);
-            let msg = "(1/2) Indexing workspace";
-            if let Err(e) = indexer
-                .index_workspace(&root, move |completed, total| {
-                    lsp_progress!(
-                        &token_clone,
-                        &format!("{} ({}/{})", msg, completed, total),
-                        (completed as f32 / total as f32) * 100.0
-                    );
-                })
-                .await
-            {
-                let message = format!("Failed to index workspace: {e}");
-                lsp_progress_end!(&token);
-                lsp_error!("{}", message);
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                panic!("{}", message);
-            };
-            lsp_progress!(&token, "Indexing dependencies...", 50.);
+            lsp_info!("Resolving dependencies...");
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
             let external_deps = match build_tool.get_dependency_paths(&root) {
                 Ok(deps) => deps,
                 Err(e) => {
                     let message = format!("Failed to get dependencies: {e}");
-                    lsp_progress_end!(&token);
                     lsp_error!("{}", message);
                     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                     panic!("{}", message);
                 }
             };
-
             let jdk_sources = match build_tool.get_jdk_dependency_path(&root) {
                 Ok(deps) => deps,
                 Err(e) => {
                     let message = format!("Failed to get JDK sources: {e}");
-                    lsp_progress_end!(&token);
                     lsp_error!("{}", message);
                     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                     panic!("{}", message);
                 }
             };
-
-            *self.indexer.write().await = Some(indexer);
-
             let mut jars: Vec<_> = external_deps;
             if let Some(src_zip) = jdk_sources {
-                jars.push((src_zip.clone(), Some(src_zip)));
+                jars.push((None, Some(src_zip)));
             }
 
-            let total = jars.len();
-            let progress = Arc::new(AtomicUsize::new(0));
+            let token_ws = format!("idx-ws-{}", uuid::Uuid::new_v4());
+            let token_ws_end = token_ws.clone();
 
-            let msg = "(2/2) Indexing JARs";
-            stream::iter(jars.clone())
-                .map(|(byte_jar, src_jar)| {
-                    let indexer = Arc::clone(&self.indexer);
-                    let progress = Arc::clone(&progress);
-                    let token = token.clone();
-                    async move {
-                        let jar = src_jar.as_ref().unwrap_or(&byte_jar);
-                        let result = indexer.write().await.as_mut().unwrap().index_jar(jar).await;
-                        let completed =
-                            progress.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-                        lsp_progress!(
-                            &token,
-                            &format!("{} ({}/{})", msg, completed, total),
-                            (completed as f32 / total as f32) * 100.0
-                        );
+            lsp_progress_begin!(&token_ws, "Indexing...");
 
-                        result
-                    }
-                })
-                .buffer_unordered(num_cpus::get())
-                .for_each(|result| async {
-                    if let Err(e) = result {
-                        tracing::warn!("Failed to index jar: {e}");
+            let ws_result = indexer
+                .index_workspace(&root, move |completed, total| {
+                    lsp_progress!(
+                        &token_ws,
+                        &format!("(1/2) Indexing workspace ({}/{})", completed, total),
+                        (completed as f32 / total as f32) * 100.0
+                    );
+                    if completed == total {
+                        lsp_progress_end!(&token_ws_end);
                     }
                 })
                 .await;
 
-            lsp_progress!(&token, "Finalizing...", 100.);
+            if let Err(e) = ws_result {
+                let message = format!("Failed to index workspace: {e}");
+                lsp_error!("{}", message);
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                panic!("{}", message);
+            }
+
+            let token_jar = format!("idx-ext-{}", uuid::Uuid::new_v4());
+            let token_jar_end = token_jar.clone();
+
+            lsp_progress_begin!(&token_jar, "Indexing...");
+
+            indexer
+                .index_external_deps(jars, move |completed, total| {
+                    lsp_progress!(
+                        &token_jar,
+                        &format!("(2/2) Indexing JARs ({}/{})", completed, total),
+                        (completed as f32 / total as f32) * 100.0
+                    );
+                    if completed == total {
+                        lsp_progress_end!(&token_jar_end);
+                    }
+                })
+                .await;
+
             lsp_info!(
                 "Indexing finished in {:.2}s",
                 indexing_start.elapsed().as_secs_f64()
             );
-            lsp_progress_end!(&token);
 
-            *self.vcs_handler.write().await = Some(vcs);
-            *self.workspace_root.write().await = Some(root);
+            *indexer_lock.write().await = Some(indexer);
+            *vcs_handler_lock.write().await = Some(vcs);
+            *workspace_root_lock.write().await = Some(root);
         }
     }
 
@@ -990,16 +1007,5 @@ impl LanguageServer for Backend {
         Ok(())
     }
 
-    async fn did_save(&self, params: DidSaveTextDocumentParams) {
-        let file_path = match params.text_document.uri.to_file_path() {
-            Ok(path) => path,
-            Err(_) => return,
-        };
-
-        if let Some(indexer) = self.indexer.read().await.as_ref() {
-            if let Err(e) = indexer.index_file(&file_path).await {
-                tracing::error!("Failed to index file {:?}: {}", &file_path, e);
-            }
-        }
-    }
+    async fn did_save(&self, params: DidSaveTextDocumentParams) {}
 }

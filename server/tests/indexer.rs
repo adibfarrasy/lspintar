@@ -714,9 +714,8 @@ async fn test_index_external_dep_source_jar() {
     indexer.register_language("groovy", Arc::new(GroovySupport::new()));
     indexer.register_language("java", Arc::new(JavaSupport::new()));
     indexer
-        .index_jar(&jar_path)
-        .await
-        .expect("JAR indexing failed");
+        .index_external_deps(vec![(Some(jar_path.clone()), Some(jar_path))], |_, _| {})
+        .await;
 
     let result = repo
         .find_external_symbol_by_fqn("groovy.json.JsonBuilder")
@@ -778,8 +777,15 @@ async fn test_index_external_dep_jar() {
         .iter()
         .map(|p| p.clone().0)
         .find(|jar| {
-            jar.to_string_lossy().contains("groovy-json")
-                && !jar.to_string_lossy().contains("-sources.jar")
+            jar.as_ref()
+                .expect("groovy-json bytecode class jar not found")
+                .to_string_lossy()
+                .contains("groovy-json")
+                && !jar
+                    .as_ref()
+                    .expect("groovy-json bytecode class jar not found")
+                    .to_string_lossy()
+                    .contains("-sources.jar")
         })
         .expect("groovy-json bytecode class jar not found");
 
@@ -788,9 +794,8 @@ async fn test_index_external_dep_jar() {
     indexer.register_language("groovy", Arc::new(GroovySupport::new()));
     indexer.register_language("java", Arc::new(JavaSupport::new()));
     indexer
-        .index_jar(&jar_path)
-        .await
-        .expect("JAR indexing failed");
+        .index_external_deps(vec![(jar_path.clone(), jar_path)], |_, _| {})
+        .await;
 
     let result = repo
         .find_external_symbol_by_fqn("groovy.json.JsonBuilder")
@@ -848,8 +853,6 @@ async fn test_index_jdk_dep_source_jar() {
         .get_jdk_dependency_path(&path)
         .expect("Failed to get JDK dependency path");
 
-    println!("Result: {:?}", dep_jar);
-
     assert!(
         dep_jar.is_some(),
         "JDK dependency source jar should be found"
@@ -860,9 +863,8 @@ async fn test_index_jdk_dep_source_jar() {
     indexer.register_language("groovy", Arc::new(GroovySupport::new()));
     indexer.register_language("java", Arc::new(JavaSupport::new()));
     indexer
-        .index_jar(&dep_jar.unwrap())
-        .await
-        .expect("JAR indexing failed");
+        .index_external_deps(vec![(None, dep_jar)], |_, _| {})
+        .await;
 
     let result = repo
         .find_external_symbol_by_fqn("java.lang.String")
@@ -938,9 +940,8 @@ async fn test_index_external_annotation_dep_jar() {
     indexer.register_language("groovy", Arc::new(GroovySupport::new()));
     indexer.register_language("java", Arc::new(JavaSupport::new()));
     indexer
-        .index_jar(&jar_path)
-        .await
-        .expect("JAR indexing failed");
+        .index_external_deps(vec![(Some(jar_path.clone()), Some(jar_path))], |_, _| {})
+        .await;
 
     let result = repo
         .find_external_symbol_by_fqn("org.springframework.stereotype.Service")
