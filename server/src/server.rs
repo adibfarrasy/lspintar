@@ -7,7 +7,7 @@ use lsp_core::{
     build_tools::get_build_tool,
     language_support::LanguageSupport,
     lsp_error, lsp_info, lsp_logging, lsp_progress, lsp_progress_begin, lsp_progress_end,
-    util::{capitalize, extract_prefix, extract_receiver},
+    util::{capitalize, extract_prefix, extract_receiver, get_import_text_edit},
     vcs::{VcsHandler, get_vcs_handler},
 };
 use std::{
@@ -1185,10 +1185,10 @@ impl LanguageServer for Backend {
                 lang,
                 &tree,
                 &content,
-                imports,
+                imports.clone(),
                 &branch,
                 &pos.position,
-                package_name,
+                package_name.clone(),
             )
             .await
         } else {
@@ -1202,7 +1202,22 @@ impl LanguageServer for Backend {
                 Some(CompletionItem {
                     label: s.name().to_string(),
                     kind: s.node_kind().to_lsp_kind(),
-                    // additional_text_edits: todo!(),
+                    additional_text_edits: match s {
+                        ResolvedSymbol::External(ext) => {
+                            if !imports.contains(&ext.package_name) {
+                                let import_text_edit = get_import_text_edit(
+                                    &content,
+                                    &ext.fully_qualified_name,
+                                    package_name.as_deref().unwrap_or_default(),
+                                    &ext.parent_name.unwrap_or_default(),
+                                );
+                                Some(vec![import_text_edit])
+                            } else {
+                                None
+                            }
+                        }
+                        _ => None,
+                    },
                     ..Default::default()
                 })
             })

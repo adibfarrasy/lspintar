@@ -2,7 +2,7 @@ use std::{fs, path::Path, process::Stdio, time::Duration};
 
 use anyhow::{Context, anyhow};
 use tempfile::tempdir;
-use tower_lsp::lsp_types::TextDocumentPositionParams;
+use tower_lsp::lsp_types::{Position, Range, TextEdit};
 
 use crate::{lsp_error, lsp_warn};
 
@@ -210,4 +210,108 @@ pub fn extract_prefix(line: &str, char_pos: usize) -> &str {
         .map(|i| i + 1)
         .unwrap_or(0);
     &before[start..]
+}
+
+pub fn get_import_text_edit(
+    content: &str,
+    fqn: &str,
+    package_name: &str,
+    parent_fqn: &str,
+) -> TextEdit {
+    let last_import_line = content
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| line.starts_with("import "))
+        .last()
+        .map(|(i, _)| i as u32);
+
+    let insert_line = match last_import_line {
+        Some(i) => i + 1,
+        None => {
+            // no imports in file, fall back to after package declaration
+            content
+                .lines()
+                .enumerate()
+                .find(|(_, line)| line.starts_with("package "))
+                .map(|(i, _)| i as u32 + 1)
+                .unwrap_or(0)
+        }
+    };
+
+    let range = Range {
+        start: Position {
+            line: insert_line,
+            character: 0,
+        },
+        end: Position {
+            line: insert_line,
+            character: 0,
+        },
+    };
+
+    let autoimport_text = if package_name == parent_fqn {
+        fqn
+    } else {
+        &parent_fqn.replace("#", ".")
+    };
+
+    TextEdit {
+        range,
+        new_text: format!("import {}\n", autoimport_text),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_import_text_edit() {
+        let cases = vec![
+            (
+                "package com.example\n\nimport com.example.Foo\nimport com.example.Bar\n\nclass Baz {}",
+                "com.example.Qux",
+                "com.example",
+                "com.example",
+                "import com.example.Qux\n",
+                4,
+            ),
+            (
+                "class Baz {}",
+                "com.example.Foo",
+                "com.example",
+                "com.example",
+                "import com.example.Foo\n",
+                0,
+            ),
+            (
+                "package com.example\n\nimport com.example.Foo\n\nclass Baz {}",
+                "com.example.Foo#Bar",
+                "com.example",
+                "com.example.Foo",
+                "import com.example.Foo\n",
+                3,
+            ),
+            (
+                "package com.example\n\nimport com.example.Foo\n\nclass Baz {}",
+                "com.example.Foo#Bar#baz",
+                "com.example",
+                "com.example.Foo#Bar",
+                "import com.example.Foo.Bar\n",
+                3,
+            ),
+        ];
+
+        for (content, fqn, package_name, parent_fqn, expected_text, expected_line) in cases {
+            let edit = get_import_text_edit(content, fqn, package_name, parent_fqn);
+            assert_eq!(
+                edit.range.start.line, expected_line,
+                "failed for fqn: {}",
+                fqn
+            );
+            assert_eq!(edit.range.start.character, 0);
+            assert_eq!(edit.range.end, edit.range.start);
+            assert_eq!(edit.new_text, expected_text, "failed for fqn: {}", fqn);
+        }
+    }
 }
