@@ -1,7 +1,7 @@
 #![allow(unused_imports)]
 
 use crate::JavaSupport;
-use lsp_core::{language_support::LanguageSupport, node_types::NodeType};
+use lsp_core::{language_support::LanguageSupport, node_kind::NodeKind};
 
 use tower_lsp::lsp_types::{Position, Range};
 use tree_sitter::Node;
@@ -49,39 +49,39 @@ fn test_get_type() {
     let content = "package com.example.app;\n\nclass Foo {}";
     let parsed = support.parse_str(&content).expect("cannot parse content");
     let node = find_node_by_kind(parsed.0.root_node(), "class_declaration").unwrap();
-    let node_type = support.get_type(&node);
-    assert_eq!(node_type, Some(NodeType::Class));
+    let kind = support.get_kind(&node);
+    assert_eq!(kind, Some(NodeKind::Class));
 
     let content = "package com.example.app;\n\ninterface Foo {}";
     let parsed = support.parse_str(&content).expect("cannot parse content");
     let node = find_node_by_kind(parsed.0.root_node(), "interface_declaration").unwrap();
-    let node_type = support.get_type(&node);
-    assert_eq!(node_type, Some(NodeType::Interface));
+    let kind = support.get_kind(&node);
+    assert_eq!(kind, Some(NodeKind::Interface));
 
     let content = "package com.example.app;\n\nenum Color { RED, GREEN, BLUE }";
     let parsed = support.parse_str(&content).expect("cannot parse content");
     let node = find_node_by_kind(parsed.0.root_node(), "enum_declaration").unwrap();
-    let node_type = support.get_type(&node);
-    assert_eq!(node_type, Some(NodeType::Enum));
+    let kind = support.get_kind(&node);
+    assert_eq!(kind, Some(NodeKind::Enum));
 
     let content = "class Foo { void myFunction() { return; } }";
     let parsed = support.parse_str(&content).expect("cannot parse content");
     let node = find_node_by_kind(parsed.0.root_node(), "function_declaration").unwrap();
-    let node_type = support.get_type(&node);
-    assert_eq!(node_type, Some(NodeType::Function));
+    let kind = support.get_kind(&node);
+    assert_eq!(kind, Some(NodeKind::Function));
 
     let content = "package com.example.app;\n\nclass Foo { String bar; }";
     let parsed = support.parse_str(&content).expect("cannot parse content");
     let node = find_node_by_kind(parsed.0.root_node(), "field_declaration").unwrap();
-    let node_type = support.get_type(&node);
-    assert_eq!(node_type, Some(NodeType::Field));
+    let kind = support.get_kind(&node);
+    assert_eq!(kind, Some(NodeKind::Field));
 
     let content =
         "package com.example.app;\n\nimport java.util.List;\n\nclass Foo { List<String> items; }";
     let parsed = support.parse_str(&content).expect("cannot parse content");
     let node = find_node_by_kind(parsed.0.root_node(), "field_declaration").unwrap();
-    let node_type = support.get_type(&node);
-    assert_eq!(node_type, Some(NodeType::Field));
+    let kind = support.get_kind(&node);
+    assert_eq!(kind, Some(NodeKind::Field));
 }
 
 #[test]

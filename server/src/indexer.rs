@@ -5,7 +5,7 @@ use classfile_parser::{
 use futures::{StreamExt, stream};
 use java::JAVA_IMPLICIT_IMPORTS;
 use lsp_core::{
-    language_support::LanguageSupport, node_types::NodeType, util::naive_resolve_fqn,
+    language_support::LanguageSupport, node_kind::NodeKind, util::naive_resolve_fqn,
     vcs::VcsHandler,
 };
 use std::{
@@ -206,7 +206,7 @@ impl Indexer {
 
         while let Some((node, parent_name, is_type_parent)) = stack.pop() {
             let (new_parent, new_is_type_parent) = if lang.should_index(&node, content) {
-                let node_type = lang.get_type(&node);
+                let node_kind = lang.get_kind(&node);
                 let modifiers = lang.get_modifiers(&node, content);
 
                 if is_external && modifiers.contains(&"private".to_string()) {
@@ -260,8 +260,8 @@ impl Indexer {
                         return_type: None,
                     };
 
-                    match node_type {
-                        Some(NodeType::Function) => {
+                    match node_kind {
+                        Some(NodeKind::Function) => {
                             let symbol_params = lang
                                 .get_parameters(&node, content)
                                 .context(format!(
@@ -278,7 +278,7 @@ impl Indexer {
                             metadata.parameters = Some(symbol_params);
                             metadata.return_type = lang.get_return(&node, content);
                         }
-                        Some(NodeType::Field) => {
+                        Some(NodeKind::Field) => {
                             metadata.return_type = lang.get_return(&node, content);
                         }
                         _ => (),
@@ -293,7 +293,7 @@ impl Indexer {
                         parent_name: Some(parent_name.to_string()),
                         file_path: path.to_string_lossy().to_string(),
                         file_type: lang.get_language().to_string(),
-                        symbol_type: node_type.clone().expect("unknown node type").to_string(),
+                        symbol_type: node_kind.clone().expect("unknown node type").to_string(),
                         modifiers: Json::from(modifiers),
                         line_start: range.start.line as i64,
                         line_end: range.end.line as i64,
@@ -308,8 +308,8 @@ impl Indexer {
                     });
 
                     let is_next_type = matches!(
-                        node_type,
-                        Some(NodeType::Class | NodeType::Interface | NodeType::Enum)
+                        node_kind,
+                        Some(NodeKind::Class | NodeKind::Interface | NodeKind::Enum)
                     );
 
                     (fqn, is_next_type)
@@ -512,11 +512,11 @@ impl Indexer {
             package_name: package_name.to_string(),
             parent_name: Some(package_name.to_string()),
             symbol_type: if class.access_flags.contains(ClassAccessFlags::INTERFACE) {
-                NodeType::Interface.to_string()
+                NodeKind::Interface.to_string()
             } else if class.access_flags.contains(ClassAccessFlags::ENUM) {
-                NodeType::Enum.to_string()
+                NodeKind::Enum.to_string()
             } else {
-                NodeType::Class.to_string()
+                NodeKind::Class.to_string()
             },
             modifiers: Json::from(class_access_to_modifiers(class.access_flags)),
             line_start: 0,
@@ -556,7 +556,7 @@ impl Indexer {
                 fully_qualified_name: format!("{}#{}", class_name, method_name),
                 package_name: package_name.to_string(),
                 parent_name: Some(class_name.clone()),
-                symbol_type: NodeType::Function.to_string(),
+                symbol_type: NodeKind::Function.to_string(),
                 modifiers: Json::from(method_access_to_modifiers(method.access_flags)),
                 line_start: 0,
                 line_end: 0,
@@ -596,7 +596,7 @@ impl Indexer {
                 fully_qualified_name: format!("{}#{}", class_name, field_name),
                 package_name: package_name.to_string(),
                 parent_name: Some(class_name.clone()),
-                symbol_type: NodeType::Field.to_string(),
+                symbol_type: NodeKind::Field.to_string(),
                 modifiers: Json::from(field_access_to_modifiers(field.access_flags)),
                 line_start: 0,
                 line_end: 0,

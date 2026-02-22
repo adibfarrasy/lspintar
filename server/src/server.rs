@@ -1,5 +1,5 @@
 use core::panic;
-use futures::{StreamExt, stream};
+use dashmap::DashMap;
 use groovy::GroovySupport;
 use java::JavaSupport;
 use kotlin::KotlinSupport;
@@ -7,18 +7,15 @@ use lsp_core::{
     build_tools::get_build_tool,
     language_support::LanguageSupport,
     lsp_error, lsp_info, lsp_logging, lsp_progress, lsp_progress_begin, lsp_progress_end,
-    util::capitalize,
+    util::{capitalize, extract_prefix, extract_receiver},
     vcs::{VcsHandler, get_vcs_handler},
 };
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     str::FromStr,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
-    },
-    time::Instant,
+    sync::Arc,
+    time::{Duration, Instant},
 };
 use tokio::sync::RwLock;
 use tower_lsp::lsp_types::*;
@@ -29,25 +26,28 @@ use tree_sitter::Tree;
 
 use crate::{
     Indexer, Repository,
+    constants::FILE_CACHE_TTL_SECS,
     enums::ResolvedSymbol,
     lsp_convert::{AsLspHover, AsLspLocation},
     models::symbol::Symbol,
 };
 
+#[derive(Clone)]
 pub struct Backend {
-    pub client: tower_lsp::Client,
+    pub client: tower_lsp::Client, // used in tests
     indexer: Arc<RwLock<Option<Indexer>>>,
     repo: Arc<Repository>,
     workspace_root: Arc<RwLock<Option<PathBuf>>>,
-    languages: HashMap<String, Arc<dyn LanguageSupport>>,
-    vcs_handler: Arc<RwLock<Option<Arc<dyn VcsHandler>>>>,
+    languages: HashMap<String, Arc<dyn LanguageSupport + Send + Sync>>,
+    vcs_handler: Arc<RwLock<Option<Arc<dyn VcsHandler + Send + Sync>>>>,
+    documents: DashMap<String, (String, Instant)>,
 }
 
 impl Backend {
     pub fn new(client: tower_lsp::Client, repo: Arc<Repository>) -> Self {
         lsp_logging::init_logging_service(client.clone());
 
-        let mut languages: HashMap<String, Arc<dyn LanguageSupport>> = HashMap::new();
+        let mut languages: HashMap<String, Arc<dyn LanguageSupport + Send + Sync>> = HashMap::new();
         languages.insert("groovy".to_string(), Arc::new(GroovySupport::new()));
         languages.insert("java".to_string(), Arc::new(JavaSupport::new()));
         languages.insert("kt".to_string(), Arc::new(KotlinSupport::new()));
@@ -59,6 +59,7 @@ impl Backend {
             workspace_root: Arc::new(RwLock::new(None)),
             languages,
             vcs_handler: Arc::new(RwLock::new(None)),
+            documents: DashMap::new(),
         }
     }
 
@@ -233,8 +234,9 @@ impl Backend {
             return vec![];
         }
 
-        // Try direct member
         let member_fqn = format!("{}#{}", type_fqn, member);
+
+        // Try direct member
         if let Ok(found) = self
             .repo
             .find_symbols_by_fqn_and_branch(&member_fqn, branch)
@@ -331,7 +333,7 @@ impl Backend {
         &self,
         qualifier: &str,
         member: &str,
-        lang: &Arc<dyn LanguageSupport>,
+        lang: &Arc<dyn LanguageSupport + Send + Sync>,
         tree: &Tree,
         content: &str,
         imports: Vec<String>,
@@ -339,9 +341,41 @@ impl Backend {
         position: &Position,
         package_name: Option<String>,
     ) -> Vec<ResolvedSymbol> {
+        if let Some(current_type_fqn) = self
+            .walk_member_chain(
+                qualifier,
+                lang,
+                tree,
+                content,
+                imports.clone(),
+                branch,
+                position,
+                package_name,
+            )
+            .await
+        {
+            // Returns all overloads
+            self.try_type_member(&current_type_fqn, member, &imports, None, branch)
+                .await
+        } else {
+            vec![]
+        }
+    }
+
+    async fn walk_member_chain(
+        &self,
+        qualifier: &str,
+        lang: &Arc<dyn LanguageSupport + Send + Sync>,
+        tree: &Tree,
+        content: &str,
+        imports: Vec<String>,
+        branch: &str,
+        position: &Position,
+        package_name: Option<String>,
+    ) -> Option<String> {
         let parts: Vec<&str> = qualifier.split('#').collect();
         if parts.is_empty() {
-            return vec![];
+            return None;
         }
         let base_type =
             if let Some(var_type) = lang.find_variable_type(tree, content, parts[0], position) {
@@ -354,7 +388,7 @@ impl Backend {
             .await
         {
             Some(fqn) => fqn,
-            None => return vec![],
+            None => return None,
         };
         if parts.len() > 1 {
             for part in &parts[1..] {
@@ -363,7 +397,7 @@ impl Backend {
                     .await;
                 let resolved = match symbols.into_iter().next() {
                     Some(s) => s,
-                    None => return vec![],
+                    None => return None,
                 };
 
                 current_type_fqn = if let Some(return_type) =
@@ -376,7 +410,7 @@ impl Backend {
                         .await
                     {
                         Some(fqn) => fqn,
-                        None => return vec![],
+                        None => return None,
                     }
                 } else {
                     // For types (Class/Interface/Enum), use their FQN directly
@@ -384,16 +418,80 @@ impl Backend {
                 };
             }
         }
-        // Returns all overloads
-        self.try_type_member(&current_type_fqn, member, &imports, None, branch)
+
+        Some(current_type_fqn)
+    }
+
+    async fn complete_type_member_chain(
+        &self,
+        qualifier: &str,
+        lang: &Arc<dyn LanguageSupport + Send + Sync>,
+        tree: &Tree,
+        content: &str,
+        imports: Vec<String>,
+        branch: &str,
+        position: &Position,
+        package_name: Option<String>,
+    ) -> Vec<ResolvedSymbol> {
+        let Some(fqn) = self
+            .walk_member_chain(
+                qualifier,
+                lang,
+                tree,
+                content,
+                imports,
+                branch,
+                position,
+                package_name,
+            )
             .await
+        else {
+            return vec![];
+        };
+
+        if let Ok(symbols) = self
+            .repo
+            .find_symbols_by_parent_name_and_branch(&fqn, branch)
+            .await
+        {
+            if !symbols.is_empty() {
+                return symbols.into_iter().map(ResolvedSymbol::Project).collect();
+            }
+        }
+
+        self.repo
+            .find_external_symbols_by_parent_name(&fqn)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(ResolvedSymbol::External)
+            .collect()
+    }
+
+    async fn complete_by_prefix(&self, prefix: &str, branch: &str) -> Vec<ResolvedSymbol> {
+        if let Ok(symbols) = self
+            .repo
+            .find_symbols_by_prefix_and_branch(prefix, branch)
+            .await
+        {
+            if !symbols.is_empty() {
+                return symbols.into_iter().map(ResolvedSymbol::Project).collect();
+            }
+        }
+        self.repo
+            .find_external_symbols_by_prefix(prefix)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(ResolvedSymbol::External)
+            .collect()
     }
 
     async fn select_best_overload(
         &self,
         symbols: Vec<ResolvedSymbol>,
         call_args: Vec<(String, Position)>,
-        lang: &Arc<dyn LanguageSupport>,
+        lang: &Arc<dyn LanguageSupport + Send + Sync>,
         tree: &Tree,
         content: &str,
         imports: &[String],
@@ -546,7 +644,7 @@ impl Backend {
                         .resolve_type_member_chain(
                             &q,
                             &ident,
-                            &lang,
+                            lang,
                             &tree,
                             &content,
                             imports.clone(),
@@ -645,6 +743,30 @@ impl Backend {
 
         false
     }
+
+    fn get_line_at(&self, pos: &TextDocumentPositionParams) -> Option<String> {
+        let uri = pos.text_document.uri.to_string();
+        let ttl = Duration::from_secs(FILE_CACHE_TTL_SECS);
+
+        if let Some(entry) = self.documents.get(&uri) {
+            if entry.1.elapsed() < ttl {
+                return entry
+                    .0
+                    .lines()
+                    .nth(pos.position.line as usize)
+                    .map(str::to_string);
+            }
+        }
+
+        let path = pos.text_document.uri.to_file_path().ok()?;
+        let text = std::fs::read_to_string(path).ok()?;
+        let line = text
+            .lines()
+            .nth(pos.position.line as usize)
+            .map(str::to_string);
+        self.documents.insert(uri, (text, Instant::now()));
+        line
+    }
 }
 
 #[tower_lsp::async_trait]
@@ -671,6 +793,16 @@ impl LanguageServer for Backend {
             debug!("workspace root not found, shutting down");
             std::process::exit(0);
         }
+
+        let documents = self.documents.clone();
+        tokio::spawn(async move {
+            let ttl = Duration::from_secs(FILE_CACHE_TTL_SECS);
+            let interval = Duration::from_secs(FILE_CACHE_TTL_SECS * 2);
+            loop {
+                tokio::time::sleep(interval).await;
+                documents.retain(|_, (_, instant)| instant.elapsed() < ttl);
+            }
+        });
 
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
@@ -717,14 +849,14 @@ impl LanguageServer for Backend {
             let indexing_start = Instant::now();
 
             lsp_info!("Resolving dependencies...");
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            tokio::time::sleep(Duration::from_millis(500)).await;
 
             let external_deps = match build_tool.get_dependency_paths(&root) {
                 Ok(deps) => deps,
                 Err(e) => {
                     let message = format!("Failed to get dependencies: {e}");
                     lsp_error!("{}", message);
-                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    tokio::time::sleep(Duration::from_millis(500)).await;
                     panic!("{}", message);
                 }
             };
@@ -733,7 +865,7 @@ impl LanguageServer for Backend {
                 Err(e) => {
                     let message = format!("Failed to get JDK sources: {e}");
                     lsp_error!("{}", message);
-                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    tokio::time::sleep(Duration::from_millis(500)).await;
                     panic!("{}", message);
                 }
             };
@@ -763,7 +895,7 @@ impl LanguageServer for Backend {
             if let Err(e) = ws_result {
                 let message = format!("Failed to index workspace: {e}");
                 lsp_error!("{}", message);
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                tokio::time::sleep(Duration::from_millis(500)).await;
                 panic!("{}", message);
             }
 
@@ -1008,4 +1140,78 @@ impl LanguageServer for Backend {
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {}
+
+    async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
+        let pos = &params.text_document_position;
+
+        let line = self
+            .get_line_at(pos)
+            .ok_or_else(|| tower_lsp::jsonrpc::Error::invalid_params("Cannot read file"))?;
+        let char_pos = pos.position.character as usize;
+
+        let branch = self
+            .vcs_handler
+            .read()
+            .await
+            .as_ref()
+            .ok_or_else(|| tower_lsp::jsonrpc::Error::invalid_params("VCS handler not available"))?
+            .get_current_branch()
+            .map_err(|e| {
+                tower_lsp::jsonrpc::Error::invalid_params(format!(
+                    "Failed to get current branch: {}",
+                    e
+                ))
+            })?;
+
+        let path = PathBuf::from_str(pos.text_document.uri.path()).unwrap();
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .ok_or_else(|| tower_lsp::jsonrpc::Error::invalid_params("No file extension"))?;
+        let lang = self
+            .languages
+            .get(ext)
+            .ok_or_else(|| tower_lsp::jsonrpc::Error::invalid_params("Unsupported language"))?;
+        let (tree, content) = lang
+            .parse(&path)
+            .ok_or_else(|| tower_lsp::jsonrpc::Error::invalid_params("Failed to parse file"))?;
+        let imports = lang.get_imports(&tree, &content);
+        let package_name = lang.get_package_name(&tree, &content);
+
+        let symbols = if line[..char_pos].contains('.') {
+            let receiver = extract_receiver(&line, char_pos).unwrap_or("");
+            self.complete_type_member_chain(
+                receiver,
+                lang,
+                &tree,
+                &content,
+                imports,
+                &branch,
+                &pos.position,
+                package_name,
+            )
+            .await
+        } else {
+            let prefix = extract_prefix(&line, char_pos);
+            self.complete_by_prefix(prefix, &branch).await
+        };
+
+        let items: Vec<CompletionItem> = symbols
+            .into_iter()
+            .filter_map(|s| {
+                Some(CompletionItem {
+                    label: s.name().to_string(),
+                    kind: s.node_kind().to_lsp_kind(),
+                    // additional_text_edits: todo!(),
+                    ..Default::default()
+                })
+            })
+            .collect();
+
+        if items.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(CompletionResponse::Array(items)))
+        }
+    }
 }

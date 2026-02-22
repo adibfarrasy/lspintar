@@ -8,5 +8,8 @@ reset-db filter="./dev.db":
     sqlx migrate run
 
 tp filter="":
-    @cargo test -p {{filter}} -- --show-output  
+    @cargo test --release -p {{filter}} -- --show-output  
+
+tt filter="":
+    @cargo test --release {{filter}} -- --show-output --test-threads=1
 

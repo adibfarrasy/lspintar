@@ -1,7 +1,7 @@
 use lsp_core::{
     language_support::{IdentResult, LanguageSupport, ParameterResult, ParseResult},
     languages::Language,
-    node_types::NodeType,
+    node_kind::NodeKind,
     ts_helper::{self, get_node_at_position, node_contains_position},
 };
 use std::{cell::RefCell, fs, path::Path, sync::Mutex};
@@ -474,26 +474,26 @@ impl LanguageSupport for KotlinSupport {
         ts_helper::get_one(&tree.root_node(), content, &GET_PACKAGE_NAME_QUERY)
     }
 
-    fn get_type(&self, node: &Node) -> Option<NodeType> {
+    fn get_kind(&self, node: &Node) -> Option<NodeKind> {
         match node.kind() {
             "class_declaration" => {
                 if let Some(body) = node.child_by_field_name("body") {
                     match body.kind() {
-                        "enum_class_body" => Some(NodeType::Enum),
-                        _ => Some(NodeType::Class),
+                        "enum_class_body" => Some(NodeKind::Enum),
+                        _ => Some(NodeKind::Class),
                     }
                 } else {
-                    Some(NodeType::Class)
+                    Some(NodeKind::Class)
                 }
             }
-            "interface_declaration" => Some(NodeType::Interface),
-            "function_declaration" => Some(NodeType::Function),
-            "property_declaration" => Some(NodeType::Field),
+            "interface_declaration" => Some(NodeKind::Interface),
+            "function_declaration" => Some(NodeKind::Function),
+            "property_declaration" => Some(NodeKind::Field),
             "class_parameter" => {
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
                     if child.kind() == "binding_pattern_kind" {
-                        return Some(NodeType::Field);
+                        return Some(NodeKind::Field);
                     }
                 }
                 None
@@ -503,10 +503,10 @@ impl LanguageSupport for KotlinSupport {
     }
 
     fn get_short_name(&self, node: &Node, source: &str) -> Option<String> {
-        let node_type = self.get_type(node);
+        let node_kind = self.get_kind(node);
 
-        match node_type {
-            Some(NodeType::Field) => ts_helper::get_one(node, source, &GET_FIELD_SHORT_NAME_QUERY),
+        match node_kind {
+            Some(NodeKind::Field) => ts_helper::get_one(node, source, &GET_FIELD_SHORT_NAME_QUERY),
             Some(_) => ts_helper::get_one(node, source, &GET_SHORT_NAME_QUERY),
             None => None,
         }
@@ -521,7 +521,7 @@ impl LanguageSupport for KotlinSupport {
     }
 
     fn get_modifiers(&self, node: &Node, source: &str) -> Vec<String> {
-        match self.get_type(node) {
+        match self.get_kind(node) {
             Some(_) => ts_helper::get_one(node, source, &GET_MODIFIERS_QUERY)
                 .map(|line| {
                     line.split_whitespace()
@@ -535,9 +535,9 @@ impl LanguageSupport for KotlinSupport {
     }
 
     fn get_annotations(&self, node: &Node, source: &str) -> Vec<String> {
-        let node_type = self.get_type(node);
+        let node_kind = self.get_kind(node);
 
-        match node_type {
+        match node_kind {
             Some(_) => ts_helper::get_many(node, source, &GET_ANNOTATIONS_QUERY, Some(1))
                 .into_iter()
                 .collect(),
@@ -550,7 +550,7 @@ impl LanguageSupport for KotlinSupport {
     }
 
     fn get_parameters(&self, node: &Node, source: &str) -> Option<Vec<ParameterResult>> {
-        if let Some(NodeType::Function) = self.get_type(node) {
+        if let Some(NodeKind::Function) = self.get_kind(node) {
             let params = ts_helper::get_many(node, source, &GET_PARAMETERS_QUERY, Some(1))
                 .into_iter()
                 .map(|p| self.parse_parameter(&p))
@@ -562,11 +562,11 @@ impl LanguageSupport for KotlinSupport {
     }
 
     fn get_return(&self, node: &Node, source: &str) -> Option<String> {
-        let node_type = self.get_type(node);
+        let node_kind = self.get_kind(node);
 
-        match node_type {
-            Some(NodeType::Field) => ts_helper::get_one(node, source, &GET_FIELD_RETURN_QUERY),
-            Some(NodeType::Function) => {
+        match node_kind {
+            Some(NodeKind::Field) => ts_helper::get_one(node, source, &GET_FIELD_RETURN_QUERY),
+            Some(NodeKind::Function) => {
                 ts_helper::get_one(node, source, &GET_FUNCTION_RETURN_QUERY)
             }
             _ => None,

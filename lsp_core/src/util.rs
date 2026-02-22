@@ -2,6 +2,7 @@ use std::{fs, path::Path, process::Stdio, time::Duration};
 
 use anyhow::{Context, anyhow};
 use tempfile::tempdir;
+use tower_lsp::lsp_types::TextDocumentPositionParams;
 
 use crate::{lsp_error, lsp_warn};
 
@@ -194,4 +195,19 @@ pub fn strip_comment_signifiers(docs: &str) -> String {
     }
 
     lines.join("\n")
+}
+
+pub fn extract_receiver(line: &str, char_pos: usize) -> Option<&str> {
+    let before = &line[..char_pos];
+    let dot_pos = before.rfind('.')?;
+    Some(extract_prefix(before, dot_pos))
+}
+
+pub fn extract_prefix(line: &str, char_pos: usize) -> &str {
+    let before = &line[..char_pos];
+    let start = before
+        .rfind(|c: char| !c.is_alphanumeric() && c != '_')
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    &before[start..]
 }

@@ -1,9 +1,9 @@
 use std::path::Path;
 
 use tower_lsp::lsp_types::{Position, Range};
-use tree_sitter::{Node, Parser, Tree};
+use tree_sitter::{Node, Tree};
 
-use crate::{languages::Language, node_types::NodeType};
+use crate::{languages::Language, node_kind::NodeKind};
 
 pub type ParseResult = (Tree, String);
 
@@ -20,7 +20,7 @@ pub trait LanguageSupport: Send + Sync {
     fn parse_str(&self, source: &str) -> Option<ParseResult>;
 
     fn should_index(&self, node: &Node, source: &str) -> bool {
-        self.get_type(node).is_some()
+        self.get_kind(node).is_some()
     }
 
     fn get_range(&self, node: &Node) -> Option<Range>;
@@ -30,7 +30,7 @@ pub trait LanguageSupport: Send + Sync {
      * Identifier
      */
     fn get_package_name(&self, tree: &Tree, source: &str) -> Option<String>;
-    fn get_type(&self, node: &Node) -> Option<NodeType>;
+    fn get_kind(&self, node: &Node) -> Option<NodeKind>;
     fn get_short_name(&self, node: &Node, source: &str) -> Option<String>;
 
     /*

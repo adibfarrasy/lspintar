@@ -1,7 +1,7 @@
 use lsp_core::{
     language_support::{IdentResult, LanguageSupport, ParameterResult, ParseResult},
     languages::Language,
-    node_types::NodeType,
+    node_kind::NodeKind,
     ts_helper::{self, get_node_at_position, node_contains_position},
 };
 use std::{cell::RefCell, fs, path::Path, sync::Mutex};
@@ -381,18 +381,18 @@ impl LanguageSupport for GroovySupport {
         ts_helper::get_one(&tree.root_node(), content, &GET_PACKAGE_NAME_QUERY)
     }
 
-    fn get_type(&self, node: &Node) -> Option<NodeType> {
+    fn get_kind(&self, node: &Node) -> Option<NodeKind> {
         match node.kind() {
-            "class_declaration" => Some(NodeType::Class),
-            "interface_declaration" => Some(NodeType::Interface),
-            "enum_declaration" => Some(NodeType::Enum),
-            "function_declaration" => Some(NodeType::Function),
+            "class_declaration" => Some(NodeKind::Class),
+            "interface_declaration" => Some(NodeKind::Interface),
+            "enum_declaration" => Some(NodeKind::Enum),
+            "function_declaration" => Some(NodeKind::Function),
             "field_declaration" => node.parent().and_then(|parent| match parent.kind() {
-                "class_body" => Some(NodeType::Field),
+                "class_body" => Some(NodeKind::Field),
                 _ => None,
             }),
-            "annotation_type_declaration" => Some(NodeType::Annotation),
-            "constant_declaration" => Some(NodeType::Field),
+            "annotation_type_declaration" => Some(NodeKind::Annotation),
+            "constant_declaration" => Some(NodeKind::Field),
             _ => None,
         }
     }
@@ -411,18 +411,18 @@ impl LanguageSupport for GroovySupport {
     }
 
     fn get_modifiers(&self, node: &Node, source: &str) -> Vec<String> {
-        let node_type = self.get_type(node);
+        let node_kind = self.get_kind(node);
 
-        match node_type {
+        match node_kind {
             Some(_) => ts_helper::get_many(node, source, &GET_MODIFIERS_QUERY, Some(1)),
             None => Vec::new(),
         }
     }
 
     fn get_annotations(&self, node: &Node, source: &str) -> Vec<String> {
-        let node_type = self.get_type(node);
+        let node_kind = self.get_kind(node);
 
-        match node_type {
+        match node_kind {
             Some(_) => ts_helper::get_many(node, source, &GET_ANNOTATIONS_QUERY, Some(1)),
             None => Vec::new(),
         }
@@ -433,7 +433,7 @@ impl LanguageSupport for GroovySupport {
     }
 
     fn get_parameters(&self, node: &Node, source: &str) -> Option<Vec<ParameterResult>> {
-        if let Some(NodeType::Function) = self.get_type(node) {
+        if let Some(NodeKind::Function) = self.get_kind(node) {
             let params = ts_helper::get_many(node, source, &GET_PARAMETERS_QUERY, Some(1))
                 .into_iter()
                 .map(|p| ts_helper::parse_parameter(&p))
@@ -445,11 +445,11 @@ impl LanguageSupport for GroovySupport {
     }
 
     fn get_return(&self, node: &Node, source: &str) -> Option<String> {
-        let node_type = self.get_type(node);
+        let node_kind = self.get_kind(node);
 
-        match node_type {
-            Some(NodeType::Field) => ts_helper::get_one(node, source, &GET_FIELD_RETURN_QUERY),
-            Some(NodeType::Function) => {
+        match node_kind {
+            Some(NodeKind::Field) => ts_helper::get_one(node, source, &GET_FIELD_RETURN_QUERY),
+            Some(NodeKind::Function) => {
                 ts_helper::get_one(node, source, &GET_FUNCTION_RETURN_QUERY)
             }
             _ => None,

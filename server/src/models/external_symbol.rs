@@ -5,7 +5,7 @@ use std::hash::{Hash, Hasher};
 use std::io::{Read, Write, copy};
 use std::path::PathBuf;
 
-use lsp_core::node_types::NodeType;
+use lsp_core::node_kind::NodeKind;
 use lsp_core::util::{decompile_class, strip_comment_signifiers};
 use sqlx::{FromRow, types::Json};
 use tower_lsp::lsp_types::{
@@ -73,7 +73,7 @@ impl AsLspHover for ExternalSymbol {
             parts.push(String::new());
         }
 
-        let node_type = NodeType::from_string(&self.symbol_type);
+        let node_kind = NodeKind::from_string(&self.symbol_type);
         let modifiers = self.modifiers.iter().cloned().collect::<Vec<_>>().join(" ");
         let mut signature_line = String::new();
 
@@ -82,9 +82,9 @@ impl AsLspHover for ExternalSymbol {
             signature_line.push(' ');
         }
 
-        match node_type {
-            Some(NodeType::Function) => {
-                if let Some(kw) = NodeType::Function.keyword(&self.file_type) {
+        match node_kind {
+            Some(NodeKind::Function) => {
+                if let Some(kw) = NodeKind::Function.keyword(&self.file_type) {
                     signature_line.push_str(kw);
                     signature_line.push(' ');
                 }
@@ -94,15 +94,15 @@ impl AsLspHover for ExternalSymbol {
                 }
                 signature_line.push_str(&self.short_name);
             }
-            Some(NodeType::Field) => {
+            Some(NodeKind::Field) => {
                 if let Some(ret) = &self.metadata.return_type {
                     signature_line.push_str(ret);
                     signature_line.push(' ');
                 }
                 signature_line.push_str(&self.short_name);
             }
-            Some(ref nt) => {
-                if let Some(kw) = nt.keyword(&self.file_type) {
+            Some(ref kind) => {
+                if let Some(kw) = kind.keyword(&self.file_type) {
                     signature_line.push_str(kw);
                     signature_line.push(' ');
                 }

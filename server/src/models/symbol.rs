@@ -1,4 +1,4 @@
-use lsp_core::{node_types::NodeType, util::strip_comment_signifiers};
+use lsp_core::{node_kind::NodeKind, util::strip_comment_signifiers};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, types::Json};
 use tower_lsp::lsp_types::{
@@ -94,7 +94,7 @@ impl AsLspHover for Symbol {
             }
         }
 
-        let node_type = NodeType::from_string(&self.symbol_type);
+        let node_kind = NodeKind::from_string(&self.symbol_type);
         let modifiers = self.modifiers.iter().cloned().collect::<Vec<_>>().join(" ");
         let mut signature_line = String::new();
 
@@ -103,9 +103,9 @@ impl AsLspHover for Symbol {
             signature_line.push(' ');
         }
 
-        match node_type {
-            Some(NodeType::Function) => {
-                if let Some(kw) = NodeType::Function.keyword(&self.file_type) {
+        match node_kind {
+            Some(NodeKind::Function) => {
+                if let Some(kw) = NodeKind::Function.keyword(&self.file_type) {
                     signature_line.push_str(kw);
                     signature_line.push(' ');
                 }
@@ -115,7 +115,7 @@ impl AsLspHover for Symbol {
                 }
                 signature_line.push_str(&self.short_name);
             }
-            Some(NodeType::Field) => {
+            Some(NodeKind::Field) => {
                 if let Some(ret) = &self.metadata.return_type {
                     signature_line.push_str(ret);
                     signature_line.push(' ');

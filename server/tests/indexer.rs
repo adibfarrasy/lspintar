@@ -18,9 +18,9 @@ use std::{path::Path, sync::Arc};
 use uuid::Uuid;
 
 #[tokio::test]
-async fn test_index_groovy_class() {
+async fn index_groovy_class() {
     let db_name = Uuid::new_v4();
-    let db_dir = format!("file:{}?mode=memory&cache=shared", db_name);
+    let db_dir = format!("file:{}?mode=memory", db_name);
     let repo = Arc::new(Repository::new(&db_dir).await.unwrap());
     let path =
         Path::new("tests/fixtures/groovy-gradle-single/src/main/groovy/com/example/User.groovy");
@@ -78,7 +78,7 @@ async fn test_index_groovy_class() {
 }
 
 #[tokio::test]
-async fn test_index_groovy_gradle_single_workspace() {
+async fn index_groovy_gradle_single_workspace() {
     let repo = Arc::new(Repository::new(":memory:").await.unwrap());
     let path = Path::new("tests/fixtures/groovy-gradle-single");
 
@@ -264,9 +264,9 @@ async fn test_index_groovy_gradle_single_workspace() {
 }
 
 #[tokio::test]
-async fn test_index_groovy_class_multi_project() {
+async fn index_groovy_class_multi_project() {
     let db_name = Uuid::new_v4();
-    let db_dir = format!("file:{}?mode=memory&cache=shared", db_name);
+    let db_dir = format!("file:{}?mode=memory", db_name);
     let repo = Arc::new(Repository::new(&db_dir).await.unwrap());
     let path = Path::new("tests/fixtures/groovy-gradle-multi");
 
@@ -321,9 +321,9 @@ async fn test_index_groovy_class_multi_project() {
 }
 
 #[tokio::test]
-async fn test_index_groovy_method() {
+async fn index_groovy_method() {
     let db_name = Uuid::new_v4();
-    let db_dir = format!("file:{}?mode=memory&cache=shared", db_name);
+    let db_dir = format!("file:{}?mode=memory", db_name);
     let repo = Arc::new(Repository::new(&db_dir).await.unwrap());
     let path = Path::new("tests/fixtures/groovy-gradle-multi");
 
@@ -378,9 +378,9 @@ async fn test_index_groovy_method() {
 }
 
 #[tokio::test]
-async fn test_index_groovy_nested_class() {
+async fn index_groovy_nested_class() {
     let db_name = Uuid::new_v4();
-    let db_dir = format!("file:{}?mode=memory&cache=shared", db_name);
+    let db_dir = format!("file:{}?mode=memory", db_name);
     let repo = Arc::new(Repository::new(&db_dir).await.unwrap());
     let path = Path::new("tests/fixtures/groovy-gradle-multi");
 
@@ -435,9 +435,9 @@ async fn test_index_groovy_nested_class() {
 }
 
 #[tokio::test]
-async fn test_index_groovy_field() {
+async fn index_groovy_field() {
     let db_name = Uuid::new_v4();
-    let db_dir = format!("file:{}?mode=memory&cache=shared", db_name);
+    let db_dir = format!("file:{}?mode=memory", db_name);
     let repo = Arc::new(Repository::new(&db_dir).await.unwrap());
     let path = Path::new("tests/fixtures/groovy-gradle-multi");
 
@@ -492,9 +492,9 @@ async fn test_index_groovy_field() {
 }
 
 #[tokio::test]
-async fn test_index_groovy_inheritance() {
+async fn index_groovy_inheritance() {
     let db_name = Uuid::new_v4();
-    let db_dir = format!("file:{}?mode=memory&cache=shared", db_name);
+    let db_dir = format!("file:{}?mode=memory", db_name);
     let repo = Arc::new(Repository::new(&db_dir).await.unwrap());
     let path = Path::new("tests/fixtures/groovy-gradle-multi");
 
@@ -586,9 +586,9 @@ async fn test_index_groovy_inheritance() {
 }
 
 #[tokio::test]
-async fn test_index_kotlin_data_class() {
+async fn index_kotlin_data_class() {
     let db_name = Uuid::new_v4();
-    let db_dir = format!("file:{}?mode=memory&cache=shared", db_name);
+    let db_dir = format!("file:{}?mode=memory", db_name);
     let repo = Arc::new(Repository::new(&db_dir).await.unwrap());
     let path = Path::new("tests/fixtures/polyglot-spring/src/main/kotlin/com/example/demo/User.kt");
 
@@ -686,9 +686,9 @@ async fn test_index_kotlin_data_class() {
 }
 
 #[tokio::test]
-async fn test_index_external_dep_source_jar() {
+async fn index_external_dep_source_jar() {
     let db_name = Uuid::new_v4();
-    let db_dir = format!("file:{}?mode=memory&cache=shared", db_name);
+    let db_dir = format!("file:{}?mode=memory", db_name);
     let repo = Arc::new(Repository::new(&db_dir).await.unwrap());
     let path = Path::new("tests/fixtures/groovy-gradle-single");
 
@@ -764,9 +764,9 @@ async fn test_index_external_dep_source_jar() {
 }
 
 #[tokio::test]
-async fn test_index_external_dep_jar() {
+async fn index_external_dep_jar() {
     let db_name = Uuid::new_v4();
-    let db_dir = format!("file:{}?mode=memory&cache=shared", db_name);
+    let db_dir = format!("file:{}?mode=memory", db_name);
     let repo = Arc::new(Repository::new(&db_dir).await.unwrap());
     let path = Path::new("tests/fixtures/groovy-gradle-single");
 
@@ -842,9 +842,9 @@ async fn test_index_external_dep_jar() {
 }
 
 #[tokio::test]
-async fn test_index_jdk_dep_source_jar() {
+async fn index_jdk_dep_source_jar() {
     let db_name = Uuid::new_v4();
-    let db_dir = format!("file:{}?mode=memory&cache=shared", db_name);
+    let db_dir = format!("file:{}?mode=memory", db_name);
     let repo = Arc::new(Repository::new(&db_dir).await.unwrap());
     let path = Path::new("tests/fixtures/groovy-gradle-single");
 
@@ -912,9 +912,9 @@ async fn test_index_jdk_dep_source_jar() {
 }
 
 #[tokio::test]
-async fn test_index_external_annotation_dep_jar() {
+async fn index_external_annotation_dep_jar() {
     let db_name = Uuid::new_v4();
-    let db_dir = format!("file:{}?mode=memory&cache=shared", db_name);
+    let db_dir = format!("file:{}?mode=memory", db_name);
     let repo = Arc::new(Repository::new(&db_dir).await.unwrap());
     let path = Path::new("tests/fixtures/polyglot-spring");
 
@@ -942,6 +942,12 @@ async fn test_index_external_annotation_dep_jar() {
     indexer
         .index_external_deps(vec![(Some(jar_path.clone()), Some(jar_path))], |_, _| {})
         .await;
+
+    let count = repo
+        .count_external_symbols()
+        .await
+        .expect("Error counting external symbols");
+    assert_eq!(count, 3444);
 
     let result = repo
         .find_external_symbol_by_fqn("org.springframework.stereotype.Service")

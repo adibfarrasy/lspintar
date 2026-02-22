@@ -13,6 +13,7 @@ impl Repository {
             .max_connections(num_cpus::get() as u32)
             .connect(&format!("sqlite:{}", path))
             .await?;
+
         sqlx::migrate!("../migrations").run(&pool).await?;
         Ok(Self { pool })
     }
@@ -96,6 +97,40 @@ impl Repository {
         .bind(fqn)
         .bind(vcs_branch)
         .fetch_optional(&self.pool)
+        .await
+    }
+
+    #[tracing::instrument(skip(self))]
+    pub async fn find_symbols_by_parent_name_and_branch(
+        &self,
+        parent_fqn: &str,
+        vcs_branch: &str,
+    ) -> Result<Vec<Symbol>, sqlx::Error> {
+        tracing::info!("find_symbols_by_parent_name_and_branch");
+        sqlx::query_as::<_, Symbol>(
+            "SELECT * FROM symbols WHERE parent_name = ? AND vcs_branch = ?",
+        )
+        .bind(parent_fqn)
+        .bind(vcs_branch)
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    #[tracing::instrument(skip(self))]
+    pub async fn find_symbols_by_prefix_and_branch(
+        &self,
+        prefix: &str,
+        vcs_branch: &str,
+    ) -> Result<Vec<Symbol>, sqlx::Error> {
+        tracing::info!("find_symbols_by_prefix_and_branch");
+        sqlx::query_as::<_, Symbol>(
+            "SELECT * FROM symbols WHERE (fully_qualified_name LIKE ? OR short_name LIKE ?)
+                AND vcs_branch = ?",
+        )
+        .bind(format!("{}%", prefix))
+        .bind(format!("{}%", prefix))
+        .bind(vcs_branch)
+        .fetch_all(&self.pool)
         .await
     }
 
@@ -297,5 +332,40 @@ impl Repository {
         .bind(fqn)
         .fetch_optional(&self.pool)
         .await
+    }
+
+    #[tracing::instrument(skip(self))]
+    pub async fn find_external_symbols_by_parent_name(
+        &self,
+        parent_fqn: &str,
+    ) -> Result<Vec<ExternalSymbol>, sqlx::Error> {
+        tracing::info!("find_external_symbols_by_parent_name");
+        sqlx::query_as::<_, ExternalSymbol>("SELECT * FROM external_symbols WHERE parent_name = ?")
+            .bind(parent_fqn)
+            .fetch_all(&self.pool)
+            .await
+    }
+
+    #[tracing::instrument(skip(self))]
+    pub async fn find_external_symbols_by_prefix(
+        &self,
+        prefix: &str,
+    ) -> Result<Vec<ExternalSymbol>, sqlx::Error> {
+        tracing::info!("find_external_symbols_by_prefix");
+        sqlx::query_as::<_, ExternalSymbol>(
+            "SELECT * FROM external_symbols WHERE fully_qualified_name LIKE ? OR short_name LIKE ?",
+        )
+        .bind(format!("{}%", prefix))
+        .bind(format!("{}%", prefix))
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    #[tracing::instrument(skip(self))]
+    pub async fn count_external_symbols(&self) -> Result<i64, sqlx::Error> {
+        tracing::info!("count_external_symbols_by_prefix");
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM external_symbols ")
+            .fetch_one(&self.pool)
+            .await
     }
 }

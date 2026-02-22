@@ -1,3 +1,4 @@
+use lsp_core::node_kind::NodeKind;
 use tower_lsp::lsp_types::{
     Hover, HoverContents, Location, MarkupContent, MarkupKind, Position, Range, Url,
 };
@@ -10,7 +11,7 @@ use crate::{
     },
 };
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum ResolvedSymbol {
     Project(Symbol),
     External(ExternalSymbol),
@@ -44,6 +45,29 @@ impl ResolvedSymbol {
             ResolvedSymbol::Project(s) => Some(&s.fully_qualified_name),
             ResolvedSymbol::External(s) => Some(&s.fully_qualified_name),
             ResolvedSymbol::Local { .. } => None,
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        match self {
+            ResolvedSymbol::Project(s) => &s.short_name,
+            ResolvedSymbol::External(s) => &s.short_name,
+            ResolvedSymbol::Local { name, .. } => name,
+        }
+    }
+
+    pub fn node_kind(&self) -> NodeKind {
+        match self {
+            ResolvedSymbol::Project(s) => {
+                NodeKind::from_string(&s.symbol_type).unwrap_or(NodeKind::Class)
+            }
+            ResolvedSymbol::External(s) => {
+                NodeKind::from_string(&s.symbol_type).unwrap_or(NodeKind::Class)
+            }
+            ResolvedSymbol::Local { var_type, .. } => var_type
+                .as_deref()
+                .and_then(|t| NodeKind::from_string(t))
+                .unwrap_or(NodeKind::Class),
         }
     }
 }

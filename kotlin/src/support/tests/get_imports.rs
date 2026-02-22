@@ -1,7 +1,7 @@
 #![allow(unused_imports)]
 use super::*;
 use crate::{KotlinSupport, constants::KOTLIN_IMPLICIT_IMPORTS};
-use lsp_core::{language_support::LanguageSupport, node_types::NodeType};
+use lsp_core::{language_support::LanguageSupport, node_kind::NodeKind};
 use tower_lsp::lsp_types::{Position, Range};
 use tree_sitter::Node;
 

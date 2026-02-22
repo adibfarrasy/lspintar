@@ -1,47 +1,21 @@
 use std::env;
-use std::sync::Arc;
 
-use lspintar_server::{Repository, server::Backend};
 use pretty_assertions::assert_eq;
 use tower_lsp::{
-    LanguageServer, LspService,
+    LanguageServer,
     lsp_types::{
-        Hover, HoverContents, HoverParams, InitializeParams, InitializedParams, MarkupContent,
-        MarkupKind, Position, TextDocumentIdentifier, TextDocumentPositionParams, Url,
-        WorkDoneProgressParams,
+        Hover, HoverContents, HoverParams, MarkupContent, MarkupKind, Position,
+        TextDocumentIdentifier, TextDocumentPositionParams, Url, WorkDoneProgressParams,
     },
 };
-use uuid::Uuid;
 
-struct TestServer {
-    backend: Backend,
-}
+use crate::util::get_test_server;
 
-impl TestServer {
-    async fn new(fixture: &str) -> Self {
-        let db_name = Uuid::new_v4();
-        let db_dir = format!("file:{}?mode=memory&cache=shared", db_name);
-        let repo = Arc::new(Repository::new(&db_dir).await.unwrap());
-        let (service, _socket) = LspService::new(|client| Backend::new(client, repo.clone()));
-        let backend = Backend::new(service.inner().client.clone(), repo.clone());
+mod util;
 
-        let root = env::current_dir().expect("cannot get current dir");
-
-        let mut init_params = InitializeParams::default();
-        init_params.root_uri = Some(
-            Url::from_file_path(root.join("tests/fixtures").join(fixture))
-                .expect("cannot parse root URI"),
-        );
-        backend.initialize(init_params).await.unwrap();
-        backend.initialized(InitializedParams {}).await;
-
-        Self { backend }
-    }
-}
-
-#[tokio::test]
-async fn test_hover_project_symbol() {
-    let server = TestServer::new("groovy-gradle-multi").await;
+#[tokio::test(flavor = "multi_thread")]
+async fn hover_project_symbol() {
+    let server = get_test_server("groovy-gradle-multi").await;
 
     let root = env::current_dir().expect("cannot get current dir");
 
@@ -71,9 +45,9 @@ async fn test_hover_project_symbol() {
     assert_eq!(result.unwrap(), hover);
 }
 
-#[tokio::test]
-async fn test_hover_external_symbol() {
-    let server = TestServer::new("polyglot-spring").await;
+#[tokio::test(flavor = "multi_thread")]
+async fn hover_external_symbol() {
+    let server = get_test_server("polyglot-spring").await;
 
     let root = env::current_dir().expect("cannot get current dir");
 
