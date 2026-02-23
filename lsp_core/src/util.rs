@@ -16,7 +16,7 @@ pub fn capitalize(s: &str) -> String {
 
 // Only find direct import match
 pub fn naive_resolve_fqn(name: &str, imports: &[String]) -> Option<String> {
-    if let Some(import) = imports.iter().find(|i| i.split('.').last() == Some(name)) {
+    if let Some(import) = imports.iter().find(|i| i.split('.').next_back() == Some(name)) {
         return Some(import.clone());
     }
 
@@ -50,7 +50,7 @@ pub fn decompile_class(
     fs::write(&class_file_path, buffer)?;
 
     let mut command = std::process::Command::new("java");
-    command.args(&[
+    command.args([
         "-jar",
         decompiler_jar.to_string_lossy().as_ref(),
         class_file_path.to_string_lossy().as_ref(),
@@ -187,10 +187,10 @@ pub fn strip_comment_signifiers(docs: &str) -> String {
         .collect();
 
     // Remove empty lines at start and end
-    while lines.first().map_or(false, |line| line.is_empty()) {
+    while lines.first().is_some_and(|line| line.is_empty()) {
         lines.remove(0);
     }
-    while lines.last().map_or(false, |line| line.is_empty()) {
+    while lines.last().is_some_and(|line| line.is_empty()) {
         lines.pop();
     }
 

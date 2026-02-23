@@ -1,7 +1,7 @@
 use std::sync::LazyLock;
 use tree_sitter::{Language, Query};
 
-static KOTLIN_TS_LANGUAGE: LazyLock<Language> = LazyLock::new(|| tree_sitter_kotlin::language());
+static KOTLIN_TS_LANGUAGE: LazyLock<Language> = LazyLock::new(tree_sitter_kotlin::language);
 
 pub static GET_IMPORTS_QUERY: LazyLock<Query> =
     LazyLock::new(|| Query::new(&KOTLIN_TS_LANGUAGE, r#"(import_header) @import"#).unwrap());

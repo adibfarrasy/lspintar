@@ -138,21 +138,21 @@ impl Indexer {
         &self,
         path: &Path,
     ) -> Result<Option<(Vec<Symbol>, Vec<SymbolSuperMapping>)>> {
-        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-            if self.languages.contains_key(ext) {
-                let lang = self
-                    .languages
-                    .get(ext)
-                    .ok_or_else(|| anyhow!("failed to get language implementation"))?;
-                let parsed = lang
-                    .parse(&path)
-                    .ok_or_else(|| anyhow!("failed to parse file: {}", path.display()))?;
+        if let Some(ext) = path.extension().and_then(|e| e.to_str())
+            && self.languages.contains_key(ext)
+        {
+            let lang = self
+                .languages
+                .get(ext)
+                .ok_or_else(|| anyhow!("failed to get language implementation"))?;
+            let parsed = lang
+                .parse(path)
+                .ok_or_else(|| anyhow!("failed to parse file: {}", path.display()))?;
 
-                if let Ok(result) =
-                    self.get_symbols_from_tree(&parsed.0, lang.as_ref(), &path, &parsed.1, false)
-                {
-                    return Ok(Some(result));
-                }
+            if let Ok(result) =
+                self.get_symbols_from_tree(&parsed.0, lang.as_ref(), path, &parsed.1, false)
+            {
+                return Ok(Some(result));
             }
         }
 
@@ -192,6 +192,7 @@ impl Indexer {
         Ok((symbols, symbol_super_mappings))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn dfs(
         &self,
         root: Node,
@@ -260,7 +261,7 @@ impl Indexer {
                     let mut metadata = SymbolMetadata {
                         annotations: Some(annotations),
                         parameters: None,
-                        documentation: documentation,
+                        documentation,
                         return_type: None,
                     };
 
@@ -290,7 +291,7 @@ impl Indexer {
 
                     symbols.push(Symbol {
                         id: None,
-                        short_name: short_name,
+                        short_name,
                         package_name: package_name.to_string(),
                         fully_qualified_name: fqn.clone(),
                         parent_name: Some(parent_name.to_string()),
@@ -406,13 +407,11 @@ impl Indexer {
             .and_then(|n| n.to_str())
             .map(|n| n == "src.zip")
             .unwrap_or(false)
-        {
-            if !JAVA_IMPLICIT_IMPORTS
+            && !JAVA_IMPLICIT_IMPORTS
                 .iter()
-                .any(|prefix| entry_name.contains(&prefix.replace(".", "/").trim_end_matches("*")))
-            {
-                return Ok((vec![], vec![]));
-            }
+                .any(|prefix| entry_name.contains(prefix.replace(".", "/").trim_end_matches("*")))
+        {
+            return Ok((vec![], vec![]));
         }
         let ext = Path::new(entry_name)
             .extension()

@@ -107,8 +107,8 @@ impl LoggingService {
                             )),
                         })
                         .await;
-                } else if parts.len() == 3 {
-                    if let Ok(percent) = parts[2].parse::<f32>() {
+                } else if parts.len() == 3
+                    && let Ok(percent) = parts[2].parse::<f32>() {
                         let client = client.clone();
                         let params = ProgressParams {
                             token: NumberOrString::String(parts[0].to_string()),
@@ -122,7 +122,6 @@ impl LoggingService {
                         };
                         let _ = client.send_notification::<Progress>(params).await;
                     }
-                }
             } else {
                 client
                     .show_message(message.message_type, &message.content)

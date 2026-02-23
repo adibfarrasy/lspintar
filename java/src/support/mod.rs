@@ -23,6 +23,12 @@ mod queries;
 
 pub struct JavaSupport;
 
+impl Default for JavaSupport {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl JavaSupport {
     pub fn new() -> Self {
         Self
@@ -56,11 +62,9 @@ impl JavaSupport {
                     .and_then(|cap| cap.node.utf8_text(content.as_bytes()).ok())
                     .map(|s| {
                         let mut result = s.to_string();
+                        let regex = regex::Regex::new(r"\([^()]*\)").unwrap();
                         loop {
-                            let new_result = regex::Regex::new(r"\([^()]*\)")
-                                .unwrap()
-                                .replace_all(&result, "")
-                                .to_string();
+                            let new_result = regex.replace_all(&result, "").to_string();
                             if new_result == result {
                                 break;
                             }
@@ -77,20 +81,19 @@ impl JavaSupport {
         // Check if position is on the qualifier
         if let Some(qual_name) = qual {
             let qual_idx = query.capture_index_for_name(qual_name);
-            if let Some(qual_cap) = match_.captures.iter().find(|c| Some(c.index) == qual_idx) {
-                if node_contains_position(&qual_cap.node, position) {
-                    if qual_cap.node.kind() == "identifier"
-                        || qual_cap.node.kind() == "type_identifier"
-                    {
-                        let qual_text = qual_cap
-                            .node
-                            .utf8_text(content.as_bytes())
-                            .ok()?
-                            .to_string();
-                        return Some((qual_text, None));
-                    }
-                    return self.get_ident_within_node(&qual_cap.node, content, position);
+            if let Some(qual_cap) = match_.captures.iter().find(|c| Some(c.index) == qual_idx)
+                && node_contains_position(&qual_cap.node, position)
+            {
+                if qual_cap.node.kind() == "identifier" || qual_cap.node.kind() == "type_identifier"
+                {
+                    let qual_text = qual_cap
+                        .node
+                        .utf8_text(content.as_bytes())
+                        .ok()?
+                        .to_string();
+                    return Some((qual_text, None));
                 }
+                return self.get_ident_within_node(&qual_cap.node, content, position);
             }
         }
 
@@ -149,21 +152,18 @@ impl JavaSupport {
                 .for_each(|(name, qual)| {
                     if let Some(r) = self.try_extract_ident_result(
                         &IDENT_QUERY,
-                        &m,
+                        m,
                         content,
                         position,
                         name,
                         qual,
                     ) {
                         result = Some(r);
-                        return;
                     }
                 });
 
-                if let Some(r) = self.try_extract_import_ident(&IDENT_QUERY, &m, content, position)
-                {
+                if let Some(r) = self.try_extract_import_ident(&IDENT_QUERY, m, content, position) {
                     result = Some(r);
-                    return;
                 }
             });
 
@@ -256,6 +256,7 @@ impl JavaSupport {
     }
 
     // TODO: this is very similar to find_in_current_scope. maybe extract common logic?
+    #[allow(clippy::only_used_in_recursion)]
     fn collect_declarations_in_scope(
         &self,
         scope_node: Node,
@@ -307,15 +308,15 @@ impl JavaSupport {
         let mut cursor = arg_list_node.walk();
 
         for child in arg_list_node.children(&mut cursor) {
-            if child.is_named() {
-                if let Ok(arg_text) = child.utf8_text(content.as_bytes()) {
-                    let arg_name = arg_text.to_string();
-                    let position = Position {
-                        line: child.start_position().row as u32,
-                        character: child.start_position().column as u32,
-                    };
-                    args.push((arg_name, position));
-                }
+            if child.is_named()
+                && let Ok(arg_text) = child.utf8_text(content.as_bytes())
+            {
+                let arg_name = arg_text.to_string();
+                let position = Position {
+                    line: child.start_position().row as u32,
+                    character: child.start_position().column as u32,
+                };
+                args.push((arg_name, position));
             }
         }
 
@@ -336,12 +337,11 @@ impl JavaSupport {
         let mut params = Vec::new();
         let mut cursor = params_node.walk();
         for child in params_node.children(&mut cursor) {
-            if child.kind() == "parameter" {
-                if let Some(type_node) = child.child_by_field_name("type") {
-                    if let Ok(type_name) = type_node.utf8_text(content.as_bytes()) {
-                        params.push(type_name.to_string());
-                    }
-                }
+            if child.kind() == "parameter"
+                && let Some(type_node) = child.child_by_field_name("type")
+                && let Ok(type_name) = type_node.utf8_text(content.as_bytes())
+            {
+                params.push(type_name.to_string());
             }
         }
         params
@@ -619,10 +619,7 @@ impl LanguageSupport for JavaSupport {
                 return Some(vec![]);
             }
 
-            current = match current.parent() {
-                Some(p) => p,
-                None => return None,
-            };
+            current = current.parent()?;
         }
     }
 
@@ -641,10 +638,10 @@ impl LanguageSupport for JavaSupport {
                 | "octal_integer_literal"
                 | "binary_integer_literal" => {
                     // Check for long suffix (l or L)
-                    if let Ok(text) = node.utf8_text(content.as_bytes()) {
-                        if text.ends_with('l') || text.ends_with('L') {
-                            return Some("Long".to_string());
-                        }
+                    if let Ok(text) = node.utf8_text(content.as_bytes())
+                        && (text.ends_with('l') || text.ends_with('L'))
+                    {
+                        return Some("Long".to_string());
                     }
                     return Some("Integer".to_string());
                 }
@@ -670,10 +667,7 @@ impl LanguageSupport for JavaSupport {
                 _ => {}
             }
 
-            node = match node.parent() {
-                Some(p) => p,
-                None => return None,
-            };
+            node = node.parent()?;
         }
     }
 
@@ -823,7 +817,7 @@ mod tests {
                 line.find(marker)
                     .map(|col| Position::new(line_num as u32, col as u32))
             })
-            .expect(&format!("Marker '{}' not found", marker))
+            .unwrap_or_else(|| panic!("Marker '{}' not found", marker))
     }
 
     fn find_node_by_kind<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {

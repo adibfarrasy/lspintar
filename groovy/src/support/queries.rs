@@ -1,7 +1,7 @@
 use std::sync::LazyLock;
 use tree_sitter::{Language, Query};
 
-static GROOVY_TS_LANGUAGE: LazyLock<Language> = LazyLock::new(|| tree_sitter_groovy::language());
+static GROOVY_TS_LANGUAGE: LazyLock<Language> = LazyLock::new(tree_sitter_groovy::language);
 
 pub static GET_IMPORTS_QUERY: LazyLock<Query> =
     LazyLock::new(|| Query::new(&GROOVY_TS_LANGUAGE, r#"(import_declaration) @import"#).unwrap());

@@ -117,8 +117,8 @@ impl AsLspHover for ExternalSymbol {
 
         parts.push(signature_line);
 
-        if let Some(params) = &self.metadata.parameters {
-            if !params.is_empty() {
+        if let Some(params) = &self.metadata.parameters
+            && !params.is_empty() {
                 let format_param = |p: &SymbolParameter| {
                     let mut s = match &p.type_name {
                         Some(t) => format!("{} {}", t, p.name),
@@ -144,18 +144,16 @@ impl AsLspHover for ExternalSymbol {
                     parts.push(format!("({})", params_str));
                 }
             }
-        }
 
         if self.metadata.documentation.is_some() {
             parts.push(String::new());
             parts.push("---".to_string());
         }
         parts.push("```".to_string());
-        if let Some(doc) = &self.metadata.documentation {
-            if !doc.is_empty() {
+        if let Some(doc) = &self.metadata.documentation
+            && !doc.is_empty() {
                 parts.push(strip_comment_signifiers(doc));
             }
-        }
         Some(Hover {
             contents: HoverContents::Markup(MarkupContent {
                 kind: MarkupKind::Markdown,
@@ -193,11 +191,10 @@ impl ExternalSymbol {
 
         match archive.by_name(&self.source_file_path) {
             Ok(mut file) => {
-                if let Some(p) = outpath.parent() {
-                    if !p.exists() {
+                if let Some(p) = outpath.parent()
+                    && !p.exists() {
                         fs::create_dir_all(p)?;
                     }
-                }
 
                 if self.needs_decompilation {
                     let mut buffer = Vec::new();

@@ -13,7 +13,7 @@ pub fn get_one_with_position(
     query: &Query,
 ) -> Option<(String, Position)> {
     let mut cursor = QueryCursor::new();
-    let mut matches = cursor.matches(&query, *node, content.as_bytes());
+    let mut matches = cursor.matches(query, *node, content.as_bytes());
     matches.next().and_then(|m| {
         m.captures.first().and_then(|c| {
             let text = c
@@ -42,7 +42,7 @@ pub fn get_many_with_position(
     }
     let mut results = Vec::new();
     cursor
-        .matches(&query, *node, content.as_bytes())
+        .matches(query, *node, content.as_bytes())
         .for_each(|m| {
             for capture in m.captures {
                 if let Ok(text) = capture.node.utf8_text(content.as_bytes()) {

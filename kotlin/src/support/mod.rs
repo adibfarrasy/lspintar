@@ -23,6 +23,12 @@ mod queries;
 
 pub struct KotlinSupport;
 
+impl Default for KotlinSupport {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl KotlinSupport {
     pub fn new() -> Self {
         Self
@@ -56,11 +62,9 @@ impl KotlinSupport {
                     .and_then(|cap| cap.node.utf8_text(content.as_bytes()).ok())
                     .map(|s| {
                         let mut result = s.to_string();
+                        let regex = regex::Regex::new(r"\([^()]*\)").unwrap();
                         loop {
-                            let new_result = regex::Regex::new(r"\([^()]*\)")
-                                .unwrap()
-                                .replace_all(&result, "")
-                                .to_string();
+                            let new_result = regex.replace_all(&result, "").to_string();
                             if new_result == result {
                                 break;
                             }
@@ -77,20 +81,19 @@ impl KotlinSupport {
         // Check if position is on the qualifier
         if let Some(qual_name) = qual {
             let qual_idx = query.capture_index_for_name(qual_name);
-            if let Some(qual_cap) = match_.captures.iter().find(|c| Some(c.index) == qual_idx) {
-                if node_contains_position(&qual_cap.node, position) {
-                    if qual_cap.node.kind() == "identifier"
-                        || qual_cap.node.kind() == "type_identifier"
-                    {
-                        let qual_text = qual_cap
-                            .node
-                            .utf8_text(content.as_bytes())
-                            .ok()?
-                            .to_string();
-                        return Some((qual_text, None));
-                    }
-                    return self.get_ident_within_node(&qual_cap.node, content, position);
+            if let Some(qual_cap) = match_.captures.iter().find(|c| Some(c.index) == qual_idx)
+                && node_contains_position(&qual_cap.node, position)
+            {
+                if qual_cap.node.kind() == "identifier" || qual_cap.node.kind() == "type_identifier"
+                {
+                    let qual_text = qual_cap
+                        .node
+                        .utf8_text(content.as_bytes())
+                        .ok()?
+                        .to_string();
+                    return Some((qual_text, None));
                 }
+                return self.get_ident_within_node(&qual_cap.node, content, position);
             }
         }
 
@@ -144,21 +147,18 @@ impl KotlinSupport {
                 .for_each(|(name, qual)| {
                     if let Some(r) = self.try_extract_ident_result(
                         &IDENT_QUERY,
-                        &m,
+                        m,
                         content,
                         position,
                         name,
                         qual,
                     ) {
                         result = Some(r);
-                        return;
                     }
                 });
 
-                if let Some(r) = self.try_extract_import_ident(&IDENT_QUERY, &m, content, position)
-                {
+                if let Some(r) = self.try_extract_import_ident(&IDENT_QUERY, m, content, position) {
                     result = Some(r);
-                    return;
                 }
             });
 
@@ -224,42 +224,42 @@ impl KotlinSupport {
                 "property_declaration" => {
                     let mut var_cursor = child.walk();
                     for var_child in child.children(&mut var_cursor) {
-                        if var_child.kind() == "variable_declaration" {
-                            if self.declares_variable(var_child, content, var_name) {
-                                // Try to get explicit type
-                                let mut type_cursor = var_child.walk();
-                                for type_child in var_child.children(&mut type_cursor) {
-                                    if type_child.kind() == "user_type"
-                                        || type_child.kind() == "nullable_type"
-                                    {
-                                        let type_name = type_child
-                                            .utf8_text(content.as_bytes())
-                                            .ok()
-                                            .map(|s| s.to_string());
+                        if var_child.kind() == "variable_declaration"
+                            && self.declares_variable(var_child, content, var_name)
+                        {
+                            // Try to get explicit type
+                            let mut type_cursor = var_child.walk();
+                            for type_child in var_child.children(&mut type_cursor) {
+                                if type_child.kind() == "user_type"
+                                    || type_child.kind() == "nullable_type"
+                                {
+                                    let type_name = type_child
+                                        .utf8_text(content.as_bytes())
+                                        .ok()
+                                        .map(|s| s.to_string());
 
-                                        let (_, var_position) = ts_helper::get_one_with_position(
-                                            &child,
-                                            content,
-                                            &DECLARES_VARIABLE_QUERY,
-                                        )?;
+                                    let (_, var_position) = ts_helper::get_one_with_position(
+                                        &child,
+                                        content,
+                                        &DECLARES_VARIABLE_QUERY,
+                                    )?;
 
-                                        return Some((type_name, var_position));
-                                    }
+                                    return Some((type_name, var_position));
                                 }
+                            }
 
-                                // Infer from value if no explicit type
-                                let mut value_cursor = child.walk();
-                                for value_child in child.children(&mut value_cursor) {
-                                    if value_child.kind() == "call_expression" {
-                                        let type_name =
-                                            self.infer_type_from_value(value_child, content);
-                                        let identifier = var_child.child_by_field_name("name")?;
-                                        let var_position = Position {
-                                            line: identifier.start_position().row as u32,
-                                            character: identifier.start_position().column as u32,
-                                        };
-                                        return Some((type_name, var_position));
-                                    }
+                            // Infer from value if no explicit type
+                            let mut value_cursor = child.walk();
+                            for value_child in child.children(&mut value_cursor) {
+                                if value_child.kind() == "call_expression" {
+                                    let type_name =
+                                        self.infer_type_from_value(value_child, content);
+                                    let identifier = var_child.child_by_field_name("name")?;
+                                    let var_position = Position {
+                                        line: identifier.start_position().row as u32,
+                                        character: identifier.start_position().column as u32,
+                                    };
+                                    return Some((type_name, var_position));
                                 }
                             }
                         }
@@ -281,19 +281,19 @@ impl KotlinSupport {
                     }
                 }
                 "variable_declaration" => {
-                    if self.declares_variable(child, content, var_name) {
-                        if let Some(type_node) = child.child_by_field_name("type") {
-                            let type_name = type_node
-                                .utf8_text(content.as_bytes())
-                                .ok()
-                                .map(|s| s.to_string());
-                            let identifier = child.child_by_field_name("name")?;
-                            let var_position = Position {
-                                line: identifier.start_position().row as u32,
-                                character: identifier.start_position().column as u32,
-                            };
-                            return Some((type_name, var_position));
-                        }
+                    if self.declares_variable(child, content, var_name)
+                        && let Some(type_node) = child.child_by_field_name("type")
+                    {
+                        let type_name = type_node
+                            .utf8_text(content.as_bytes())
+                            .ok()
+                            .map(|s| s.to_string());
+                        let identifier = child.child_by_field_name("name")?;
+                        let var_position = Position {
+                            line: identifier.start_position().row as u32,
+                            character: identifier.start_position().column as u32,
+                        };
+                        return Some((type_name, var_position));
                     }
                 }
                 "statements" | "function_body" | "lambda_literal" | "parameters"
@@ -314,6 +314,7 @@ impl KotlinSupport {
     }
 
     // TODO: this is very similar to find_in_current_scope. maybe extract common logic?
+    #[allow(clippy::only_used_in_recursion)]
     fn collect_declarations_in_scope(
         &self,
         scope_node: Node,
@@ -394,18 +395,14 @@ impl KotlinSupport {
     }
 
     fn infer_type_from_value(&self, value_node: Node, content: &str) -> Option<String> {
-        match value_node.kind() {
-            "call_expression" => {
-                if let Some(ident_node) = value_node.child(0) {
-                    if ident_node.kind() == "identifier" {
-                        return ident_node
-                            .utf8_text(content.as_bytes())
-                            .ok()
-                            .map(|s| s.to_string());
-                    }
-                }
-            }
-            _ => {}
+        if value_node.kind() == "call_expression"
+            && let Some(ident_node) = value_node.child(0)
+            && ident_node.kind() == "identifier"
+        {
+            return ident_node
+                .utf8_text(content.as_bytes())
+                .ok()
+                .map(|s| s.to_string());
         }
         None
     }
@@ -420,15 +417,15 @@ impl KotlinSupport {
         let mut cursor = arg_list_node.walk();
 
         for child in arg_list_node.children(&mut cursor) {
-            if child.is_named() {
-                if let Ok(arg_text) = child.utf8_text(content.as_bytes()) {
-                    let arg_name = arg_text.to_string();
-                    let position = Position {
-                        line: child.start_position().row as u32,
-                        character: child.start_position().column as u32,
-                    };
-                    args.push((arg_name, position));
-                }
+            if child.is_named()
+                && let Ok(arg_text) = child.utf8_text(content.as_bytes())
+            {
+                let arg_name = arg_text.to_string();
+                let position = Position {
+                    line: child.start_position().row as u32,
+                    character: child.start_position().column as u32,
+                };
+                args.push((arg_name, position));
             }
         }
 
@@ -449,12 +446,11 @@ impl KotlinSupport {
         let mut params = Vec::new();
         let mut cursor = params_node.walk();
         for child in params_node.children(&mut cursor) {
-            if child.kind() == "parameter" {
-                if let Some(type_node) = child.child_by_field_name("type") {
-                    if let Ok(type_name) = type_node.utf8_text(content.as_bytes()) {
-                        params.push(type_name.to_string());
-                    }
-                }
+            if child.kind() == "parameter"
+                && let Some(type_node) = child.child_by_field_name("type")
+                && let Ok(type_name) = type_node.utf8_text(content.as_bytes())
+            {
+                params.push(type_name.to_string());
             }
         }
         params
@@ -602,13 +598,8 @@ impl LanguageSupport for KotlinSupport {
     fn get_modifiers(&self, node: &Node, source: &str) -> Vec<String> {
         match self.get_kind(node) {
             Some(_) => ts_helper::get_one(node, source, &GET_MODIFIERS_QUERY)
-                .map(|line| {
-                    line.split_whitespace()
-                        .into_iter()
-                        .map(|m| m.to_string())
-                        .collect()
-                })
-                .unwrap_or(vec![]),
+                .map(|line| line.split_whitespace().map(|m| m.to_string()).collect())
+                .unwrap_or_default(),
             None => Vec::new(),
         }
     }
@@ -775,10 +766,7 @@ impl LanguageSupport for KotlinSupport {
 
                 return result.or(Some(vec![]));
             }
-            current = match current.parent() {
-                Some(p) => p,
-                None => return None,
-            };
+            current = current.parent()?;
         }
     }
 
@@ -791,7 +779,7 @@ impl LanguageSupport for KotlinSupport {
                 "collection_literal" => return Some("List".to_string()),
 
                 "decimal_integer_literal" | "hex_literal" | "bin_literal" => {
-                    if let Ok(_) = node.utf8_text(content.as_bytes()) {
+                    if node.utf8_text(content.as_bytes()).is_ok() {
                         if let Some(parent) = node.parent() {
                             match parent.kind() {
                                 "long_literal" => {
@@ -856,10 +844,7 @@ impl LanguageSupport for KotlinSupport {
                 _ => {}
             }
 
-            node = match node.parent() {
-                Some(p) => p,
-                None => return None,
-            };
+            node = node.parent()?;
         }
     }
 
@@ -1012,7 +997,7 @@ mod tests {
                 line.find(marker)
                     .map(|col| Position::new(line_num as u32, col as u32))
             })
-            .expect(&format!("Marker '{}' not found", marker))
+            .unwrap_or_else(|| panic!("Marker '{}' not found", marker))
     }
 
     fn find_node_by_kind<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {

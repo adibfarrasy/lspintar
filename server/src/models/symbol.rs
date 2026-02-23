@@ -62,7 +62,7 @@ impl AsLspLocation for Symbol {
     fn as_lsp_location(&self) -> Option<Location> {
         let uri = Url::from_file_path(&self.file_path).ok()?;
         Some(Location {
-            uri: uri,
+            uri,
             range: Range {
                 start: Position {
                     line: self.ident_line_start as u32,
@@ -135,8 +135,8 @@ impl AsLspHover for Symbol {
 
         parts.push(signature_line);
 
-        if let Some(params) = &self.metadata.parameters {
-            if !params.is_empty() {
+        if let Some(params) = &self.metadata.parameters
+            && !params.is_empty() {
                 let format_param = |p: &SymbolParameter| {
                     let mut s = match &p.type_name {
                         Some(t) => format!("{} {}", t, p.name),
@@ -162,18 +162,16 @@ impl AsLspHover for Symbol {
                     parts.push(format!("({})", params_str));
                 }
             }
-        }
 
         if self.metadata.documentation.is_some() {
             parts.push(String::new());
             parts.push("---".to_string());
         }
         parts.push("```".to_string());
-        if let Some(doc) = &self.metadata.documentation {
-            if !doc.is_empty() {
+        if let Some(doc) = &self.metadata.documentation
+            && !doc.is_empty() {
                 parts.push(strip_comment_signifiers(doc));
             }
-        }
         Some(Hover {
             contents: HoverContents::Markup(MarkupContent {
                 kind: MarkupKind::Markdown,

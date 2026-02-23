@@ -58,7 +58,7 @@ impl ResolvedSymbol {
             }
             ResolvedSymbol::Local { var_type, .. } => var_type
                 .as_deref()
-                .and_then(|t| NodeKind::from_string(t))
+                .and_then(NodeKind::from_string)
                 .unwrap_or(NodeKind::Class),
         }
     }

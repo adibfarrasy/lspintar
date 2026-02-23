@@ -81,28 +81,32 @@ impl Backend {
         }
 
         // Direct import match
-        if let Some(import) = imports.iter().find(|i| i.split('.').last() == Some(name)) {
+        if let Some(import) = imports
+            .iter()
+            .find(|i| i.split('.').next_back() == Some(name))
+        {
             return Some(import.clone());
         }
 
         // Wildcard import match
         for import in imports.iter().filter(|i| i.ends_with(".*")) {
             let tmp_fqn = import.replace("*", name);
-            if let Some(_) = self
+            if (self
                 .repo
                 .get()
-                .ok_or_else(|| tower_lsp::jsonrpc::Error::internal_error())
+                .ok_or_else(tower_lsp::jsonrpc::Error::internal_error)
                 .ok()?
                 .find_symbol_by_fqn(&tmp_fqn)
                 .await
-                .ok()?
+                .ok()?)
+            .is_some()
             {
                 return Some(tmp_fqn);
             }
             if let Ok(Some(_)) = self
                 .repo
                 .get()
-                .ok_or_else(|| tower_lsp::jsonrpc::Error::internal_error())
+                .ok_or_else(tower_lsp::jsonrpc::Error::internal_error)
                 .ok()?
                 .find_external_symbol_by_fqn(&tmp_fqn)
                 .await
@@ -125,7 +129,7 @@ impl Backend {
         if let Ok(Some(_)) = self
             .repo
             .get()
-            .ok_or_else(|| tower_lsp::jsonrpc::Error::internal_error())
+            .ok_or_else(tower_lsp::jsonrpc::Error::internal_error)
             .ok()?
             .find_external_symbol_by_fqn(&fallback_fqn)
             .await
@@ -170,7 +174,7 @@ impl Backend {
         if let Ok(Some(found)) = self
             .repo
             .get()
-            .ok_or_else(|| tower_lsp::jsonrpc::Error::internal_error())
+            .ok_or_else(tower_lsp::jsonrpc::Error::internal_error)
             .ok()?
             .find_symbol_by_fqn(&getter_fqn)
             .await
@@ -182,7 +186,7 @@ impl Backend {
         let is_getter_fqn = format!("{}#is{}", class_fqn, capitalize(ident));
         self.repo
             .get()
-            .ok_or_else(|| tower_lsp::jsonrpc::Error::internal_error())
+            .ok_or_else(tower_lsp::jsonrpc::Error::internal_error)
             .ok()?
             .find_symbol_by_fqn(&is_getter_fqn)
             .await
@@ -256,12 +260,11 @@ impl Backend {
         let member_fqn = format!("{}#{}", type_fqn, member);
 
         // Try direct member
-        if let Some(repo) = self.repo.get() {
-            if let Ok(found) = repo.find_symbols_by_fqn(&member_fqn).await {
-                if !found.is_empty() {
-                    return found.into_iter().map(ResolvedSymbol::Project).collect();
-                }
-            }
+        if let Some(repo) = self.repo.get()
+            && let Ok(found) = repo.find_symbols_by_fqn(&member_fqn).await
+            && !found.is_empty()
+        {
+            return found.into_iter().map(ResolvedSymbol::Project).collect();
         }
 
         if let Some(found) = self.try_property_access(type_fqn, member).await {
@@ -275,10 +278,10 @@ impl Backend {
             return result;
         }
 
-        if let Some(repo) = self.repo.get() {
-            if let Ok(Some(found)) = repo.find_external_symbol_by_fqn(&member_fqn).await {
-                return vec![ResolvedSymbol::External(found)];
-            }
+        if let Some(repo) = self.repo.get()
+            && let Ok(Some(found)) = repo.find_external_symbol_by_fqn(&member_fqn).await
+        {
+            return vec![ResolvedSymbol::External(found)];
         }
 
         vec![]
@@ -295,7 +298,7 @@ impl Backend {
     ) -> Vec<ResolvedSymbol> {
         tracing::info!("recurse_try_members_with_inheritance");
         let fqn = match self
-            .resolve_fqn(&parent_short_name, imports.clone(), package_name.clone())
+            .resolve_fqn(parent_short_name, imports.clone(), package_name.clone())
             .await
         {
             Some(fqn) => fqn,
@@ -343,6 +346,7 @@ impl Backend {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     #[tracing::instrument(skip_all)]
     async fn resolve_type_member_chain(
         &self,
@@ -375,6 +379,7 @@ impl Backend {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn walk_member_chain(
         &self,
         qualifier: &str,
@@ -434,6 +439,7 @@ impl Backend {
         Some(current_type_fqn)
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn complete_type_member_chain(
         &self,
         qualifier: &str,
@@ -460,10 +466,10 @@ impl Backend {
         };
 
         if let Some(repo) = self.repo.get() {
-            if let Ok(symbols) = repo.find_symbols_by_parent_name(&fqn).await {
-                if !symbols.is_empty() {
-                    return symbols.into_iter().map(ResolvedSymbol::Project).collect();
-                }
+            if let Ok(symbols) = repo.find_symbols_by_parent_name(&fqn).await
+                && !symbols.is_empty()
+            {
+                return symbols.into_iter().map(ResolvedSymbol::Project).collect();
             }
             repo.find_external_symbols_by_parent_name(&fqn)
                 .await
@@ -481,10 +487,10 @@ impl Backend {
             return vec![];
         };
 
-        if let Ok(symbols) = repo.find_symbols_by_prefix(prefix).await {
-            if !symbols.is_empty() {
-                return symbols.into_iter().map(ResolvedSymbol::Project).collect();
-            }
+        if let Ok(symbols) = repo.find_symbols_by_prefix(prefix).await
+            && !symbols.is_empty()
+        {
+            return symbols.into_iter().map(ResolvedSymbol::Project).collect();
         }
         repo.find_external_symbols_by_prefix(prefix)
             .await
@@ -494,6 +500,7 @@ impl Backend {
             .collect()
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn select_best_overload(
         &self,
         symbols: Vec<ResolvedSymbol>,
@@ -511,7 +518,7 @@ impl Backend {
             .filter(|s| {
                 s.metadata()
                     .and_then(|m| m.parameters.as_ref())
-                    .map_or(false, |params| params.len() == arg_count)
+                    .is_some_and(|params| params.len() == arg_count)
             })
             .collect();
 
@@ -526,10 +533,10 @@ impl Backend {
         let mut arg_fqns = Vec::new();
         for (arg, position) in &call_args {
             let arg_type =
-                if let Some(literal_type) = lang.get_literal_type(tree, content, &position) {
+                if let Some(literal_type) = lang.get_literal_type(tree, content, position) {
                     literal_type
                 } else {
-                    lang.find_variable_type(tree, content, arg, &position)
+                    lang.find_variable_type(tree, content, arg, position)
                         .unwrap_or_else(|| arg.clone())
                 };
 
@@ -592,12 +599,12 @@ impl Backend {
                     .metadata
                     .parameters
                     .as_ref()
-                    .map_or(false, |params| params.len() == expected_param_count),
+                    .is_some_and(|params| params.len() == expected_param_count),
                 ResolvedSymbol::External(external) => external
                     .metadata
                     .parameters
                     .as_ref()
-                    .map_or(false, |params| params.len() == expected_param_count),
+                    .is_some_and(|params| params.len() == expected_param_count),
                 ResolvedSymbol::Local { .. } => false,
             })
             .collect()
@@ -663,8 +670,8 @@ impl Backend {
                         return Ok(symbols);
                     }
 
-                    if let Some(args) = lang.extract_call_arguments(&tree, &content, &position) {
-                        if let Some(symbol) = self
+                    if let Some(args) = lang.extract_call_arguments(&tree, &content, &position)
+                        && let Some(symbol) = self
                             .select_best_overload(
                                 symbols.clone(),
                                 args,
@@ -675,9 +682,8 @@ impl Backend {
                                 package_name,
                             )
                             .await
-                        {
-                            return Ok(vec![symbol]);
-                        }
+                    {
+                        return Ok(vec![symbol]);
                     }
 
                     Ok(symbols)
@@ -718,7 +724,7 @@ impl Backend {
         let repo = self
             .repo
             .get()
-            .ok_or_else(|| tower_lsp::jsonrpc::Error::internal_error())?;
+            .ok_or_else(tower_lsp::jsonrpc::Error::internal_error)?;
 
         if let Ok(Some(symbol)) = repo.find_symbol_by_fqn(&fqn).await {
             return Ok(vec![ResolvedSymbol::Project(symbol)]);
@@ -737,9 +743,8 @@ impl Backend {
 
     fn is_cache_dir(&self, path: Option<&Path>) -> bool {
         path.map(|p| {
-            return p
-                .components()
-                .any(|c| matches!(c.as_os_str().to_str(), Some(".gradle" | ".m2" | "caches")));
+            p.components()
+                .any(|c| matches!(c.as_os_str().to_str(), Some(".gradle" | ".m2" | "caches")))
         });
 
         false
@@ -749,14 +754,14 @@ impl Backend {
         let uri = pos.text_document.uri.to_string();
         let ttl = Duration::from_secs(FILE_CACHE_TTL_SECS);
 
-        if let Some(entry) = self.documents.get(&uri) {
-            if entry.1.elapsed() < ttl {
-                return entry
-                    .0
-                    .lines()
-                    .nth(pos.position.line as usize)
-                    .map(str::to_string);
-            }
+        if let Some(entry) = self.documents.get(&uri)
+            && entry.1.elapsed() < ttl
+        {
+            return entry
+                .0
+                .lines()
+                .nth(pos.position.line as usize)
+                .map(str::to_string);
         }
 
         let path = pos.text_document.uri.to_file_path().ok()?;
@@ -876,7 +881,7 @@ impl LanguageServer for Backend {
             let vcs = get_vcs_handler(&root);
             let build_tool = get_build_tool(&root);
 
-            let mut indexer = Indexer::new(Arc::clone(&repo));
+            let mut indexer = Indexer::new(Arc::clone(repo));
             languages.iter().for_each(|(k, v)| {
                 indexer.register_language(k, v.clone());
             });
@@ -1046,12 +1051,12 @@ impl LanguageServer for Backend {
         if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
             let lang = self.languages.get(ext).ok_or_else(|| {
                 tower_lsp::jsonrpc::Error::invalid_params(
-                    format!("Failed to get language support",),
+                    "Failed to get language support".to_string(),
                 )
             })?;
 
             let (tree, content) = lang.parse(&path).ok_or_else(|| {
-                tower_lsp::jsonrpc::Error::invalid_params(format!("Failed to parse file"))
+                tower_lsp::jsonrpc::Error::invalid_params("Failed to parse file".to_string())
             })?;
 
             let imports = lang.get_imports(&tree, &content);
@@ -1066,14 +1071,14 @@ impl LanguageServer for Backend {
                     let fqn = self
                         .resolve_fqn(&type_name, imports, package_name)
                         .await
-                        .ok_or(tower_lsp::jsonrpc::Error::invalid_params(format!(
-                            "Failed to find FQN by location",
-                        )))?;
+                        .ok_or(tower_lsp::jsonrpc::Error::invalid_params(
+                            "Failed to find FQN by location".to_string(),
+                        ))?;
 
                     let implementations = self
                         .repo
                         .get()
-                        .ok_or_else(|| tower_lsp::jsonrpc::Error::internal_error())?
+                        .ok_or_else(tower_lsp::jsonrpc::Error::internal_error)?
                         .find_super_impls_by_fqn(&fqn)
                         .await
                         .map_err(|e| {
@@ -1087,7 +1092,7 @@ impl LanguageServer for Backend {
                         // Best effort
                         self.repo
                             .get()
-                            .ok_or_else(|| tower_lsp::jsonrpc::Error::internal_error())?
+                            .ok_or_else(tower_lsp::jsonrpc::Error::internal_error)?
                             .find_super_impls_by_short_name(&type_name)
                             .await
                             .map_err(|e| {
@@ -1103,7 +1108,7 @@ impl LanguageServer for Backend {
                     return Ok(self.resolved_symbols_to_impl_response(
                         implementations
                             .into_iter()
-                            .map(|i| ResolvedSymbol::Project(i))
+                            .map(ResolvedSymbol::Project)
                             .collect(),
                     ));
                 };
@@ -1121,7 +1126,7 @@ impl LanguageServer for Backend {
                     let implementations = self
                         .repo
                         .get()
-                        .ok_or_else(|| tower_lsp::jsonrpc::Error::internal_error())?
+                        .ok_or_else(tower_lsp::jsonrpc::Error::internal_error)?
                         .find_super_impls_by_fqn(&parent_fqn)
                         .await
                         .map_err(|e| {
@@ -1138,14 +1143,12 @@ impl LanguageServer for Backend {
                         if let Ok(symbols) = self
                             .repo
                             .get()
-                            .ok_or_else(|| tower_lsp::jsonrpc::Error::internal_error())?
+                            .ok_or_else(tower_lsp::jsonrpc::Error::internal_error)?
                             .find_symbols_by_fqn(&method_fqn)
                             .await
                         {
-                            let resolved: Vec<ResolvedSymbol> = symbols
-                                .into_iter()
-                                .map(|s| ResolvedSymbol::Project(s))
-                                .collect();
+                            let resolved: Vec<ResolvedSymbol> =
+                                symbols.into_iter().map(ResolvedSymbol::Project).collect();
 
                             method_symbols.extend(resolved);
                         }
@@ -1293,80 +1296,77 @@ impl LanguageServer for Backend {
             symbols
         };
 
-        let items: Vec<CompletionItem> = symbols
-            .into_iter()
-            .filter_map(|s| match s {
-                ResolvedSymbol::External(_) | ResolvedSymbol::Project(_) => Some(CompletionItem {
-                    label: s.name().to_string(),
-                    kind: s.node_kind().to_lsp_kind(),
-                    detail: Some(s.package_name().unwrap_or_default().to_string()),
-                    additional_text_edits: if lang
-                        .get_implicit_imports()
-                        .iter()
-                        .any(|i| i.replace(".*", "") == s.package_name().unwrap_or_default())
-                    {
-                        None
-                    } else {
-                        match s {
-                            ResolvedSymbol::External(ext) => {
-                                let import_fqn = ext
-                                    .fully_qualified_name
-                                    .split('#')
-                                    .next()
-                                    .unwrap_or(&ext.fully_qualified_name);
+        let items: Vec<CompletionItem> =
+            symbols
+                .into_iter()
+                .map(|s| match s {
+                    ResolvedSymbol::External(_) | ResolvedSymbol::Project(_) => CompletionItem {
+                        label: s.name().to_string(),
+                        kind: s.node_kind().to_lsp_kind(),
+                        detail: Some(s.package_name().unwrap_or_default().to_string()),
+                        additional_text_edits: if lang.get_implicit_imports().iter().any(|i| {
+                            i.trim_end_matches(".*") == s.package_name().unwrap_or_default()
+                        }) {
+                            None
+                        } else {
+                            match s {
+                                ResolvedSymbol::External(ext) => {
+                                    let import_fqn = ext
+                                        .fully_qualified_name
+                                        .split('#')
+                                        .next()
+                                        .unwrap_or(&ext.fully_qualified_name);
 
-                                if !imports.contains(&import_fqn.to_string()) {
-                                    let import_text_edit = get_import_text_edit(
-                                        &content,
-                                        &ext.fully_qualified_name,
-                                        &ext.package_name,
-                                        &ext.parent_name.unwrap_or_default(),
-                                        lang.get_language(),
-                                    );
-                                    Some(vec![import_text_edit])
-                                } else {
-                                    None
+                                    if !imports.contains(&import_fqn.to_string()) {
+                                        let import_text_edit = get_import_text_edit(
+                                            &content,
+                                            &ext.fully_qualified_name,
+                                            &ext.package_name,
+                                            &ext.parent_name.unwrap_or_default(),
+                                            lang.get_language(),
+                                        );
+                                        Some(vec![import_text_edit])
+                                    } else {
+                                        None
+                                    }
                                 }
-                            }
 
-                            ResolvedSymbol::Project(sym) => {
-                                let import_fqn = sym
-                                    .fully_qualified_name
-                                    .split('#')
-                                    .next()
-                                    .unwrap_or(&sym.fully_qualified_name);
+                                ResolvedSymbol::Project(sym) => {
+                                    let import_fqn = sym
+                                        .fully_qualified_name
+                                        .split('#')
+                                        .next()
+                                        .unwrap_or(&sym.fully_qualified_name);
 
-                                if !imports.contains(&import_fqn.to_string())
-                                    && sym.package_name
-                                        != package_name.as_deref().unwrap_or_default()
-                                {
-                                    let import_text_edit = get_import_text_edit(
-                                        &content,
-                                        &sym.fully_qualified_name,
-                                        &sym.package_name,
-                                        &sym.parent_name.unwrap_or_default(),
-                                        lang.get_language(),
-                                    );
-                                    Some(vec![import_text_edit])
-                                } else {
-                                    None
+                                    if !imports.contains(&import_fqn.to_string())
+                                        && sym.package_name
+                                            != package_name.as_deref().unwrap_or_default()
+                                    {
+                                        let import_text_edit = get_import_text_edit(
+                                            &content,
+                                            &sym.fully_qualified_name,
+                                            &sym.package_name,
+                                            &sym.parent_name.unwrap_or_default(),
+                                            lang.get_language(),
+                                        );
+                                        Some(vec![import_text_edit])
+                                    } else {
+                                        None
+                                    }
                                 }
+                                ResolvedSymbol::Local { .. } => None,
                             }
-                            ResolvedSymbol::Local { .. } => None,
-                        }
+                        },
+                        ..Default::default()
                     },
-                    ..Default::default()
-                }),
-                ResolvedSymbol::Local { name, var_type, .. } => {
-                    return Some(CompletionItem {
+                    ResolvedSymbol::Local { name, var_type, .. } => CompletionItem {
                         label: name,
                         kind: Some(CompletionItemKind::VARIABLE),
                         detail: var_type,
                         ..Default::default()
-                    });
-                }
-            })
-            .collect();
+                    },
+                })
+                .collect();
 
         if items.is_empty() {
             Ok(None)
