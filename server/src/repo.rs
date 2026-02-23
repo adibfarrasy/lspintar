@@ -134,6 +134,13 @@ impl Repository {
     ) -> Result<(), sqlx::Error> {
         let mut tx = self.pool.begin().await?;
 
+        for (symbol_fqn, _, _) in &mappings {
+            sqlx::query("DELETE FROM symbol_super_mapping WHERE symbol_fqn = ?")
+                .bind(symbol_fqn)
+                .execute(&mut *tx)
+                .await?;
+        }
+
         for (symbol_fqn, super_short_name, super_fqn) in mappings {
             sqlx::query(
                 "INSERT INTO symbol_super_mapping (symbol_fqn, super_short_name, super_fqn) 

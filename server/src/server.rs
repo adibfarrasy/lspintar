@@ -22,7 +22,7 @@ use tokio::sync::{OnceCell, RwLock};
 use tower_lsp::lsp_types::*;
 use tower_lsp::{LanguageServer, lsp_types::request::GotoImplementationParams};
 use tower_lsp::{jsonrpc::Result, lsp_types::request::GotoImplementationResponse};
-use tracing::debug;
+use tracing::{debug, warn};
 use tree_sitter::Tree;
 
 use crate::{
@@ -35,13 +35,17 @@ use crate::{
 
 #[derive(Clone)]
 pub struct Backend {
+    // used in tests
     #[allow(dead_code)]
-    pub client: tower_lsp::Client, // used in tests
-    indexer: Arc<RwLock<Option<Indexer>>>,
+    pub client: tower_lsp::Client,
     pub repo: OnceCell<Arc<Repository>>,
+
+    indexer: Arc<RwLock<Option<Indexer>>>,
     workspace_root: Arc<RwLock<Option<PathBuf>>>,
     languages: HashMap<String, Arc<dyn LanguageSupport + Send + Sync>>,
     vcs_handler: Arc<RwLock<Option<Arc<dyn VcsHandler + Send + Sync>>>>,
+
+    // optimization to avoid excessive I/O calls for reading opened file contents
     documents: DashMap<String, (String, Instant)>,
 }
 
@@ -1174,7 +1178,44 @@ impl LanguageServer for Backend {
         Ok(())
     }
 
-    async fn did_save(&self, _params: DidSaveTextDocumentParams) {}
+    async fn did_save(&self, params: DidSaveTextDocumentParams) {
+        let path = match params.text_document.uri.to_file_path() {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+        let Some(indexer) = self.indexer.read().await.as_ref().cloned() else {
+            return;
+        };
+        let Some(repo) = self.repo.get().cloned() else {
+            return;
+        };
+
+        let path_clone = path.clone();
+        let result = tokio::task::spawn_blocking(move || indexer.index_file(&path_clone)).await;
+
+        match result {
+            Ok(Ok(Some((symbols, supers)))) => {
+                for chunk in symbols.chunks(1000) {
+                    if let Err(e) = repo.insert_symbols(chunk).await {
+                        warn!("Failed to insert symbols on save: {e}");
+                    }
+                }
+                for chunk in supers.chunks(1000) {
+                    let mappings = chunk
+                        .iter()
+                        .map(|m| (&*m.symbol_fqn, &*m.super_short_name, m.super_fqn.as_deref()))
+                        .collect::<Vec<_>>();
+                    if let Err(e) = repo.insert_symbol_super_mappings(mappings).await {
+                        warn!("Failed to insert mappings on save: {e}");
+                    }
+                }
+                debug!("Re-indexed: {}", path.display());
+            }
+            Ok(Ok(None)) => {} // unsupported file type, ignore
+            Ok(Err(e)) => warn!("Parse error on save, skipping reindex: {e}"),
+            Err(e) => warn!("Failed to spawn index task: {e}"),
+        }
+    }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let pos = &params.text_document_position;

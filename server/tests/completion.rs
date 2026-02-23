@@ -14,7 +14,7 @@ use crate::util::get_test_server;
 mod util;
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_completion_chain_with_import() {
+async fn completion_chain_with_import() {
     let server = get_test_server("polyglot-spring").await;
 
     let root = env::current_dir().expect("cannot get current dir");
@@ -51,7 +51,7 @@ async fn test_completion_chain_with_import() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_completion_prefix_with_import() {
+async fn completion_prefix_with_import() {
     let server = get_test_server("polyglot-spring").await;
 
     let root = env::current_dir().expect("cannot get current dir");
