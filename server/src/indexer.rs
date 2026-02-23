@@ -4,10 +4,7 @@ use classfile_parser::{
 };
 use futures::{StreamExt, stream};
 use java::JAVA_IMPLICIT_IMPORTS;
-use lsp_core::{
-    language_support::LanguageSupport, node_kind::NodeKind, util::naive_resolve_fqn,
-    vcs::VcsHandler,
-};
+use lsp_core::{language_support::LanguageSupport, node_kind::NodeKind, util::naive_resolve_fqn};
 use std::{
     collections::HashMap,
     fs::File,
@@ -42,15 +39,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub struct Indexer {
     languages: HashMap<String, Arc<dyn LanguageSupport>>,
     repo: Arc<Repository>,
-    vcs: Arc<dyn VcsHandler>,
 }
 
 impl Indexer {
-    pub fn new(repo: Arc<Repository>, vcs: Arc<dyn VcsHandler>) -> Self {
+    pub fn new(repo: Arc<Repository>) -> Self {
         Self {
             languages: HashMap::new(),
             repo,
-            vcs,
         }
     }
 
@@ -162,28 +157,6 @@ impl Indexer {
         }
 
         Ok(None)
-    }
-
-    async fn insert_indexes(
-        &self,
-        symbols: Vec<Symbol>,
-        supers: Vec<SymbolSuperMapping>,
-    ) -> Result<()> {
-        self.repo.insert_symbols(&symbols).await?;
-        if !supers.is_empty() {
-            let mappings = supers
-                .iter()
-                .map(|mapping| {
-                    (
-                        &*mapping.symbol_fqn,
-                        &*mapping.super_short_name,
-                        mapping.super_fqn.as_deref(),
-                    )
-                })
-                .collect();
-            self.repo.insert_symbol_super_mappings(mappings).await?;
-        }
-        Ok(())
     }
 
     fn get_symbols_from_tree(
@@ -317,7 +290,6 @@ impl Indexer {
 
                     symbols.push(Symbol {
                         id: None,
-                        vcs_branch: self.vcs.get_current_branch().ok().unwrap(),
                         short_name: short_name,
                         package_name: package_name.to_string(),
                         fully_qualified_name: fqn.clone(),

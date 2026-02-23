@@ -32,22 +32,19 @@ impl Repository {
         let mut tx = self.pool.begin().await?;
 
         let file_path = &symbols[0].file_path;
-        let branch = &symbols[0].vcs_branch;
-        sqlx::query("DELETE FROM symbols WHERE file_path = ? AND vcs_branch = ?")
+        sqlx::query("DELETE FROM symbols WHERE file_path = ?")
             .bind(file_path)
-            .bind(branch)
             .execute(&mut *tx)
             .await?;
 
         for s in symbols {
             sqlx::query(
-                "INSERT INTO symbols (vcs_branch, short_name, package_name, fully_qualified_name, parent_name, 
+                "INSERT INTO symbols (short_name, package_name, fully_qualified_name, parent_name, 
                 file_path, file_type, symbol_type, modifiers, line_start, line_end, 
                 char_start, char_end, ident_line_start, ident_line_end, ident_char_start,
                 ident_char_end, metadata, last_modified)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(vcs_branch, file_path, fully_qualified_name, metadata) DO UPDATE SET
-                    vcs_branch = excluded.vcs_branch,
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(file_path, fully_qualified_name, metadata) DO UPDATE SET
                     short_name = excluded.short_name,
                     package_name = excluded.package_name,
                     fully_qualified_name = excluded.fully_qualified_name,
@@ -64,7 +61,6 @@ impl Repository {
                     metadata = excluded.metadata,
                     last_modified = excluded.last_modified",
             )
-            .bind(&s.vcs_branch)
             .bind(&s.short_name)
             .bind(&s.package_name)
             .bind(&s.fully_qualified_name)
@@ -91,69 +87,45 @@ impl Repository {
     }
 
     #[tracing::instrument(skip(self))]
-    pub async fn find_symbol_by_fqn_and_branch(
-        &self,
-        fqn: &str,
-        vcs_branch: &str,
-    ) -> Result<Option<Symbol>, sqlx::Error> {
-        tracing::info!("find_symbol_by_fqn_and_branch");
-        sqlx::query_as::<_, Symbol>(
-            "SELECT * FROM symbols WHERE fully_qualified_name = ? AND vcs_branch = ?",
-        )
-        .bind(fqn)
-        .bind(vcs_branch)
-        .fetch_optional(&self.pool)
-        .await
+    pub async fn find_symbol_by_fqn(&self, fqn: &str) -> Result<Option<Symbol>, sqlx::Error> {
+        tracing::info!("find_symbol_by_fqn");
+        sqlx::query_as::<_, Symbol>("SELECT * FROM symbols WHERE fully_qualified_name = ?")
+            .bind(fqn)
+            .fetch_optional(&self.pool)
+            .await
     }
 
     #[tracing::instrument(skip(self))]
-    pub async fn find_symbols_by_parent_name_and_branch(
+    pub async fn find_symbols_by_parent_name(
         &self,
         parent_fqn: &str,
-        vcs_branch: &str,
     ) -> Result<Vec<Symbol>, sqlx::Error> {
-        tracing::info!("find_symbols_by_parent_name_and_branch");
+        tracing::info!("find_symbols_by_parent_name");
+        sqlx::query_as::<_, Symbol>("SELECT * FROM symbols WHERE parent_name = ?")
+            .bind(parent_fqn)
+            .fetch_all(&self.pool)
+            .await
+    }
+
+    #[tracing::instrument(skip(self))]
+    pub async fn find_symbols_by_prefix(&self, prefix: &str) -> Result<Vec<Symbol>, sqlx::Error> {
+        tracing::info!("find_symbols_by_prefix");
         sqlx::query_as::<_, Symbol>(
-            "SELECT * FROM symbols WHERE parent_name = ? AND vcs_branch = ?",
+            "SELECT * FROM symbols WHERE fully_qualified_name LIKE ? OR short_name LIKE ?",
         )
-        .bind(parent_fqn)
-        .bind(vcs_branch)
+        .bind(format!("{}%", prefix))
+        .bind(format!("{}%", prefix))
         .fetch_all(&self.pool)
         .await
     }
 
     #[tracing::instrument(skip(self))]
-    pub async fn find_symbols_by_prefix_and_branch(
-        &self,
-        prefix: &str,
-        vcs_branch: &str,
-    ) -> Result<Vec<Symbol>, sqlx::Error> {
-        tracing::info!("find_symbols_by_prefix_and_branch");
-        sqlx::query_as::<_, Symbol>(
-            "SELECT * FROM symbols WHERE (fully_qualified_name LIKE ? OR short_name LIKE ?)
-                AND vcs_branch = ?",
-        )
-        .bind(format!("{}%", prefix))
-        .bind(format!("{}%", prefix))
-        .bind(vcs_branch)
-        .fetch_all(&self.pool)
-        .await
-    }
-
-    #[tracing::instrument(skip(self))]
-    pub async fn find_symbols_by_fqn_and_branch(
-        &self,
-        fqn: &str,
-        vcs_branch: &str,
-    ) -> Result<Vec<Symbol>, sqlx::Error> {
-        tracing::info!("find_symbols_by_fqn_and_branch");
-        sqlx::query_as::<_, Symbol>(
-            "SELECT * FROM symbols WHERE fully_qualified_name = ? AND vcs_branch = ?",
-        )
-        .bind(fqn)
-        .bind(vcs_branch)
-        .fetch_all(&self.pool)
-        .await
+    pub async fn find_symbols_by_fqn(&self, fqn: &str) -> Result<Vec<Symbol>, sqlx::Error> {
+        tracing::info!("find_symbols_by_fqn");
+        sqlx::query_as::<_, Symbol>("SELECT * FROM symbols WHERE fully_qualified_name = ?")
+            .bind(fqn)
+            .fetch_all(&self.pool)
+            .await
     }
 
     pub async fn insert_symbol_super_mappings(
@@ -178,13 +150,12 @@ impl Repository {
         Ok(())
     }
 
-    pub async fn find_super_impls_by_fqn_and_branch(
+    pub async fn find_super_impls_by_fqn(
         &self,
         super_fqn: &str,
-        branch: &str,
     ) -> Result<Vec<Symbol>, sqlx::Error> {
         let symbols = sqlx::query_as::<_, Symbol>(
-            "SELECT s.id, s.vcs_branch, s.short_name, s.package_name, 
+            "SELECT s.id, s.short_name, s.package_name, 
                 s.fully_qualified_name, s.parent_name, s.file_path, 
                 s.file_type, s.symbol_type, s.modifiers, s.line_start, 
                 s.line_end, s.char_start, s.char_end, s.ident_line_start,
@@ -193,24 +164,21 @@ impl Repository {
                 FROM symbols s
                 INNER JOIN symbol_super_mapping ssm 
                     ON s.fully_qualified_name = ssm.symbol_fqn
-                WHERE ssm.super_fqn = ? 
-                AND s.vcs_branch = ?",
+                WHERE ssm.super_fqn = ?",
         )
         .bind(super_fqn)
-        .bind(branch)
         .fetch_all(&self.pool)
         .await?;
 
         Ok(symbols)
     }
 
-    pub async fn find_super_impls_by_short_name_and_branch(
+    pub async fn find_super_impls_by_short_name(
         &self,
         super_short_name: &str,
-        branch: &str,
     ) -> Result<Vec<Symbol>, sqlx::Error> {
         let symbols = sqlx::query_as::<_, Symbol>(
-            "SELECT s.id, s.vcs_branch, s.short_name, s.package_name, 
+            "SELECT s.id, s.short_name, s.package_name, 
                 s.fully_qualified_name, s.parent_name, s.file_path, 
                 s.file_type, s.symbol_type, s.modifiers, s.line_start, 
                 s.line_end, s.char_start, s.char_end, s.ident_line_start,
@@ -219,24 +187,21 @@ impl Repository {
                 FROM symbols s
                 INNER JOIN symbol_super_mapping ssm 
                     ON s.fully_qualified_name = ssm.symbol_fqn
-                WHERE ssm.super_short_name = ? 
-                AND s.vcs_branch = ?",
+                WHERE ssm.super_short_name = ?",
         )
         .bind(super_short_name)
-        .bind(branch)
         .fetch_all(&self.pool)
         .await?;
 
         Ok(symbols)
     }
 
-    pub async fn find_supers_by_symbol_fqn_and_branch(
+    pub async fn find_supers_by_symbol_fqn(
         &self,
         symbol_fqn: &str,
-        branch: &str,
     ) -> Result<Vec<Symbol>, sqlx::Error> {
         let symbols = sqlx::query_as::<_, Symbol>(
-            "SELECT s.id, s.vcs_branch, s.short_name, s.package_name, 
+            "SELECT s.id, s.short_name, s.package_name, 
                 s.fully_qualified_name, s.parent_name, s.file_path, 
                 s.file_type, s.symbol_type, s.modifiers, s.line_start, 
                 s.line_end, s.char_start, s.char_end, s.ident_line_start,
@@ -245,11 +210,9 @@ impl Repository {
                 FROM symbols s
                 INNER JOIN symbol_super_mapping ssm 
                     ON s.fully_qualified_name = ssm.super_fqn
-                WHERE ssm.symbol_fqn = ? 
-                AND s.vcs_branch = ?",
+                WHERE ssm.symbol_fqn = ?",
         )
         .bind(symbol_fqn)
-        .bind(branch)
         .fetch_all(&self.pool)
         .await?;
 

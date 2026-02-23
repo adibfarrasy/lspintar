@@ -1,10 +1,7 @@
 use groovy::GroovySupport;
 use java::JavaSupport;
 use kotlin::KotlinSupport;
-use lsp_core::{
-    build_tools::{BuildToolHandler, gradle::GradleHandler},
-    vcs::get_vcs_handler,
-};
+use lsp_core::build_tools::{BuildToolHandler, gradle::GradleHandler};
 use lspintar_server::{
     Indexer, Repository,
     models::{
@@ -25,8 +22,7 @@ async fn index_groovy_class() {
     let path =
         Path::new("tests/fixtures/groovy-gradle-single/src/main/groovy/com/example/User.groovy");
 
-    let vcs = get_vcs_handler(&path);
-    let mut indexer = Indexer::new(Arc::clone(&repo), Arc::clone(&vcs));
+    let mut indexer = Indexer::new(Arc::clone(&repo));
     indexer.register_language("groovy", Arc::new(GroovySupport::new()));
     indexer
         .index_workspace(&path, |_, _| {}, |_, _| {})
@@ -34,7 +30,7 @@ async fn index_groovy_class() {
         .expect("Indexing failed");
 
     let result = repo
-        .find_symbol_by_fqn_and_branch("com.example.User", "NONE")
+        .find_symbol_by_fqn("com.example.User")
         .await
         .expect("Query failed");
     assert!(result.is_some(), "Symbol should be found");
@@ -47,7 +43,6 @@ async fn index_groovy_class() {
         symbol,
         Symbol {
             id: None,
-            vcs_branch: "NONE".to_string(),
             short_name: "User".to_string(),
             package_name: "com.example".to_string(),
             fully_qualified_name: "com.example.User".to_string(),
@@ -82,8 +77,7 @@ async fn index_groovy_gradle_single_workspace() {
     let repo = Arc::new(Repository::new(":memory:").await.unwrap());
     let path = Path::new("tests/fixtures/groovy-gradle-single");
 
-    let vcs = get_vcs_handler(&path);
-    let mut indexer = Indexer::new(Arc::clone(&repo), Arc::clone(&vcs));
+    let mut indexer = Indexer::new(Arc::clone(&repo));
     indexer.register_language("groovy", Arc::new(GroovySupport::new()));
     indexer
         .index_workspace(&path, |_, _| {}, |_, _| {})
@@ -91,7 +85,7 @@ async fn index_groovy_gradle_single_workspace() {
         .expect("Indexing failed");
 
     let result = repo
-        .find_symbol_by_fqn_and_branch("com.example.UserService", "NONE")
+        .find_symbol_by_fqn("com.example.UserService")
         .await
         .expect("Query failed");
     assert!(result.is_some(), "Symbol should be found");
@@ -104,7 +98,6 @@ async fn index_groovy_gradle_single_workspace() {
         symbol,
         Symbol {
             id: None,
-            vcs_branch: "NONE".to_string(),
             short_name: "UserService".to_string(),
             package_name: "com.example".to_string(),
             fully_qualified_name: "com.example.UserService".to_string(),
@@ -134,7 +127,7 @@ async fn index_groovy_gradle_single_workspace() {
     );
 
     let result = repo
-        .find_symbol_by_fqn_and_branch("com.example.Repository", "NONE")
+        .find_symbol_by_fqn("com.example.Repository")
         .await
         .expect("Query failed");
     assert!(result.is_some(), "Symbol should be found");
@@ -147,7 +140,6 @@ async fn index_groovy_gradle_single_workspace() {
         symbol,
         Symbol {
             id: None,
-            vcs_branch: "NONE".to_string(),
             short_name: "Repository".to_string(),
             package_name: "com.example".to_string(),
             fully_qualified_name: "com.example.Repository".to_string(),
@@ -177,7 +169,7 @@ async fn index_groovy_gradle_single_workspace() {
     );
 
     let result = repo
-        .find_symbol_by_fqn_and_branch("com.example.User#getDisplayName", "NONE")
+        .find_symbol_by_fqn("com.example.User#getDisplayName")
         .await
         .expect("Query failed");
     assert!(result.is_some(), "Symbol should be found");
@@ -190,7 +182,6 @@ async fn index_groovy_gradle_single_workspace() {
         symbol,
         Symbol {
             id: None,
-            vcs_branch: "NONE".to_string(),
             short_name: "getDisplayName".to_string(),
             package_name: "com.example".to_string(),
             fully_qualified_name: "com.example.User#getDisplayName".to_string(),
@@ -220,7 +211,7 @@ async fn index_groovy_gradle_single_workspace() {
     );
 
     let result = repo
-        .find_symbol_by_fqn_and_branch("com.example.UserService#userVariable", "NONE")
+        .find_symbol_by_fqn("com.example.UserService#userVariable")
         .await
         .expect("Query failed");
     assert!(result.is_some(), "Symbol should be found");
@@ -233,7 +224,6 @@ async fn index_groovy_gradle_single_workspace() {
         symbol,
         Symbol {
             id: None,
-            vcs_branch: "NONE".to_string(),
             short_name: "userVariable".to_string(),
             package_name: "com.example".to_string(),
             fully_qualified_name: "com.example.UserService#userVariable".to_string(),
@@ -270,8 +260,7 @@ async fn index_groovy_class_multi_project() {
     let repo = Arc::new(Repository::new(&db_dir).await.unwrap());
     let path = Path::new("tests/fixtures/groovy-gradle-multi");
 
-    let vcs = get_vcs_handler(&path);
-    let mut indexer = Indexer::new(Arc::clone(&repo), Arc::clone(&vcs));
+    let mut indexer = Indexer::new(Arc::clone(&repo));
     indexer.register_language("groovy", Arc::new(GroovySupport::new()));
     indexer
         .index_workspace(&path, |_, _| {}, |_, _| {})
@@ -279,7 +268,7 @@ async fn index_groovy_class_multi_project() {
         .expect("Indexing failed");
 
     let result = repo
-        .find_symbol_by_fqn_and_branch("com.example.core.BaseService", "NONE")
+        .find_symbol_by_fqn("com.example.core.BaseService")
         .await
         .expect("Query failed");
     assert!(result.is_some(), "Symbol should be found");
@@ -292,7 +281,6 @@ async fn index_groovy_class_multi_project() {
         symbol,
         Symbol {
             id: None,
-            vcs_branch: "NONE".to_string(),
             short_name: "BaseService".to_string(),
             package_name: "com.example.core".to_string(),
             fully_qualified_name: "com.example.core.BaseService".to_string(),
@@ -327,8 +315,7 @@ async fn index_groovy_method() {
     let repo = Arc::new(Repository::new(&db_dir).await.unwrap());
     let path = Path::new("tests/fixtures/groovy-gradle-multi");
 
-    let vcs = get_vcs_handler(&path);
-    let mut indexer = Indexer::new(Arc::clone(&repo), Arc::clone(&vcs));
+    let mut indexer = Indexer::new(Arc::clone(&repo));
     indexer.register_language("groovy", Arc::new(GroovySupport::new()));
     indexer
         .index_workspace(&path, |_, _| {}, |_, _| {})
@@ -336,7 +323,7 @@ async fn index_groovy_method() {
         .expect("Indexing failed");
 
     let result = repo
-        .find_symbol_by_fqn_and_branch("com.example.api.UserController#execute", "NONE")
+        .find_symbol_by_fqn("com.example.api.UserController#execute")
         .await
         .expect("Query failed");
     assert!(result.is_some(), "Symbol should be found");
@@ -349,7 +336,6 @@ async fn index_groovy_method() {
         symbol,
         Symbol {
             id: None,
-            vcs_branch: "NONE".to_string(),
             short_name: "execute".to_string(),
             package_name: "com.example.api".to_string(),
             fully_qualified_name: "com.example.api.UserController#execute".to_string(),
@@ -384,8 +370,7 @@ async fn index_groovy_nested_class() {
     let repo = Arc::new(Repository::new(&db_dir).await.unwrap());
     let path = Path::new("tests/fixtures/groovy-gradle-multi");
 
-    let vcs = get_vcs_handler(&path);
-    let mut indexer = Indexer::new(Arc::clone(&repo), Arc::clone(&vcs));
+    let mut indexer = Indexer::new(Arc::clone(&repo));
     indexer.register_language("groovy", Arc::new(GroovySupport::new()));
     indexer
         .index_workspace(&path, |_, _| {}, |_, _| {})
@@ -393,7 +378,7 @@ async fn index_groovy_nested_class() {
         .expect("Indexing failed");
 
     let result = repo
-        .find_symbol_by_fqn_and_branch("com.example.api.UserController#ApiResponse", "NONE")
+        .find_symbol_by_fqn("com.example.api.UserController#ApiResponse")
         .await
         .expect("Query failed");
     assert!(result.is_some(), "Symbol should be found");
@@ -406,7 +391,6 @@ async fn index_groovy_nested_class() {
         symbol,
         Symbol {
             id: None,
-            vcs_branch: "NONE".to_string(),
             short_name: "ApiResponse".to_string(),
             package_name: "com.example.api".to_string(),
             fully_qualified_name: "com.example.api.UserController#ApiResponse".to_string(),
@@ -441,8 +425,7 @@ async fn index_groovy_field() {
     let repo = Arc::new(Repository::new(&db_dir).await.unwrap());
     let path = Path::new("tests/fixtures/groovy-gradle-multi");
 
-    let vcs = get_vcs_handler(&path);
-    let mut indexer = Indexer::new(Arc::clone(&repo), Arc::clone(&vcs));
+    let mut indexer = Indexer::new(Arc::clone(&repo));
     indexer.register_language("groovy", Arc::new(GroovySupport::new()));
     indexer
         .index_workspace(&path, |_, _| {}, |_, _| {})
@@ -450,7 +433,7 @@ async fn index_groovy_field() {
         .expect("Indexing failed");
 
     let result = repo
-        .find_symbol_by_fqn_and_branch("com.example.core.DataProcessor#MAX_BATCH_SIZE", "NONE")
+        .find_symbol_by_fqn("com.example.core.DataProcessor#MAX_BATCH_SIZE")
         .await
         .expect("Query failed");
     assert!(result.is_some(), "Symbol should be found");
@@ -463,7 +446,6 @@ async fn index_groovy_field() {
         symbol,
         Symbol {
             id: None,
-            vcs_branch: "NONE".to_string(),
             short_name: "MAX_BATCH_SIZE".to_string(),
             package_name: "com.example.core".to_string(),
             fully_qualified_name: "com.example.core.DataProcessor#MAX_BATCH_SIZE".to_string(),
@@ -498,8 +480,7 @@ async fn index_groovy_inheritance() {
     let repo = Arc::new(Repository::new(&db_dir).await.unwrap());
     let path = Path::new("tests/fixtures/groovy-gradle-multi");
 
-    let vcs = get_vcs_handler(&path);
-    let mut indexer = Indexer::new(Arc::clone(&repo), Arc::clone(&vcs));
+    let mut indexer = Indexer::new(Arc::clone(&repo));
     indexer.register_language("groovy", Arc::new(GroovySupport::new()));
     indexer
         .index_workspace(&path, |_, _| {}, |_, _| {})
@@ -507,7 +488,7 @@ async fn index_groovy_inheritance() {
         .expect("Indexing failed");
 
     let results = repo
-        .find_supers_by_symbol_fqn_and_branch("com.example.api.UserController", "NONE")
+        .find_supers_by_symbol_fqn("com.example.api.UserController")
         .await
         .expect("Query failed")
         .into_iter()
@@ -525,7 +506,6 @@ async fn index_groovy_inheritance() {
         superclass,
         &Symbol {
             id: None,
-            vcs_branch: "NONE".to_string(),
             short_name: "BaseService".to_string(),
             package_name: "com.example.core".to_string(),
             fully_qualified_name: "com.example.core.BaseService".to_string(),
@@ -557,7 +537,6 @@ async fn index_groovy_inheritance() {
         super_interface,
         &Symbol {
             id: None,
-            vcs_branch: "NONE".to_string(),
             short_name: "DataProcessor".to_string(),
             package_name: "com.example.core".to_string(),
             fully_qualified_name: "com.example.core.DataProcessor".to_string(),
@@ -592,8 +571,7 @@ async fn index_kotlin_data_class() {
     let repo = Arc::new(Repository::new(&db_dir).await.unwrap());
     let path = Path::new("tests/fixtures/polyglot-spring/src/main/kotlin/com/example/demo/User.kt");
 
-    let vcs = get_vcs_handler(&path);
-    let mut indexer = Indexer::new(Arc::clone(&repo), Arc::clone(&vcs));
+    let mut indexer = Indexer::new(Arc::clone(&repo));
     indexer.register_language("kt", Arc::new(KotlinSupport::new()));
     indexer
         .index_workspace(&path, |_, _| {}, |_, _| {})
@@ -601,7 +579,7 @@ async fn index_kotlin_data_class() {
         .expect("Indexing failed");
 
     let result = repo
-        .find_symbol_by_fqn_and_branch("com.example.User", "NONE")
+        .find_symbol_by_fqn("com.example.User")
         .await
         .expect("Query failed");
     assert!(result.is_some(), "Symbol should be found");
@@ -614,7 +592,6 @@ async fn index_kotlin_data_class() {
         symbol,
         Symbol {
             id: None,
-            vcs_branch: "NONE".to_string(),
             short_name: "User".to_string(),
             package_name: "com.example".to_string(),
             fully_qualified_name: "com.example.User".to_string(),
@@ -643,7 +620,7 @@ async fn index_kotlin_data_class() {
     );
 
     let result = repo
-        .find_symbol_by_fqn_and_branch("com.example.User#name", "NONE")
+        .find_symbol_by_fqn("com.example.User#name")
         .await
         .expect("Query failed");
     assert!(result.is_some(), "Symbol should be found");
@@ -656,7 +633,6 @@ async fn index_kotlin_data_class() {
         symbol,
         Symbol {
             id: None,
-            vcs_branch: "NONE".to_string(),
             short_name: "name".to_string(),
             package_name: "com.example".to_string(),
             fully_qualified_name: "com.example.User#name".to_string(),
@@ -709,8 +685,7 @@ async fn index_external_dep_source_jar() {
         .expect("groovy-json sources.jar not found")
         .expect("groovy-json is empty");
 
-    let vcs = get_vcs_handler(&path);
-    let mut indexer = Indexer::new(Arc::clone(&repo), Arc::clone(&vcs));
+    let mut indexer = Indexer::new(Arc::clone(&repo));
     indexer.register_language("groovy", Arc::new(GroovySupport::new()));
     indexer.register_language("java", Arc::new(JavaSupport::new()));
     indexer
@@ -793,8 +768,7 @@ async fn index_external_dep_jar() {
         })
         .expect("groovy-json bytecode class jar not found");
 
-    let vcs = get_vcs_handler(&path);
-    let mut indexer = Indexer::new(Arc::clone(&repo), Arc::clone(&vcs));
+    let mut indexer = Indexer::new(Arc::clone(&repo));
     indexer.register_language("groovy", Arc::new(GroovySupport::new()));
     indexer.register_language("java", Arc::new(JavaSupport::new()));
     indexer
@@ -862,8 +836,7 @@ async fn index_jdk_dep_source_jar() {
         "JDK dependency source jar should be found"
     );
 
-    let vcs = get_vcs_handler(&path);
-    let mut indexer = Indexer::new(Arc::clone(&repo), Arc::clone(&vcs));
+    let mut indexer = Indexer::new(Arc::clone(&repo));
     indexer.register_language("groovy", Arc::new(GroovySupport::new()));
     indexer.register_language("java", Arc::new(JavaSupport::new()));
     indexer
@@ -939,8 +912,7 @@ async fn index_external_annotation_dep_jar() {
         .expect("spring-context sources.jar not found")
         .expect("spring-context is empty");
 
-    let vcs = get_vcs_handler(&path);
-    let mut indexer = Indexer::new(Arc::clone(&repo), Arc::clone(&vcs));
+    let mut indexer = Indexer::new(Arc::clone(&repo));
     indexer.register_language("groovy", Arc::new(GroovySupport::new()));
     indexer.register_language("java", Arc::new(JavaSupport::new()));
     indexer

@@ -71,7 +71,6 @@ impl Backend {
         name: &str,
         imports: Vec<String>,
         package_name: Option<String>,
-        branch: &str,
     ) -> Option<String> {
         if name.contains('.') {
             return Some(name.to_string());
@@ -90,7 +89,7 @@ impl Backend {
                 .get()
                 .ok_or_else(|| tower_lsp::jsonrpc::Error::internal_error())
                 .ok()?
-                .find_symbol_by_fqn_and_branch(&tmp_fqn, branch)
+                .find_symbol_by_fqn(&tmp_fqn)
                 .await
                 .ok()?
             {
@@ -140,10 +139,9 @@ impl Backend {
         member: &str,
         imports: &[String],
         package_name: Option<String>,
-        branch: &str,
     ) -> Vec<ResolvedSymbol> {
         let class_fqn = match self
-            .resolve_fqn(qualifier, imports.to_vec(), package_name.clone(), branch)
+            .resolve_fqn(qualifier, imports.to_vec(), package_name.clone())
             .await
         {
             Some(fqn) => fqn,
@@ -154,7 +152,6 @@ impl Backend {
         self.try_members_with_inheritance(
             &class_fqn,
             member,
-            branch,
             &mut visited,
             imports.to_vec(),
             package_name,
@@ -163,12 +160,7 @@ impl Backend {
     }
 
     #[tracing::instrument(skip_all)]
-    async fn try_property_access(
-        &self,
-        class_fqn: &str,
-        ident: &str,
-        branch: &str,
-    ) -> Option<Symbol> {
+    async fn try_property_access(&self, class_fqn: &str, ident: &str) -> Option<Symbol> {
         // Try getter
         let getter_fqn = format!("{}#get{}", class_fqn, capitalize(ident));
         if let Ok(Some(found)) = self
@@ -176,7 +168,7 @@ impl Backend {
             .get()
             .ok_or_else(|| tower_lsp::jsonrpc::Error::internal_error())
             .ok()?
-            .find_symbol_by_fqn_and_branch(&getter_fqn, branch)
+            .find_symbol_by_fqn(&getter_fqn)
             .await
         {
             return Some(found);
@@ -188,7 +180,7 @@ impl Backend {
             .get()
             .ok_or_else(|| tower_lsp::jsonrpc::Error::internal_error())
             .ok()?
-            .find_symbol_by_fqn_and_branch(&is_getter_fqn, branch)
+            .find_symbol_by_fqn(&is_getter_fqn)
             .await
             .ok()
             .flatten()
@@ -198,14 +190,13 @@ impl Backend {
         &self,
         type_fqn: &str,
         member: &str,
-        branch: &str,
         visited: &mut HashSet<String>,
         imports: Vec<String>,
         package_name: Option<String>,
     ) -> Vec<ResolvedSymbol> {
         let type_symbol = match self.repo.get() {
             None => return vec![],
-            Some(repo) => match repo.find_symbol_by_fqn_and_branch(type_fqn, branch).await {
+            Some(repo) => match repo.find_symbol_by_fqn(type_fqn).await {
                 Ok(symbols) => symbols.into_iter().next(),
                 Err(_) => None,
             },
@@ -219,7 +210,7 @@ impl Backend {
         let supers = match self.repo.get() {
             None => return vec![],
             Some(repo) => match repo
-                .find_supers_by_symbol_fqn_and_branch(&type_symbol.fully_qualified_name, branch)
+                .find_supers_by_symbol_fqn(&type_symbol.fully_qualified_name)
                 .await
             {
                 Ok(symbols) => symbols,
@@ -232,7 +223,6 @@ impl Backend {
                 .recurse_try_members_with_inheritance(
                     super_name,
                     member,
-                    branch,
                     visited,
                     imports.clone(),
                     package_name.clone(),
@@ -251,7 +241,6 @@ impl Backend {
         &self,
         type_fqn: &str,
         member: &str,
-        branch: &str,
         visited: &mut HashSet<String>,
         imports: Vec<String>,
         package_name: Option<String>,
@@ -264,22 +253,19 @@ impl Backend {
 
         // Try direct member
         if let Some(repo) = self.repo.get() {
-            if let Ok(found) = repo
-                .find_symbols_by_fqn_and_branch(&member_fqn, branch)
-                .await
-            {
+            if let Ok(found) = repo.find_symbols_by_fqn(&member_fqn).await {
                 if !found.is_empty() {
                     return found.into_iter().map(ResolvedSymbol::Project).collect();
                 }
             }
         }
 
-        if let Some(found) = self.try_property_access(type_fqn, member, branch).await {
+        if let Some(found) = self.try_property_access(type_fqn, member).await {
             return vec![ResolvedSymbol::Project(found)];
         }
 
         let result = self
-            .try_parent_member(type_fqn, member, branch, visited, imports, package_name)
+            .try_parent_member(type_fqn, member, visited, imports, package_name)
             .await;
         if !result.is_empty() {
             return result;
@@ -299,19 +285,13 @@ impl Backend {
         &self,
         parent_short_name: &str,
         member: &str,
-        branch: &str,
         visited: &mut HashSet<String>,
         imports: Vec<String>,
         package_name: Option<String>,
     ) -> Vec<ResolvedSymbol> {
         tracing::info!("recurse_try_members_with_inheritance");
         let fqn = match self
-            .resolve_fqn(
-                &parent_short_name,
-                imports.clone(),
-                package_name.clone(),
-                branch,
-            )
+            .resolve_fqn(&parent_short_name, imports.clone(), package_name.clone())
             .await
         {
             Some(fqn) => fqn,
@@ -320,7 +300,7 @@ impl Backend {
 
         let parent_symbol = match self.repo.get() {
             None => return vec![],
-            Some(repo) => match repo.find_symbols_by_fqn_and_branch(&fqn, branch).await {
+            Some(repo) => match repo.find_symbols_by_fqn(&fqn).await {
                 Ok(symbols) => symbols.into_iter().next(),
                 Err(_) => return vec![],
             },
@@ -331,7 +311,6 @@ impl Backend {
                 Box::pin(self.try_members_with_inheritance(
                     &parent.fully_qualified_name,
                     member,
-                    branch,
                     visited,
                     imports,
                     package_name,
@@ -369,7 +348,6 @@ impl Backend {
         tree: &Tree,
         content: &str,
         imports: Vec<String>,
-        branch: &str,
         position: &Position,
         package_name: Option<String>,
     ) -> Vec<ResolvedSymbol> {
@@ -380,14 +358,13 @@ impl Backend {
                 tree,
                 content,
                 imports.clone(),
-                branch,
                 position,
                 package_name,
             )
             .await
         {
             // Returns all overloads
-            self.try_type_member(&current_type_fqn, member, &imports, None, branch)
+            self.try_type_member(&current_type_fqn, member, &imports, None)
                 .await
         } else {
             vec![]
@@ -401,7 +378,6 @@ impl Backend {
         tree: &Tree,
         content: &str,
         imports: Vec<String>,
-        branch: &str,
         position: &Position,
         package_name: Option<String>,
     ) -> Option<String> {
@@ -416,7 +392,7 @@ impl Backend {
                 parts[0].to_string()
             };
         let mut current_type_fqn = match self
-            .resolve_fqn(&base_type, imports.clone(), package_name.clone(), branch)
+            .resolve_fqn(&base_type, imports.clone(), package_name.clone())
             .await
         {
             Some(fqn) => fqn,
@@ -425,7 +401,7 @@ impl Backend {
         if parts.len() > 1 {
             for part in &parts[1..] {
                 let symbols = self
-                    .try_type_member(&current_type_fqn, part, &imports, None, branch)
+                    .try_type_member(&current_type_fqn, part, &imports, None)
                     .await;
                 let resolved = match symbols.into_iter().next() {
                     Some(s) => s,
@@ -438,7 +414,7 @@ impl Backend {
                     // For methods/fields, resolve their return/field type
                     let parent_package = resolved.package_name().unwrap_or_default().to_string();
                     match self
-                        .resolve_fqn(return_type, imports.clone(), Some(parent_package), branch)
+                        .resolve_fqn(return_type, imports.clone(), Some(parent_package))
                         .await
                     {
                         Some(fqn) => fqn,
@@ -461,7 +437,6 @@ impl Backend {
         tree: &Tree,
         content: &str,
         imports: Vec<String>,
-        branch: &str,
         position: &Position,
         package_name: Option<String>,
     ) -> Vec<ResolvedSymbol> {
@@ -472,7 +447,6 @@ impl Backend {
                 tree,
                 content,
                 imports,
-                branch,
                 position,
                 package_name,
             )
@@ -482,10 +456,7 @@ impl Backend {
         };
 
         if let Some(repo) = self.repo.get() {
-            if let Ok(symbols) = repo
-                .find_symbols_by_parent_name_and_branch(&fqn, branch)
-                .await
-            {
+            if let Ok(symbols) = repo.find_symbols_by_parent_name(&fqn).await {
                 if !symbols.is_empty() {
                     return symbols.into_iter().map(ResolvedSymbol::Project).collect();
                 }
@@ -501,12 +472,12 @@ impl Backend {
         }
     }
 
-    async fn complete_by_prefix(&self, prefix: &str, branch: &str) -> Vec<ResolvedSymbol> {
+    async fn complete_by_prefix(&self, prefix: &str) -> Vec<ResolvedSymbol> {
         let Some(repo) = self.repo.get() else {
             return vec![];
         };
 
-        if let Ok(symbols) = repo.find_symbols_by_prefix_and_branch(prefix, branch).await {
+        if let Ok(symbols) = repo.find_symbols_by_prefix(prefix).await {
             if !symbols.is_empty() {
                 return symbols.into_iter().map(ResolvedSymbol::Project).collect();
             }
@@ -528,7 +499,6 @@ impl Backend {
         content: &str,
         imports: &[String],
         package_name: Option<String>,
-        branch: &str,
     ) -> Option<ResolvedSymbol> {
         let arg_count = call_args.len();
 
@@ -560,7 +530,7 @@ impl Backend {
                 };
 
             let arg_fqn = self
-                .resolve_fqn(&arg_type, imports.to_vec(), package_name.clone(), branch)
+                .resolve_fqn(&arg_type, imports.to_vec(), package_name.clone())
                 .await
                 .unwrap_or(arg_type);
 
@@ -581,12 +551,7 @@ impl Backend {
                         }
 
                         let param_fqn = self
-                            .resolve_fqn(
-                                &param_type,
-                                imports.to_vec(),
-                                Some(pkg_name.to_string()),
-                                branch,
-                            )
+                            .resolve_fqn(&param_type, imports.to_vec(), Some(pkg_name.to_string()))
                             .await
                             .unwrap_or(param_type.to_string());
 
@@ -637,7 +602,6 @@ impl Backend {
     async fn resolve_symbol_at_position(
         &self,
         params: &TextDocumentPositionParams,
-        branch: &str,
     ) -> Result<Vec<ResolvedSymbol>> {
         let path = PathBuf::from_str(params.text_document.uri.path()).unwrap();
 
@@ -660,13 +624,13 @@ impl Backend {
 
         if let Some(type_name) = lang.get_type_at_position(tree.root_node(), &content, &position) {
             let fqn = self
-                .resolve_fqn(&type_name, imports, package_name, branch)
+                .resolve_fqn(&type_name, imports, package_name)
                 .await
                 .ok_or_else(|| {
                     tower_lsp::jsonrpc::Error::invalid_params("Failed to find FQN by location")
                 })?;
 
-            return self.fqn_to_symbols(fqn, branch).await;
+            return self.fqn_to_symbols(fqn).await;
         }
 
         if let Some((ident, qualifier)) = lang.find_ident_at_position(&tree, &content, &position) {
@@ -680,7 +644,6 @@ impl Backend {
                             &tree,
                             &content,
                             imports.clone(),
-                            branch,
                             &position,
                             package_name.clone(),
                         )
@@ -706,7 +669,6 @@ impl Backend {
                                 &content,
                                 &imports,
                                 package_name,
-                                branch,
                             )
                             .await
                         {
@@ -729,7 +691,7 @@ impl Backend {
                     }
 
                     let fqn = self
-                        .resolve_fqn(&ident, imports, package_name, branch)
+                        .resolve_fqn(&ident, imports, package_name)
                         .await
                         .ok_or_else(|| {
                             tower_lsp::jsonrpc::Error::invalid_params(
@@ -737,7 +699,7 @@ impl Backend {
                             )
                         })?;
 
-                    self.fqn_to_symbols(fqn, branch).await
+                    self.fqn_to_symbols(fqn).await
                 }
             }
         } else {
@@ -748,13 +710,13 @@ impl Backend {
     }
 
     #[tracing::instrument(skip_all)]
-    async fn fqn_to_symbols(&self, fqn: String, branch: &str) -> Result<Vec<ResolvedSymbol>> {
+    async fn fqn_to_symbols(&self, fqn: String) -> Result<Vec<ResolvedSymbol>> {
         let repo = self
             .repo
             .get()
             .ok_or_else(|| tower_lsp::jsonrpc::Error::internal_error())?;
 
-        if let Ok(Some(symbol)) = repo.find_symbol_by_fqn_and_branch(&fqn, branch).await {
+        if let Ok(Some(symbol)) = repo.find_symbol_by_fqn(&fqn).await {
             return Ok(vec![ResolvedSymbol::Project(symbol)]);
         }
         let external_symbol = repo
@@ -902,7 +864,7 @@ impl LanguageServer for Backend {
             let vcs = get_vcs_handler(&root);
             let build_tool = get_build_tool(&root);
 
-            let mut indexer = Indexer::new(Arc::clone(&repo), Arc::clone(&vcs));
+            let mut indexer = Indexer::new(Arc::clone(&repo));
             languages.iter().for_each(|(k, v)| {
                 indexer.register_language(k, v.clone());
             });
@@ -1039,22 +1001,8 @@ impl LanguageServer for Backend {
         &self,
         params: GotoDefinitionParams,
     ) -> Result<Option<GotoDefinitionResponse>> {
-        let branch = self
-            .vcs_handler
-            .read()
-            .await
-            .as_ref()
-            .ok_or_else(|| tower_lsp::jsonrpc::Error::invalid_params("VCS handler not available"))?
-            .get_current_branch()
-            .map_err(|e| {
-                tower_lsp::jsonrpc::Error::invalid_params(format!(
-                    "Failed to get current branch: {}",
-                    e
-                ))
-            })?;
-
         let symbols = self
-            .resolve_symbol_at_position(&params.text_document_position_params, &branch)
+            .resolve_symbol_at_position(&params.text_document_position_params)
             .await?;
 
         let locations: Vec<Location> = symbols
@@ -1074,20 +1022,6 @@ impl LanguageServer for Backend {
         &self,
         params: GotoImplementationParams,
     ) -> Result<Option<GotoImplementationResponse>> {
-        let branch = self
-            .vcs_handler
-            .read()
-            .await
-            .as_ref()
-            .ok_or_else(|| tower_lsp::jsonrpc::Error::invalid_params("VCS handler not available"))?
-            .get_current_branch()
-            .map_err(|e| {
-                tower_lsp::jsonrpc::Error::invalid_params(format!(
-                    "Failed to get current branch: {}",
-                    e
-                ))
-            })?;
-
         let path = PathBuf::from_str(
             params
                 .text_document_position_params
@@ -1118,7 +1052,7 @@ impl LanguageServer for Backend {
                     lang.get_type_at_position(tree.root_node(), &content, &position)
                 {
                     let fqn = self
-                        .resolve_fqn(&type_name, imports, package_name, &branch)
+                        .resolve_fqn(&type_name, imports, package_name)
                         .await
                         .ok_or(tower_lsp::jsonrpc::Error::invalid_params(format!(
                             "Failed to find FQN by location",
@@ -1128,7 +1062,7 @@ impl LanguageServer for Backend {
                         .repo
                         .get()
                         .ok_or_else(|| tower_lsp::jsonrpc::Error::internal_error())?
-                        .find_super_impls_by_fqn_and_branch(&fqn, &branch)
+                        .find_super_impls_by_fqn(&fqn)
                         .await
                         .map_err(|e| {
                             tower_lsp::jsonrpc::Error::invalid_params(format!(
@@ -1142,7 +1076,7 @@ impl LanguageServer for Backend {
                         self.repo
                             .get()
                             .ok_or_else(|| tower_lsp::jsonrpc::Error::internal_error())?
-                            .find_super_impls_by_short_name_and_branch(&type_name, &branch)
+                            .find_super_impls_by_short_name(&type_name)
                             .await
                             .map_err(|e| {
                                 tower_lsp::jsonrpc::Error::invalid_params(format!(
@@ -1166,7 +1100,7 @@ impl LanguageServer for Backend {
                     lang.get_method_receiver_and_params(tree.root_node(), &content, &position)
                 {
                     let parent_fqn = self
-                        .resolve_fqn(&receiver_type, imports, package_name, &branch)
+                        .resolve_fqn(&receiver_type, imports, package_name)
                         .await
                         .ok_or_else(|| {
                             tower_lsp::jsonrpc::Error::invalid_params("Failed to resolve FQN")
@@ -1176,7 +1110,7 @@ impl LanguageServer for Backend {
                         .repo
                         .get()
                         .ok_or_else(|| tower_lsp::jsonrpc::Error::internal_error())?
-                        .find_super_impls_by_fqn_and_branch(&parent_fqn, &branch)
+                        .find_super_impls_by_fqn(&parent_fqn)
                         .await
                         .map_err(|e| {
                             tower_lsp::jsonrpc::Error::invalid_params(format!(
@@ -1193,7 +1127,7 @@ impl LanguageServer for Backend {
                             .repo
                             .get()
                             .ok_or_else(|| tower_lsp::jsonrpc::Error::internal_error())?
-                            .find_symbols_by_fqn_and_branch(&method_fqn, &branch)
+                            .find_symbols_by_fqn(&method_fqn)
                             .await
                         {
                             let resolved: Vec<ResolvedSymbol> = symbols
@@ -1217,22 +1151,8 @@ impl LanguageServer for Backend {
 
     #[tracing::instrument(skip_all)]
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
-        let branch = self
-            .vcs_handler
-            .read()
-            .await
-            .as_ref()
-            .ok_or_else(|| tower_lsp::jsonrpc::Error::invalid_params("VCS handler not available"))?
-            .get_current_branch()
-            .map_err(|e| {
-                tower_lsp::jsonrpc::Error::invalid_params(format!(
-                    "Failed to get current branch: {}",
-                    e
-                ))
-            })?;
-
         let symbols = self
-            .resolve_symbol_at_position(&params.text_document_position_params, &branch)
+            .resolve_symbol_at_position(&params.text_document_position_params)
             .await;
 
         let Ok(symbols) = symbols else {
@@ -1264,20 +1184,6 @@ impl LanguageServer for Backend {
             .ok_or_else(|| tower_lsp::jsonrpc::Error::invalid_params("Cannot read file"))?;
         let char_pos = pos.position.character as usize;
 
-        let branch = self
-            .vcs_handler
-            .read()
-            .await
-            .as_ref()
-            .ok_or_else(|| tower_lsp::jsonrpc::Error::invalid_params("VCS handler not available"))?
-            .get_current_branch()
-            .map_err(|e| {
-                tower_lsp::jsonrpc::Error::invalid_params(format!(
-                    "Failed to get current branch: {}",
-                    e
-                ))
-            })?;
-
         let path = PathBuf::from_str(pos.text_document.uri.path()).unwrap();
         let ext = path
             .extension()
@@ -1301,14 +1207,13 @@ impl LanguageServer for Backend {
                 &tree,
                 &content,
                 imports.clone(),
-                &branch,
                 &pos.position,
                 package_name.clone(),
             )
             .await
         } else {
             let prefix = extract_prefix(&line, char_pos);
-            self.complete_by_prefix(prefix, &branch).await
+            self.complete_by_prefix(prefix).await
         };
 
         let items: Vec<CompletionItem> = symbols

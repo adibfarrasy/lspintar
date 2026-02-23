@@ -1,6 +1,5 @@
 CREATE TABLE symbols (
     id INTEGER PRIMARY KEY,
-    vcs_branch TEXT,
     short_name TEXT NOT NULL,
     fully_qualified_name TEXT NOT NULL,
     package_name TEXT NOT NULL,
@@ -31,7 +30,6 @@ CREATE INDEX idx_fqn ON symbols(fully_qualified_name);
 CREATE INDEX idx_short_name ON symbols(short_name);
 CREATE INDEX idx_parent ON symbols(parent_name);
 CREATE INDEX idx_position_lookup ON symbols(file_path, line_start, line_end);
-CREATE INDEX idx_vcs_branch ON symbols(vcs_branch);
 CREATE INDEX idx_symbol_type ON symbols(symbol_type);
 CREATE INDEX idx_file_path ON symbols(file_path);
-CREATE UNIQUE INDEX idx_symbol_unique ON symbols(vcs_branch, file_path, fully_qualified_name, metadata);
+CREATE UNIQUE INDEX idx_symbol_unique ON symbols(file_path, fully_qualified_name, metadata);

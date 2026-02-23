@@ -10,7 +10,6 @@ use crate::lsp_convert::{AsLspHover, AsLspLocation};
 #[derive(Debug, Clone, FromRow, PartialEq, Eq)]
 pub struct Symbol {
     pub id: Option<i64>,
-    pub vcs_branch: String,
     pub short_name: String,
     pub package_name: String,
     pub fully_qualified_name: String,
