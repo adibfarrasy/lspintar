@@ -341,6 +341,8 @@ impl Repository {
         .await
     }
 
+    // used in tests
+    #[allow(dead_code)]
     #[tracing::instrument(skip(self))]
     pub async fn count_external_symbols(&self) -> Result<i64, sqlx::Error> {
         tracing::info!("count_external_symbols_by_prefix");

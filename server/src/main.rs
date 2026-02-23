@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use tokio::io::{stdin, stdout};
 use tower_lsp::{LspService, Server};
 

@@ -19,7 +19,7 @@ pub trait LanguageSupport: Send + Sync {
     fn parse(&self, file_path: &Path) -> Option<ParseResult>;
     fn parse_str(&self, source: &str) -> Option<ParseResult>;
 
-    fn should_index(&self, node: &Node, source: &str) -> bool {
+    fn should_index(&self, node: &Node, _source: &str) -> bool {
         self.get_kind(node).is_some()
     }
 
@@ -51,6 +51,8 @@ pub trait LanguageSupport: Send + Sync {
     // should also return implicit imports
     fn get_imports(&self, tree: &Tree, source: &str) -> Vec<String>;
 
+    fn get_implicit_imports(&self) -> Vec<String>;
+
     fn get_type_at_position(
         &self,
         node: Node,
@@ -73,14 +75,20 @@ pub trait LanguageSupport: Send + Sync {
         position: &Position,
     ) -> Option<String>;
 
-    // returns (type, position)
     fn find_variable_declaration(
         &self,
         tree: &Tree,
         content: &str,
         var_name: &str,
         position: &Position,
-    ) -> Option<(Option<String>, Position)>;
+    ) -> Option<(Option<String>, Position)>; // (type, position)
+
+    fn find_declarations_in_scope(
+        &self,
+        tree: &Tree,
+        content: &str,
+        position: &Position,
+    ) -> Vec<(String, Option<String>)>; // (var_name, type_name)
 
     fn extract_call_arguments(
         &self,

@@ -1,0 +1,122 @@
+#![allow(unused_imports)]
+
+use crate::JavaSupport;
+use lsp_core::{language_support::LanguageSupport, node_kind::NodeKind};
+
+use tower_lsp::lsp_types::{Position, Range};
+use tree_sitter::Node;
+
+use super::*;
+
+#[test]
+fn test_find_declarations_in_scope_local_vars() {
+    let support = JavaSupport::new();
+    let content = r#"
+        class Foo {
+            void test() {
+                Bar bar = new Bar();
+                String name = "test";
+                bar.doSomething();
+            }
+        }
+        "#;
+    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let pos = find_position(content, "bar.doSomething");
+    let decls = support.find_declarations_in_scope(&parsed.0, &parsed.1, &pos);
+    assert!(
+        decls
+            .iter()
+            .any(|(n, t)| n == "bar" && t.as_deref() == Some("Bar"))
+    );
+    assert!(
+        decls
+            .iter()
+            .any(|(n, t)| n == "name" && t.as_deref() == Some("String"))
+    );
+}
+
+#[test]
+fn test_find_declarations_in_scope_excludes_after_cursor() {
+    let support = JavaSupport::new();
+    let content = r#"
+        class Foo {
+            void test() {
+                Bar bar = new Bar();
+                bar.doSomething();
+                String name = "test";
+            }
+        }
+        "#;
+    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let pos = find_position(content, "bar.doSomething");
+    let decls = support.find_declarations_in_scope(&parsed.0, &parsed.1, &pos);
+    assert!(decls.iter().any(|(n, _)| n == "bar"));
+    assert!(!decls.iter().any(|(n, _)| n == "name"));
+}
+
+#[test]
+fn test_find_declarations_in_scope_includes_parameters() {
+    let support = JavaSupport::new();
+    let content = r#"
+        class Foo {
+            void test(User user, String input) {
+                user.getName();
+            }
+        }
+        "#;
+    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let pos = find_position(content, "user.getName");
+    let decls = support.find_declarations_in_scope(&parsed.0, &parsed.1, &pos);
+    assert!(
+        decls
+            .iter()
+            .any(|(n, t)| n == "user" && t.as_deref() == Some("User"))
+    );
+    assert!(
+        decls
+            .iter()
+            .any(|(n, t)| n == "input" && t.as_deref() == Some("String"))
+    );
+}
+
+#[test]
+fn test_find_declarations_in_scope_includes_fields() {
+    let support = JavaSupport::new();
+    let content = r#"
+        class Foo {
+            private String name;
+            void test() {
+                name.toLowerCase();
+            }
+        }
+        "#;
+    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let pos = find_position(content, "name.toLowerCase");
+    let decls = support.find_declarations_in_scope(&parsed.0, &parsed.1, &pos);
+    assert!(
+        decls
+            .iter()
+            .any(|(n, t)| n == "name" && t.as_deref() == Some("String"))
+    );
+}
+
+#[test]
+fn test_find_declarations_in_scope_generics() {
+    let support = JavaSupport::new();
+    let content = r#"
+        class Foo {
+            void test() {
+                List<String> items = new ArrayList<>();
+                items.add("test");
+            }
+        }
+        "#;
+    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let pos = find_position(content, "items.add");
+    let decls = support.find_declarations_in_scope(&parsed.0, &parsed.1, &pos);
+    assert!(
+        decls
+            .iter()
+            .any(|(n, t)| n == "items" && t.as_deref() == Some("List<String>"))
+    );
+}

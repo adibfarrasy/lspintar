@@ -4,7 +4,7 @@ use anyhow::{Context, anyhow};
 use tempfile::tempdir;
 use tower_lsp::lsp_types::{Position, Range, TextEdit};
 
-use crate::{lsp_error, lsp_warn};
+use crate::{languages::Language, lsp_error, lsp_warn};
 
 pub fn capitalize(s: &str) -> String {
     let mut chars = s.chars();
@@ -198,13 +198,23 @@ pub fn strip_comment_signifiers(docs: &str) -> String {
 }
 
 pub fn extract_receiver(line: &str, char_pos: usize) -> Option<&str> {
-    let before = &line[..char_pos];
+    let byte_pos = line
+        .char_indices()
+        .nth(char_pos)
+        .map(|(i, _)| i)
+        .unwrap_or(line.len());
+    let before = &line[..byte_pos];
     let dot_pos = before.rfind('.')?;
     Some(extract_prefix(before, dot_pos))
 }
 
 pub fn extract_prefix(line: &str, char_pos: usize) -> &str {
-    let before = &line[..char_pos];
+    let byte_pos = line
+        .char_indices()
+        .nth(char_pos)
+        .map(|(i, _)| i)
+        .unwrap_or(line.len());
+    let before = &line[..byte_pos];
     let start = before
         .rfind(|c: char| !c.is_alphanumeric() && c != '_')
         .map(|i| i + 1)
@@ -217,6 +227,7 @@ pub fn get_import_text_edit(
     fqn: &str,
     package_name: &str,
     parent_fqn: &str,
+    lang: Language,
 ) -> TextEdit {
     let last_import_line = content
         .lines()
@@ -257,7 +268,11 @@ pub fn get_import_text_edit(
 
     TextEdit {
         range,
-        new_text: format!("import {}\n", autoimport_text),
+        new_text: format!(
+            "import {}{}\n",
+            autoimport_text,
+            if lang == Language::Java { ";" } else { "" }
+        ),
     }
 }
 
@@ -303,7 +318,8 @@ mod tests {
         ];
 
         for (content, fqn, package_name, parent_fqn, expected_text, expected_line) in cases {
-            let edit = get_import_text_edit(content, fqn, package_name, parent_fqn);
+            let edit =
+                get_import_text_edit(content, fqn, package_name, parent_fqn, Language::Groovy);
             assert_eq!(
                 edit.range.start.line, expected_line,
                 "failed for fqn: {}",

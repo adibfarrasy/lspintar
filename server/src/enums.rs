@@ -40,14 +40,6 @@ impl ResolvedSymbol {
         }
     }
 
-    pub fn fully_qualified_name(&self) -> Option<&str> {
-        match self {
-            ResolvedSymbol::Project(s) => Some(&s.fully_qualified_name),
-            ResolvedSymbol::External(s) => Some(&s.fully_qualified_name),
-            ResolvedSymbol::Local { .. } => None,
-        }
-    }
-
     pub fn name(&self) -> &str {
         match self {
             ResolvedSymbol::Project(s) => &s.short_name,

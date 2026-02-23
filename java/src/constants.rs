@@ -16,5 +16,3 @@ pub const JAVA_IMPLICIT_IMPORTS: [&str; 15] = [
     "java.sql.*",
     "javax.sql.*",
 ];
-
-pub const PARSE_TIMEOUT_MICROS: u64 = 10_000;

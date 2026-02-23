@@ -10,7 +10,7 @@ use tower_lsp::lsp_types::{Position, Range};
 use tree_sitter::{Node, Parser, Point, Query, QueryCursor, QueryMatch, StreamingIterator, Tree};
 
 use crate::{
-    constants::{JAVA_IMPLICIT_IMPORTS, PARSE_TIMEOUT_MICROS},
+    constants::JAVA_IMPLICIT_IMPORTS,
     support::queries::{
         DECLARES_VARIABLE_QUERY, GET_ANNOTATIONS_QUERY, GET_EXTENDS_QUERY, GET_FIELD_RETURN_QUERY,
         GET_FIELD_SHORT_NAME_QUERY, GET_FUNCTION_RETURN_QUERY, GET_IMPLEMENTS_QUERY,
@@ -255,6 +255,48 @@ impl JavaSupport {
         None
     }
 
+    // TODO: this is very similar to find_in_current_scope. maybe extract common logic?
+    fn collect_declarations_in_scope(
+        &self,
+        scope_node: Node,
+        content: &str,
+        reference_byte: usize,
+        results: &mut Vec<(String, Option<String>)>,
+    ) {
+        let mut cursor = scope_node.walk();
+        if !cursor.goto_first_child() {
+            return;
+        }
+        loop {
+            let child = cursor.node();
+            if child.start_byte() >= reference_byte {
+                break;
+            }
+            match child.kind() {
+                "variable_declaration" | "field_declaration" | "parameter" => {
+                    let names =
+                        ts_helper::get_many(&child, content, &DECLARES_VARIABLE_QUERY, Some(1));
+                    let var_type = child
+                        .child_by_field_name("type")
+                        .map(|t| content[t.start_byte()..t.end_byte()].to_string());
+                    for name in names {
+                        results.push((name, var_type.clone()));
+                    }
+                }
+                "expression_statement"
+                | "assignment_expression"
+                | "object_creation_expression"
+                | "parameters" => {
+                    self.collect_declarations_in_scope(child, content, reference_byte, results);
+                }
+                _ => {}
+            }
+            if !cursor.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+
     fn declares_variable(&self, node: Node, content: &str, var_name: &str) -> bool {
         let names = ts_helper::get_many(&node, content, &DECLARES_VARIABLE_QUERY, Some(1));
         names.iter().any(|name| name == var_name)
@@ -325,7 +367,6 @@ impl LanguageSupport for JavaSupport {
             static PARSER: RefCell<Parser> = RefCell::new({
                 let mut p = Parser::new();
                 p.set_language(&tree_sitter_java::LANGUAGE.into()).unwrap();
-                p.set_timeout_micros(PARSE_TIMEOUT_MICROS);
                 p
             });
         }
@@ -476,6 +517,13 @@ impl LanguageSupport for JavaSupport {
             .iter()
             .map(|s| s.to_string())
             .chain(explicit_imports)
+            .collect()
+    }
+
+    fn get_implicit_imports(&self) -> Vec<String> {
+        JAVA_IMPLICIT_IMPORTS
+            .iter()
+            .map(|s| s.to_string())
             .collect()
     }
 
@@ -729,6 +777,28 @@ impl LanguageSupport for JavaSupport {
         }
         None
     }
+
+    fn find_declarations_in_scope(
+        &self,
+        tree: &Tree,
+        content: &str,
+        position: &Position,
+    ) -> Vec<(String, Option<String>)> {
+        let Some(mut current_node) = get_node_at_position(tree, content, position) else {
+            return vec![];
+        };
+        let reference_byte = current_node.start_byte();
+        let mut results = Vec::new();
+        loop {
+            self.collect_declarations_in_scope(current_node, content, reference_byte, &mut results);
+            if let Some(parent) = current_node.parent() {
+                current_node = parent;
+            } else {
+                break;
+            }
+        }
+        results
+    }
 }
 
 #[allow(dead_code)]
@@ -737,6 +807,7 @@ mod tests {
     use tree_sitter::Node;
 
     mod extract_call_arguments;
+    mod find_declarations_in_scope;
     mod find_ident_at_position;
     mod find_variable_type;
     mod get_imports;

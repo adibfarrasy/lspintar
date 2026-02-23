@@ -4,13 +4,13 @@ use lsp_core::{
     node_kind::NodeKind,
     ts_helper::{self, get_node_at_position, node_contains_position},
 };
-use std::{cell::RefCell, fs, path::Path, sync::Mutex};
+use std::{cell::RefCell, fs, path::Path};
 
 use tower_lsp::lsp_types::{Position, Range};
 use tree_sitter::{Node, Parser, Point, Query, QueryCursor, QueryMatch, StreamingIterator, Tree};
 
 use crate::{
-    constants::{KOTLIN_IMPLICIT_IMPORTS, PARSE_TIMEOUT_MICROS},
+    constants::KOTLIN_IMPLICIT_IMPORTS,
     support::queries::{
         DECLARES_VARIABLE_QUERY, GET_ANNOTATIONS_QUERY, GET_EXTENDS_QUERY, GET_FIELD_RETURN_QUERY,
         GET_FIELD_SHORT_NAME_QUERY, GET_FUNCTION_RETURN_QUERY, GET_IMPLEMENTS_QUERY,
@@ -313,6 +313,86 @@ impl KotlinSupport {
         None
     }
 
+    // TODO: this is very similar to find_in_current_scope. maybe extract common logic?
+    fn collect_declarations_in_scope(
+        &self,
+        scope_node: Node,
+        content: &str,
+        reference_byte: usize,
+        results: &mut Vec<(String, Option<String>)>,
+    ) {
+        let mut cursor = scope_node.walk();
+        if !cursor.goto_first_child() {
+            return;
+        }
+        loop {
+            let child = cursor.node();
+            if child.start_byte() >= reference_byte {
+                break;
+            }
+            match child.kind() {
+                "property_declaration" => {
+                    let mut var_cursor = child.walk();
+                    for var_child in child.children(&mut var_cursor) {
+                        if var_child.kind() == "variable_declaration" {
+                            let names = ts_helper::get_many(
+                                &var_child,
+                                content,
+                                &DECLARES_VARIABLE_QUERY,
+                                Some(1),
+                            );
+                            let mut type_cursor = var_child.walk();
+                            let var_type = var_child
+                                .children(&mut type_cursor)
+                                .find(|c| c.kind() == "user_type" || c.kind() == "nullable_type")
+                                .and_then(|t| {
+                                    t.utf8_text(content.as_bytes()).ok().map(|s| s.to_string())
+                                })
+                                .or_else(|| {
+                                    let mut value_cursor = child.walk();
+                                    child
+                                        .children(&mut value_cursor)
+                                        .find(|c| c.kind() == "call_expression")
+                                        .and_then(|v| self.infer_type_from_value(v, content))
+                                });
+                            for name in names {
+                                results.push((name, var_type.clone()));
+                            }
+                        }
+                    }
+                }
+                "class_parameter" | "parameter" => {
+                    let names =
+                        ts_helper::get_many(&child, content, &DECLARES_VARIABLE_QUERY, Some(1));
+                    let var_type = child
+                        .child_by_field_name("type")
+                        .and_then(|t| t.utf8_text(content.as_bytes()).ok().map(|s| s.to_string()));
+                    for name in names {
+                        results.push((name, var_type.clone()));
+                    }
+                }
+                "variable_declaration" => {
+                    let names =
+                        ts_helper::get_many(&child, content, &DECLARES_VARIABLE_QUERY, Some(1));
+                    let var_type = child
+                        .child_by_field_name("type")
+                        .and_then(|t| t.utf8_text(content.as_bytes()).ok().map(|s| s.to_string()));
+                    for name in names {
+                        results.push((name, var_type.clone()));
+                    }
+                }
+                "statements" | "function_body" | "lambda_literal" | "parameters"
+                | "lambda_parameters" => {
+                    self.collect_declarations_in_scope(child, content, reference_byte, results);
+                }
+                _ => {}
+            }
+            if !cursor.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+
     fn infer_type_from_value(&self, value_node: Node, content: &str) -> Option<String> {
         match value_node.kind() {
             "call_expression" => {
@@ -418,7 +498,6 @@ impl LanguageSupport for KotlinSupport {
             static PARSER: RefCell<Parser> = RefCell::new({
                 let mut p = Parser::new();
                 p.set_language(&tree_sitter_kotlin::language()).unwrap();
-                p.set_timeout_micros(PARSE_TIMEOUT_MICROS);
                 p
             });
         }
@@ -590,6 +669,13 @@ impl LanguageSupport for KotlinSupport {
             .iter()
             .map(|s| s.to_string())
             .chain(explicit_imports)
+            .collect()
+    }
+
+    fn get_implicit_imports(&self) -> Vec<String> {
+        KOTLIN_IMPLICIT_IMPORTS
+            .iter()
+            .map(|s| s.to_string())
             .collect()
     }
 
@@ -880,6 +966,28 @@ impl LanguageSupport for KotlinSupport {
         }
         None
     }
+
+    fn find_declarations_in_scope(
+        &self,
+        tree: &Tree,
+        content: &str,
+        position: &Position,
+    ) -> Vec<(String, Option<String>)> {
+        let Some(mut current_node) = get_node_at_position(tree, content, position) else {
+            return vec![];
+        };
+        let reference_byte = current_node.start_byte();
+        let mut results = Vec::new();
+        loop {
+            self.collect_declarations_in_scope(current_node, content, reference_byte, &mut results);
+            if let Some(parent) = current_node.parent() {
+                current_node = parent;
+            } else {
+                break;
+            }
+        }
+        results
+    }
 }
 
 #[allow(dead_code)]
@@ -888,6 +996,7 @@ mod tests {
     use tree_sitter::Node;
 
     mod extract_call_arguments;
+    mod find_declarations_in_scope;
     mod find_ident_at_position;
     mod find_variable_type;
     mod get_imports;

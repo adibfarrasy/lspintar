@@ -5,7 +5,6 @@ use std::hash::{Hash, Hasher};
 use std::io::{Read, Write, copy};
 use std::path::PathBuf;
 
-use lsp_core::lsp_error;
 use lsp_core::node_kind::NodeKind;
 use lsp_core::util::{decompile_class, strip_comment_signifiers};
 use sqlx::{FromRow, types::Json};

@@ -8,5 +8,3 @@ pub const GROOVY_IMPLICIT_IMPORTS: [&str; 8] = [
     "groovy.util.*",
     "groovy.transform.*",
 ];
-
-pub const PARSE_TIMEOUT_MICROS: u64 = 10_000;

@@ -838,7 +838,15 @@ impl LanguageServer for Backend {
                 type_definition_provider: Some(TypeDefinitionProviderCapability::Simple(true)),
                 references_provider: Some(OneOf::Left(true)),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
-                completion_provider: Some(CompletionOptions::default()),
+                completion_provider: Some(CompletionOptions {
+                    trigger_characters: Some(
+                        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ."
+                            .chars()
+                            .map(|c| c.to_string())
+                            .collect(),
+                    ),
+                    ..Default::default()
+                }),
                 ..Default::default()
             },
             server_info: Some(ServerInfo {
@@ -1178,6 +1186,13 @@ impl LanguageServer for Backend {
         Ok(())
     }
 
+    async fn did_change(&self, params: DidChangeTextDocumentParams) {
+        if let Some(change) = params.content_changes.into_iter().last() {
+            let uri = params.text_document.uri.to_string();
+            self.documents.insert(uri, (change.text, Instant::now()));
+        }
+    }
+
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
         let path = match params.text_document.uri.to_file_path() {
             Ok(p) => p,
@@ -1211,7 +1226,7 @@ impl LanguageServer for Backend {
                 }
                 debug!("Re-indexed: {}", path.display());
             }
-            Ok(Ok(None)) => {} // unsupported file type, ignore
+            Ok(Ok(None)) => warn!("Unsupported file type, ignore"),
             Ok(Err(e)) => warn!("Parse error on save, skipping reindex: {e}"),
             Err(e) => warn!("Failed to spawn index task: {e}"),
         }
@@ -1240,7 +1255,15 @@ impl LanguageServer for Backend {
         let imports = lang.get_imports(&tree, &content);
         let package_name = lang.get_package_name(&tree, &content);
 
-        let symbols = if line[..char_pos].contains('.') {
+        let line_prefix = if line.is_empty() || char_pos == 0 {
+            ""
+        } else {
+            line.char_indices()
+                .nth(char_pos)
+                .map(|(i, _)| &line[..i])
+                .unwrap_or(&line)
+        };
+        let symbols = if line_prefix.contains('.') {
             let receiver = extract_receiver(&line, char_pos).unwrap_or("");
             self.complete_type_member_chain(
                 receiver,
@@ -1254,33 +1277,94 @@ impl LanguageServer for Backend {
             .await
         } else {
             let prefix = extract_prefix(&line, char_pos);
-            self.complete_by_prefix(prefix).await
+            let mut symbols = self.complete_by_prefix(prefix).await;
+
+            let scope_decls = lang.find_declarations_in_scope(&tree, &content, &pos.position);
+            for (name, var_type) in scope_decls {
+                if name.starts_with(prefix) {
+                    symbols.push(ResolvedSymbol::Local {
+                        uri: params.text_document_position.text_document.uri.clone(),
+                        position: pos.position,
+                        name,
+                        var_type,
+                    });
+                }
+            }
+            symbols
         };
 
         let items: Vec<CompletionItem> = symbols
             .into_iter()
-            .filter_map(|s| {
-                Some(CompletionItem {
+            .filter_map(|s| match s {
+                ResolvedSymbol::External(_) | ResolvedSymbol::Project(_) => Some(CompletionItem {
                     label: s.name().to_string(),
                     kind: s.node_kind().to_lsp_kind(),
-                    additional_text_edits: match s {
-                        ResolvedSymbol::External(ext) => {
-                            if !imports.contains(&ext.package_name) {
-                                let import_text_edit = get_import_text_edit(
-                                    &content,
-                                    &ext.fully_qualified_name,
-                                    package_name.as_deref().unwrap_or_default(),
-                                    &ext.parent_name.unwrap_or_default(),
-                                );
-                                Some(vec![import_text_edit])
-                            } else {
-                                None
+                    detail: Some(s.package_name().unwrap_or_default().to_string()),
+                    additional_text_edits: if lang
+                        .get_implicit_imports()
+                        .iter()
+                        .any(|i| i.replace(".*", "") == s.package_name().unwrap_or_default())
+                    {
+                        None
+                    } else {
+                        match s {
+                            ResolvedSymbol::External(ext) => {
+                                let import_fqn = ext
+                                    .fully_qualified_name
+                                    .split('#')
+                                    .next()
+                                    .unwrap_or(&ext.fully_qualified_name);
+
+                                if !imports.contains(&import_fqn.to_string()) {
+                                    let import_text_edit = get_import_text_edit(
+                                        &content,
+                                        &ext.fully_qualified_name,
+                                        &ext.package_name,
+                                        &ext.parent_name.unwrap_or_default(),
+                                        lang.get_language(),
+                                    );
+                                    Some(vec![import_text_edit])
+                                } else {
+                                    None
+                                }
                             }
+
+                            ResolvedSymbol::Project(sym) => {
+                                let import_fqn = sym
+                                    .fully_qualified_name
+                                    .split('#')
+                                    .next()
+                                    .unwrap_or(&sym.fully_qualified_name);
+
+                                if !imports.contains(&import_fqn.to_string())
+                                    && sym.package_name
+                                        != package_name.as_deref().unwrap_or_default()
+                                {
+                                    let import_text_edit = get_import_text_edit(
+                                        &content,
+                                        &sym.fully_qualified_name,
+                                        &sym.package_name,
+                                        &sym.parent_name.unwrap_or_default(),
+                                        lang.get_language(),
+                                    );
+                                    Some(vec![import_text_edit])
+                                } else {
+                                    None
+                                }
+                            }
+                            ResolvedSymbol::Local { .. } => None,
                         }
-                        _ => None,
                     },
                     ..Default::default()
-                })
+                }),
+                ResolvedSymbol::Local { name, var_type, .. } => {
+                    return Some(CompletionItem {
+                        label: name,
+                        kind: Some(CompletionItemKind::VARIABLE),
+                        detail: var_type,
+                        ..Default::default()
+                    });
+                }
             })
             .collect();
 
