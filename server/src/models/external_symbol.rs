@@ -208,14 +208,7 @@ impl ExternalSymbol {
                         .split_once('#')
                         .map(|(name, _)| name)
                         .unwrap_or(&self.fully_qualified_name);
-                    let source_code = decompile_class(
-                        class_name,
-                        &buffer,
-                        get_cfr_jar_path().as_ref().ok_or_else(|| {
-                            lsp_error!("CFR_JAR_PATH is not set");
-                            "CFR_JAR_PATH is not set"
-                        })?,
-                    )?;
+                    let source_code = decompile_class(class_name, &buffer, &get_cfr_jar_path())?;
 
                     let mut outfile = File::create(&outpath)?;
                     outfile.write_all(source_code.as_bytes())?;

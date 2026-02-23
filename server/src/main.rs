@@ -26,12 +26,7 @@ async fn main() {
         .with_target(false)
         .init();
 
-    // TODO: put the sqlite file somewhere proper (user input with sane default)
-    let db_dir = ":memory:";
-    let db_dir = "/Users/adibf/Projects/lspintar-ws/lspintar/lspintar.db";
-    let repo = Arc::new(Repository::new(db_dir).await.unwrap());
-
-    let (service, socket) = LspService::new(|client| Backend::new(client, repo.clone()));
+    let (service, socket) = LspService::new(|client| Backend::new(client));
 
     Server::new(stdin(), stdout(), socket).serve(service).await;
 }

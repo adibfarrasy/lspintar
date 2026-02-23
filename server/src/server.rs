@@ -12,12 +12,13 @@ use lsp_core::{
 };
 use std::{
     collections::{HashMap, HashSet},
+    os::unix::fs::DirBuilderExt,
     path::{Path, PathBuf},
     str::FromStr,
     sync::Arc,
     time::{Duration, Instant},
 };
-use tokio::sync::RwLock;
+use tokio::sync::{OnceCell, RwLock};
 use tower_lsp::lsp_types::*;
 use tower_lsp::{LanguageServer, lsp_types::request::GotoImplementationParams};
 use tower_lsp::{jsonrpc::Result, lsp_types::request::GotoImplementationResponse};
@@ -34,9 +35,10 @@ use crate::{
 
 #[derive(Clone)]
 pub struct Backend {
+    #[allow(dead_code)]
     pub client: tower_lsp::Client, // used in tests
     indexer: Arc<RwLock<Option<Indexer>>>,
-    repo: Arc<Repository>,
+    pub repo: OnceCell<Arc<Repository>>,
     workspace_root: Arc<RwLock<Option<PathBuf>>>,
     languages: HashMap<String, Arc<dyn LanguageSupport + Send + Sync>>,
     vcs_handler: Arc<RwLock<Option<Arc<dyn VcsHandler + Send + Sync>>>>,
@@ -44,7 +46,7 @@ pub struct Backend {
 }
 
 impl Backend {
-    pub fn new(client: tower_lsp::Client, repo: Arc<Repository>) -> Self {
+    pub fn new(client: tower_lsp::Client) -> Self {
         lsp_logging::init_logging_service(client.clone());
 
         let mut languages: HashMap<String, Arc<dyn LanguageSupport + Send + Sync>> = HashMap::new();
@@ -55,7 +57,7 @@ impl Backend {
         Self {
             client,
             indexer: Arc::new(RwLock::new(None)),
-            repo,
+            repo: OnceCell::new(),
             workspace_root: Arc::new(RwLock::new(None)),
             languages,
             vcs_handler: Arc::new(RwLock::new(None)),
@@ -85,13 +87,23 @@ impl Backend {
             let tmp_fqn = import.replace("*", name);
             if let Some(_) = self
                 .repo
+                .get()
+                .ok_or_else(|| tower_lsp::jsonrpc::Error::internal_error())
+                .ok()?
                 .find_symbol_by_fqn_and_branch(&tmp_fqn, branch)
                 .await
                 .ok()?
             {
                 return Some(tmp_fqn);
             }
-            if let Ok(Some(_)) = self.repo.find_external_symbol_by_fqn(&tmp_fqn).await {
+            if let Ok(Some(_)) = self
+                .repo
+                .get()
+                .ok_or_else(|| tower_lsp::jsonrpc::Error::internal_error())
+                .ok()?
+                .find_external_symbol_by_fqn(&tmp_fqn)
+                .await
+            {
                 return Some(tmp_fqn);
             }
         }
@@ -107,7 +119,14 @@ impl Backend {
             })
             .unwrap_or_else(|| name.to_string());
 
-        if let Ok(Some(_)) = self.repo.find_external_symbol_by_fqn(&fallback_fqn).await {
+        if let Ok(Some(_)) = self
+            .repo
+            .get()
+            .ok_or_else(|| tower_lsp::jsonrpc::Error::internal_error())
+            .ok()?
+            .find_external_symbol_by_fqn(&fallback_fqn)
+            .await
+        {
             return Some(fallback_fqn);
         }
 
@@ -154,6 +173,9 @@ impl Backend {
         let getter_fqn = format!("{}#get{}", class_fqn, capitalize(ident));
         if let Ok(Some(found)) = self
             .repo
+            .get()
+            .ok_or_else(|| tower_lsp::jsonrpc::Error::internal_error())
+            .ok()?
             .find_symbol_by_fqn_and_branch(&getter_fqn, branch)
             .await
         {
@@ -163,6 +185,9 @@ impl Backend {
         // Try boolean getter (isX for boolean properties)
         let is_getter_fqn = format!("{}#is{}", class_fqn, capitalize(ident));
         self.repo
+            .get()
+            .ok_or_else(|| tower_lsp::jsonrpc::Error::internal_error())
+            .ok()?
             .find_symbol_by_fqn_and_branch(&is_getter_fqn, branch)
             .await
             .ok()
@@ -178,13 +203,12 @@ impl Backend {
         imports: Vec<String>,
         package_name: Option<String>,
     ) -> Vec<ResolvedSymbol> {
-        let type_symbol = match self
-            .repo
-            .find_symbol_by_fqn_and_branch(type_fqn, branch)
-            .await
-        {
-            Ok(symbols) => symbols.into_iter().next(),
-            Err(_) => None,
+        let type_symbol = match self.repo.get() {
+            None => return vec![],
+            Some(repo) => match repo.find_symbol_by_fqn_and_branch(type_fqn, branch).await {
+                Ok(symbols) => symbols.into_iter().next(),
+                Err(_) => None,
+            },
         };
 
         let type_symbol = match type_symbol {
@@ -192,13 +216,15 @@ impl Backend {
             None => return vec![],
         };
 
-        let supers = match self
-            .repo
-            .find_supers_by_symbol_fqn_and_branch(&type_symbol.fully_qualified_name, &branch)
-            .await
-        {
-            Ok(symbols) => symbols,
-            Err(_) => return vec![],
+        let supers = match self.repo.get() {
+            None => return vec![],
+            Some(repo) => match repo
+                .find_supers_by_symbol_fqn_and_branch(&type_symbol.fully_qualified_name, branch)
+                .await
+            {
+                Ok(symbols) => symbols,
+                Err(_) => return vec![],
+            },
         };
 
         for super_name in supers.iter().map(|symbol| &symbol.fully_qualified_name) {
@@ -237,13 +263,14 @@ impl Backend {
         let member_fqn = format!("{}#{}", type_fqn, member);
 
         // Try direct member
-        if let Ok(found) = self
-            .repo
-            .find_symbols_by_fqn_and_branch(&member_fqn, branch)
-            .await
-        {
-            if !found.is_empty() {
-                return found.into_iter().map(ResolvedSymbol::Project).collect();
+        if let Some(repo) = self.repo.get() {
+            if let Ok(found) = repo
+                .find_symbols_by_fqn_and_branch(&member_fqn, branch)
+                .await
+            {
+                if !found.is_empty() {
+                    return found.into_iter().map(ResolvedSymbol::Project).collect();
+                }
             }
         }
 
@@ -258,8 +285,10 @@ impl Backend {
             return result;
         }
 
-        if let Ok(Some(found)) = self.repo.find_external_symbol_by_fqn(&member_fqn).await {
-            return vec![ResolvedSymbol::External(found)];
+        if let Some(repo) = self.repo.get() {
+            if let Ok(Some(found)) = repo.find_external_symbol_by_fqn(&member_fqn).await {
+                return vec![ResolvedSymbol::External(found)];
+            }
         }
 
         vec![]
@@ -289,9 +318,12 @@ impl Backend {
             None => return vec![],
         };
 
-        let parent_symbol = match self.repo.find_symbols_by_fqn_and_branch(&fqn, branch).await {
-            Ok(symbols) => symbols.into_iter().next(),
-            Err(_) => return vec![],
+        let parent_symbol = match self.repo.get() {
+            None => return vec![],
+            Some(repo) => match repo.find_symbols_by_fqn_and_branch(&fqn, branch).await {
+                Ok(symbols) => symbols.into_iter().next(),
+                Err(_) => return vec![],
+            },
         };
 
         match parent_symbol {
@@ -449,37 +481,37 @@ impl Backend {
             return vec![];
         };
 
-        if let Ok(symbols) = self
-            .repo
-            .find_symbols_by_parent_name_and_branch(&fqn, branch)
-            .await
-        {
-            if !symbols.is_empty() {
-                return symbols.into_iter().map(ResolvedSymbol::Project).collect();
+        if let Some(repo) = self.repo.get() {
+            if let Ok(symbols) = repo
+                .find_symbols_by_parent_name_and_branch(&fqn, branch)
+                .await
+            {
+                if !symbols.is_empty() {
+                    return symbols.into_iter().map(ResolvedSymbol::Project).collect();
+                }
             }
+            repo.find_external_symbols_by_parent_name(&fqn)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .map(ResolvedSymbol::External)
+                .collect()
+        } else {
+            vec![]
         }
-
-        self.repo
-            .find_external_symbols_by_parent_name(&fqn)
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .map(ResolvedSymbol::External)
-            .collect()
     }
 
     async fn complete_by_prefix(&self, prefix: &str, branch: &str) -> Vec<ResolvedSymbol> {
-        if let Ok(symbols) = self
-            .repo
-            .find_symbols_by_prefix_and_branch(prefix, branch)
-            .await
-        {
+        let Some(repo) = self.repo.get() else {
+            return vec![];
+        };
+
+        if let Ok(symbols) = repo.find_symbols_by_prefix_and_branch(prefix, branch).await {
             if !symbols.is_empty() {
                 return symbols.into_iter().map(ResolvedSymbol::Project).collect();
             }
         }
-        self.repo
-            .find_external_symbols_by_prefix(prefix)
+        repo.find_external_symbols_by_prefix(prefix)
             .await
             .unwrap_or_default()
             .into_iter()
@@ -717,12 +749,15 @@ impl Backend {
 
     #[tracing::instrument(skip_all)]
     async fn fqn_to_symbols(&self, fqn: String, branch: &str) -> Result<Vec<ResolvedSymbol>> {
-        if let Ok(Some(symbol)) = self.repo.find_symbol_by_fqn_and_branch(&fqn, branch).await {
+        let repo = self
+            .repo
+            .get()
+            .ok_or_else(|| tower_lsp::jsonrpc::Error::internal_error())?;
+
+        if let Ok(Some(symbol)) = repo.find_symbol_by_fqn_and_branch(&fqn, branch).await {
             return Ok(vec![ResolvedSymbol::Project(symbol)]);
         }
-
-        let external_symbol = self
-            .repo
+        let external_symbol = repo
             .find_external_symbol_by_fqn(&fqn)
             .await
             .map_err(|e| {
@@ -788,6 +823,29 @@ impl LanguageServer for Backend {
                 std::process::exit(0);
             }
 
+            // test setup initialized the repo before this stage
+            if self.repo.get().is_none() {
+                let lspintar_dir = root.join(".lspintar");
+                std::fs::DirBuilder::new()
+                    .recursive(true)
+                    .mode(0o755)
+                    .create(&lspintar_dir)
+                    .map_err(|e| {
+                        tracing::error!("failed to create .lspintar dir: {}", e);
+                        tower_lsp::jsonrpc::Error::internal_error()
+                    })?;
+
+                let db_path = lspintar_dir.join("index.db");
+                let repo = Repository::new(db_path.to_str().unwrap())
+                    .await
+                    .map_err(|e| {
+                        debug!("Failed to create index.db on {:?}: {e}", root);
+                        tower_lsp::jsonrpc::Error::internal_error()
+                    })?;
+
+                self.repo.set(Arc::new(repo)).ok();
+            }
+
             *self.workspace_root.write().await = Some(root);
         } else {
             debug!("workspace root not found, shutting down");
@@ -828,7 +886,10 @@ impl LanguageServer for Backend {
         let workspace_root = self.workspace_root.read().await.clone();
 
         if let Some(root) = workspace_root {
-            let repo = Arc::clone(&self.repo);
+            let Some(repo) = self.repo.get() else {
+                lsp_error!("Failed to initialize index repository");
+                return;
+            };
             let indexer_lock = Arc::clone(&self.indexer);
             let vcs_handler_lock = Arc::clone(&self.vcs_handler);
             let workspace_root_lock = Arc::clone(&self.workspace_root);
@@ -1065,6 +1126,8 @@ impl LanguageServer for Backend {
 
                     let implementations = self
                         .repo
+                        .get()
+                        .ok_or_else(|| tower_lsp::jsonrpc::Error::internal_error())?
                         .find_super_impls_by_fqn_and_branch(&fqn, &branch)
                         .await
                         .map_err(|e| {
@@ -1077,6 +1140,8 @@ impl LanguageServer for Backend {
                     let implementations = if implementations.is_empty() {
                         // Best effort
                         self.repo
+                            .get()
+                            .ok_or_else(|| tower_lsp::jsonrpc::Error::internal_error())?
                             .find_super_impls_by_short_name_and_branch(&type_name, &branch)
                             .await
                             .map_err(|e| {
@@ -1109,6 +1174,8 @@ impl LanguageServer for Backend {
 
                     let implementations = self
                         .repo
+                        .get()
+                        .ok_or_else(|| tower_lsp::jsonrpc::Error::internal_error())?
                         .find_super_impls_by_fqn_and_branch(&parent_fqn, &branch)
                         .await
                         .map_err(|e| {
@@ -1124,6 +1191,8 @@ impl LanguageServer for Backend {
 
                         if let Ok(symbols) = self
                             .repo
+                            .get()
+                            .ok_or_else(|| tower_lsp::jsonrpc::Error::internal_error())?
                             .find_symbols_by_fqn_and_branch(&method_fqn, &branch)
                             .await
                         {
@@ -1185,7 +1254,7 @@ impl LanguageServer for Backend {
         Ok(())
     }
 
-    async fn did_save(&self, params: DidSaveTextDocumentParams) {}
+    async fn did_save(&self, _params: DidSaveTextDocumentParams) {}
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let pos = &params.text_document_position;

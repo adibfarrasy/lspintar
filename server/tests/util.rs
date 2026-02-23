@@ -16,7 +16,6 @@ use tokio::sync::OnceCell;
 
 pub struct TestServer {
     pub backend: Backend,
-    _socket: ClientSocket,
 }
 
 impl TestServer {
@@ -24,8 +23,9 @@ impl TestServer {
         let db_name = Uuid::new_v4();
         let db_dir = format!("file:{}?mode=memory&cache=shared", db_name);
         let repo = Arc::new(Repository::new(&db_dir).await.unwrap());
-        let (service, socket) = LspService::new(|client| Backend::new(client, repo.clone()));
+        let (service, _socket) = LspService::new(|client| Backend::new(client));
         let backend = service.inner().clone();
+        backend.repo.set(repo).ok();
         let root = env::current_dir().expect("cannot get current dir");
 
         let mut init_params = InitializeParams::default();
@@ -35,10 +35,7 @@ impl TestServer {
         );
         backend.initialize(init_params).await.unwrap();
         backend.initialized(InitializedParams {}).await;
-        Self {
-            backend,
-            _socket: socket,
-        }
+        Self { backend }
     }
 }
 
