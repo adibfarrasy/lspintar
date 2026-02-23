@@ -58,9 +58,15 @@ impl Indexer {
         self.languages.insert(ext.to_string(), lang.clone());
     }
 
-    pub async fn index_workspace<F>(&self, path: &Path, on_progress: F) -> Result<()>
+    pub async fn index_workspace<F, G>(
+        &self,
+        path: &Path,
+        on_extract_progress: F,
+        on_insert_progress: G,
+    ) -> Result<()>
     where
         F: FnMut(i32, i32) + Send + 'static,
+        G: FnMut(i32, i32) + Send + 'static,
     {
         let files: Vec<_> = WalkDir::new(path)
             .follow_links(true)
@@ -72,7 +78,7 @@ impl Indexer {
 
         let total = files.len() as i32;
         let progress_count = Arc::new(AtomicI32::new(0));
-        let on_progress = Arc::new(std::sync::Mutex::new(on_progress));
+        let on_progress = Arc::new(std::sync::Mutex::new(on_extract_progress));
 
         let (mut all_symbols, mut all_supers) = (vec![], vec![]);
 
@@ -105,7 +111,32 @@ impl Indexer {
             }
         }
 
-        self.insert_indexes(all_symbols, all_supers).await
+        let on_insert_progress = Arc::new(std::sync::Mutex::new(on_insert_progress));
+
+        let mut insert_count = 0i32;
+        let insert_total = (all_symbols.len() + all_supers.len()) as i32;
+
+        for symbols in all_symbols.chunks(1000) {
+            if let Err(e) = self.repo.insert_symbols(symbols).await {
+                tracing::warn!("Failed to insert symbols: {e}");
+            }
+            insert_count += symbols.len() as i32;
+            on_insert_progress.lock().unwrap()(insert_count, insert_total);
+        }
+
+        for supers in all_supers.chunks(1000) {
+            let mappings = supers
+                .iter()
+                .map(|m| (&*m.symbol_fqn, &*m.super_short_name, m.super_fqn.as_deref()))
+                .collect();
+            if let Err(e) = self.repo.insert_symbol_super_mappings(mappings).await {
+                tracing::warn!("Failed to insert mappings: {e}");
+            }
+            insert_count += supers.len() as i32;
+            on_insert_progress.lock().unwrap()(insert_count, insert_total);
+        }
+
+        Ok(())
     }
 
     pub fn index_file(
@@ -621,12 +652,14 @@ impl Indexer {
         Ok(symbols)
     }
 
-    pub async fn index_external_deps<F>(
+    pub async fn index_external_deps<F, G>(
         &self,
         jars: Vec<(Option<PathBuf>, Option<PathBuf>)>,
-        on_progress: F,
+        on_extract_progress: F,
+        on_insert_progress: G,
     ) where
         F: FnMut(i32, i32) + Send + 'static,
+        G: FnMut(i32, i32) + Send + 'static,
     {
         let jars: Vec<_> = jars
             .into_iter()
@@ -635,7 +668,7 @@ impl Indexer {
 
         let total = jars.len() as i32;
         let progress_count = Arc::new(AtomicI32::new(0));
-        let on_progress = Arc::new(std::sync::Mutex::new(on_progress));
+        let on_progress = Arc::new(std::sync::Mutex::new(on_extract_progress));
 
         let results: Vec<_> = stream::iter(jars)
             .map(|(byte_jar, src_jar)| {
@@ -673,19 +706,31 @@ impl Indexer {
                 (symbols, mappings)
             });
 
-        for chunk in all_symbols.chunks(1000) {
-            if let Err(e) = self.repo.insert_external_symbols(chunk).await {
-                tracing::warn!("Failed to insert symbols: {e}");
-            }
-        }
+        let on_insert_progress = Arc::new(std::sync::Mutex::new(on_insert_progress));
+
         let all_mapping_refs: Vec<_> = all_mappings
             .iter()
             .map(|m| (&*m.symbol_fqn, &*m.super_short_name, m.super_fqn.as_deref()))
             .collect();
+
+        let insert_total = (all_symbols.len() + all_mapping_refs.len()) as i32;
+        let insert_count = Arc::new(AtomicI32::new(0));
+
+        for chunk in all_symbols.chunks(1000) {
+            if let Err(e) = self.repo.insert_external_symbols(chunk).await {
+                tracing::warn!("Failed to insert symbols: {e}");
+            }
+            let done =
+                insert_count.fetch_add(chunk.len() as i32, Ordering::Relaxed) + chunk.len() as i32;
+            on_insert_progress.lock().unwrap()(done, insert_total);
+        }
         for chunk in all_mapping_refs.chunks(1000) {
             if let Err(e) = self.repo.insert_symbol_super_mappings(chunk.to_vec()).await {
                 tracing::warn!("Failed to insert mappings: {e}");
             }
+            let done =
+                insert_count.fetch_add(chunk.len() as i32, Ordering::Relaxed) + chunk.len() as i32;
+            on_insert_progress.lock().unwrap()(done, insert_total);
         }
     }
 }

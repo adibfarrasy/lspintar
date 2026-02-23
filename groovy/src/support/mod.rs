@@ -487,6 +487,8 @@ impl LanguageSupport for GroovySupport {
           (interface_declaration name: (identifier) @identifier)
           (class_declaration name: (identifier) @identifier)
           (enum_declaration name: (identifier) @identifier)
+          (array_type (type_identifier) @identifier)
+          (class_literal (type_identifier) @identifier)
         ]
         "#;
         let query = Query::new(&self.get_ts_language(), query_text).ok()?;

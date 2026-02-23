@@ -5,6 +5,7 @@ use std::hash::{Hash, Hasher};
 use std::io::{Read, Write, copy};
 use std::path::PathBuf;
 
+use lsp_core::lsp_error;
 use lsp_core::node_kind::NodeKind;
 use lsp_core::util::{decompile_class, strip_comment_signifiers};
 use sqlx::{FromRow, types::Json};
@@ -47,7 +48,9 @@ pub struct ExternalSymbol {
 impl AsLspLocation for ExternalSymbol {
     fn as_lsp_location(&self) -> Option<Location> {
         let cached_path = self.extract_to_cache().ok()?;
+
         let uri = Url::from_file_path(cached_path).ok()?;
+
         Some(Location {
             uri,
             range: Range {
@@ -208,9 +211,10 @@ impl ExternalSymbol {
                     let source_code = decompile_class(
                         class_name,
                         &buffer,
-                        get_cfr_jar_path()
-                            .as_ref()
-                            .ok_or("CFR_JAR_PATH is not set")?,
+                        get_cfr_jar_path().as_ref().ok_or_else(|| {
+                            lsp_error!("CFR_JAR_PATH is not set");
+                            "CFR_JAR_PATH is not set"
+                        })?,
                     )?;
 
                     let mut outfile = File::create(&outpath)?;

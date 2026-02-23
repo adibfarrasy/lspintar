@@ -29,7 +29,7 @@ async fn index_groovy_class() {
     let mut indexer = Indexer::new(Arc::clone(&repo), Arc::clone(&vcs));
     indexer.register_language("groovy", Arc::new(GroovySupport::new()));
     indexer
-        .index_workspace(&path, |_, _| {})
+        .index_workspace(&path, |_, _| {}, |_, _| {})
         .await
         .expect("Indexing failed");
 
@@ -86,7 +86,7 @@ async fn index_groovy_gradle_single_workspace() {
     let mut indexer = Indexer::new(Arc::clone(&repo), Arc::clone(&vcs));
     indexer.register_language("groovy", Arc::new(GroovySupport::new()));
     indexer
-        .index_workspace(&path, |_, _| {})
+        .index_workspace(&path, |_, _| {}, |_, _| {})
         .await
         .expect("Indexing failed");
 
@@ -274,7 +274,7 @@ async fn index_groovy_class_multi_project() {
     let mut indexer = Indexer::new(Arc::clone(&repo), Arc::clone(&vcs));
     indexer.register_language("groovy", Arc::new(GroovySupport::new()));
     indexer
-        .index_workspace(&path, |_, _| {})
+        .index_workspace(&path, |_, _| {}, |_, _| {})
         .await
         .expect("Indexing failed");
 
@@ -331,7 +331,7 @@ async fn index_groovy_method() {
     let mut indexer = Indexer::new(Arc::clone(&repo), Arc::clone(&vcs));
     indexer.register_language("groovy", Arc::new(GroovySupport::new()));
     indexer
-        .index_workspace(&path, |_, _| {})
+        .index_workspace(&path, |_, _| {}, |_, _| {})
         .await
         .expect("Indexing failed");
 
@@ -388,7 +388,7 @@ async fn index_groovy_nested_class() {
     let mut indexer = Indexer::new(Arc::clone(&repo), Arc::clone(&vcs));
     indexer.register_language("groovy", Arc::new(GroovySupport::new()));
     indexer
-        .index_workspace(&path, |_, _| {})
+        .index_workspace(&path, |_, _| {}, |_, _| {})
         .await
         .expect("Indexing failed");
 
@@ -445,7 +445,7 @@ async fn index_groovy_field() {
     let mut indexer = Indexer::new(Arc::clone(&repo), Arc::clone(&vcs));
     indexer.register_language("groovy", Arc::new(GroovySupport::new()));
     indexer
-        .index_workspace(&path, |_, _| {})
+        .index_workspace(&path, |_, _| {}, |_, _| {})
         .await
         .expect("Indexing failed");
 
@@ -502,7 +502,7 @@ async fn index_groovy_inheritance() {
     let mut indexer = Indexer::new(Arc::clone(&repo), Arc::clone(&vcs));
     indexer.register_language("groovy", Arc::new(GroovySupport::new()));
     indexer
-        .index_workspace(&path, |_, _| {})
+        .index_workspace(&path, |_, _| {}, |_, _| {})
         .await
         .expect("Indexing failed");
 
@@ -596,7 +596,7 @@ async fn index_kotlin_data_class() {
     let mut indexer = Indexer::new(Arc::clone(&repo), Arc::clone(&vcs));
     indexer.register_language("kt", Arc::new(KotlinSupport::new()));
     indexer
-        .index_workspace(&path, |_, _| {})
+        .index_workspace(&path, |_, _| {}, |_, _| {})
         .await
         .expect("Indexing failed");
 
@@ -714,7 +714,11 @@ async fn index_external_dep_source_jar() {
     indexer.register_language("groovy", Arc::new(GroovySupport::new()));
     indexer.register_language("java", Arc::new(JavaSupport::new()));
     indexer
-        .index_external_deps(vec![(Some(jar_path.clone()), Some(jar_path))], |_, _| {})
+        .index_external_deps(
+            vec![(Some(jar_path.clone()), Some(jar_path))],
+            |_, _| {},
+            |_, _| {},
+        )
         .await;
 
     let result = repo
@@ -794,7 +798,7 @@ async fn index_external_dep_jar() {
     indexer.register_language("groovy", Arc::new(GroovySupport::new()));
     indexer.register_language("java", Arc::new(JavaSupport::new()));
     indexer
-        .index_external_deps(vec![(jar_path.clone(), jar_path)], |_, _| {})
+        .index_external_deps(vec![(jar_path.clone(), jar_path)], |_, _| {}, |_, _| {})
         .await;
 
     let result = repo
@@ -863,7 +867,7 @@ async fn index_jdk_dep_source_jar() {
     indexer.register_language("groovy", Arc::new(GroovySupport::new()));
     indexer.register_language("java", Arc::new(JavaSupport::new()));
     indexer
-        .index_external_deps(vec![(None, dep_jar)], |_, _| {})
+        .index_external_deps(vec![(None, dep_jar)], |_, _| {}, |_, _| {})
         .await;
 
     let result = repo
@@ -940,7 +944,11 @@ async fn index_external_annotation_dep_jar() {
     indexer.register_language("groovy", Arc::new(GroovySupport::new()));
     indexer.register_language("java", Arc::new(JavaSupport::new()));
     indexer
-        .index_external_deps(vec![(Some(jar_path.clone()), Some(jar_path))], |_, _| {})
+        .index_external_deps(
+            vec![(Some(jar_path.clone()), Some(jar_path))],
+            |_, _| {},
+            |_, _| {},
+        )
         .await;
 
     let count = repo

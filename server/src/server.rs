@@ -877,19 +877,42 @@ impl LanguageServer for Backend {
             let token_ws = format!("idx-ws-{}", uuid::Uuid::new_v4());
             let token_ws_end = token_ws.clone();
 
+            let token_ws_save = format!("idx-ws-save-{}", uuid::Uuid::new_v4());
+            let token_ws_save_end = token_ws_save.clone();
+
             lsp_progress_begin!(&token_ws, "Indexing...");
 
+            let save_ws_begun = std::sync::Once::new();
+
             let ws_result = indexer
-                .index_workspace(&root, move |completed, total| {
-                    lsp_progress!(
-                        &token_ws,
-                        &format!("(1/2) Indexing workspace ({}/{})", completed, total),
-                        (completed as f32 / total as f32) * 100.0
-                    );
-                    if completed == total {
-                        lsp_progress_end!(&token_ws_end);
-                    }
-                })
+                .index_workspace(
+                    &root,
+                    move |completed, total| {
+                        lsp_progress!(
+                            &token_ws,
+                            &format!("(1/2) Indexing workspace ({}/{})", completed, total),
+                            (completed as f32 / total as f32) * 100.0
+                        );
+                        if completed == total {
+                            lsp_progress_end!(&token_ws_end);
+                        }
+                    },
+                    move |completed, total| {
+                        save_ws_begun
+                            .call_once(|| lsp_progress_begin!(&token_ws_save, "Saving data..."));
+                        lsp_progress!(
+                            &token_ws_save,
+                            &format!(
+                                "(2/2) Saving project symbol indexes ({}/{})",
+                                completed, total
+                            ),
+                            (completed as f32 / total as f32) * 100.0
+                        );
+                        if completed == total {
+                            lsp_progress_end!(&token_ws_save_end);
+                        }
+                    },
+                )
                 .await;
 
             if let Err(e) = ws_result {
@@ -902,19 +925,42 @@ impl LanguageServer for Backend {
             let token_jar = format!("idx-ext-{}", uuid::Uuid::new_v4());
             let token_jar_end = token_jar.clone();
 
+            let token_jar_save = format!("idx-ext-save-{}", uuid::Uuid::new_v4());
+            let token_jar_save_end = token_jar_save.clone();
+
             lsp_progress_begin!(&token_jar, "Indexing...");
 
+            let save_jar_begun = std::sync::Once::new();
+
             indexer
-                .index_external_deps(jars, move |completed, total| {
-                    lsp_progress!(
-                        &token_jar,
-                        &format!("(2/2) Indexing JARs ({}/{})", completed, total),
-                        (completed as f32 / total as f32) * 100.0
-                    );
-                    if completed == total {
-                        lsp_progress_end!(&token_jar_end);
-                    }
-                })
+                .index_external_deps(
+                    jars,
+                    move |completed, total| {
+                        lsp_progress!(
+                            &token_jar,
+                            &format!("(2/2) Indexing JARs ({}/{})", completed, total),
+                            (completed as f32 / total as f32) * 100.0
+                        );
+                        if completed == total {
+                            lsp_progress_end!(&token_jar_end);
+                        }
+                    },
+                    move |completed, total| {
+                        save_jar_begun
+                            .call_once(|| lsp_progress_begin!(&token_jar_save, "Saving data..."));
+                        lsp_progress!(
+                            &token_jar_save,
+                            &format!(
+                                "(2/2) Saving external symbol indexes ({}/{})",
+                                completed, total
+                            ),
+                            (completed as f32 / total as f32) * 100.0
+                        );
+                        if completed == total {
+                            lsp_progress_end!(&token_jar_save_end);
+                        }
+                    },
+                )
                 .await;
 
             lsp_info!(

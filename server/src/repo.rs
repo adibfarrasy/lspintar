@@ -322,16 +322,20 @@ impl Repository {
         Ok(())
     }
 
+    #[tracing::instrument(skip(self))]
     pub async fn find_external_symbol_by_fqn(
         &self,
         fqn: &str,
     ) -> Result<Option<ExternalSymbol>, sqlx::Error> {
-        sqlx::query_as::<_, ExternalSymbol>(
+        let result = sqlx::query_as::<_, ExternalSymbol>(
             "SELECT * FROM external_symbols WHERE fully_qualified_name = ? LIMIT 1",
         )
         .bind(fqn)
         .fetch_optional(&self.pool)
-        .await
+        .await;
+
+        tracing::info!("find_external_symbol_by_fqn result: {:?}", result);
+        result
     }
 
     #[tracing::instrument(skip(self))]
