@@ -16,7 +16,10 @@ pub fn capitalize(s: &str) -> String {
 
 // Only find direct import match
 pub fn naive_resolve_fqn(name: &str, imports: &[String]) -> Option<String> {
-    if let Some(import) = imports.iter().find(|i| i.split('.').next_back() == Some(name)) {
+    if let Some(import) = imports
+        .iter()
+        .find(|i| i.split('.').next_back() == Some(name))
+    {
         return Some(import.clone());
     }
 

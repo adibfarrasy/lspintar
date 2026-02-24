@@ -181,4 +181,11 @@ impl BuildToolHandler for GradleHandler {
 
         Ok(src_zip)
     }
+
+    fn is_build_file(&self, path: &Path) -> bool {
+        matches!(
+            path.file_name().and_then(|n| n.to_str()),
+            Some("build.gradle" | "build.gradle.kts" | "settings.gradle" | "settings.gradle.kts")
+        )
+    }
 }

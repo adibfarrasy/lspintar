@@ -16,7 +16,7 @@ pub enum BuildTool {
     Maven,
 }
 
-pub fn get_build_tool(root: &Path) -> Arc<dyn BuildToolHandler> {
+pub fn get_build_tool(root: &Path) -> Arc<dyn BuildToolHandler + Send + Sync> {
     let providers: Vec<Arc<dyn BuildToolHandler>> = vec![Arc::new(GradleHandler)];
     providers
         .into_iter()
@@ -28,4 +28,5 @@ pub trait BuildToolHandler: Send + Sync {
     fn is_project(&self, root: &Path) -> bool;
     fn get_dependency_paths(&self, root: &Path) -> Result<Vec<(Option<PathBuf>, Option<PathBuf>)>>;
     fn get_jdk_dependency_path(&self, root: &Path) -> Result<Option<PathBuf>>;
+    fn is_build_file(&self, path: &Path) -> bool;
 }

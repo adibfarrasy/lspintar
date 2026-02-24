@@ -350,4 +350,45 @@ impl Repository {
             .fetch_one(&self.pool)
             .await
     }
+
+    pub async fn delete_symbols_for_file(&self, file_path: &str) -> Result<(), sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+
+        sqlx::query(
+            "DELETE FROM symbol_super_mapping WHERE symbol_fqn IN 
+        (SELECT fully_qualified_name FROM symbols WHERE file_path = ?)",
+        )
+        .bind(file_path)
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query("DELETE FROM symbols WHERE file_path = ?")
+            .bind(file_path)
+            .execute(&mut *tx)
+            .await?;
+
+        tx.commit().await?;
+        Ok(())
+    }
+
+    pub async fn delete_external_symbols_for_jar(&self, jar_path: &str) -> Result<(), sqlx::Error> {
+        sqlx::query("DELETE FROM external_symbols WHERE jar_path = ?")
+            .bind(jar_path)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn clear_all(&self) -> Result<(), sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM symbol_super_mapping")
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM symbols").execute(&mut *tx).await?;
+        sqlx::query("DELETE FROM external_symbols")
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(())
+    }
 }

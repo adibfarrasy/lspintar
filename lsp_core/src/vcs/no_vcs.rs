@@ -1,6 +1,5 @@
-use std::path::Path;
-
 use anyhow::Result;
+use std::path::{Path, PathBuf};
 
 use crate::vcs::VcsHandler;
 
@@ -11,7 +10,20 @@ impl VcsHandler for NoVcs {
         false
     }
 
-    fn get_current_branch(&self) -> Result<String> {
-        Ok("NONE".to_string())
+    fn get_current_revision(&self) -> Result<String> {
+        anyhow::bail!("No VCS available")
+    }
+
+    fn get_changed_files(
+        &self,
+        _old_rev: &str,
+        _new_rev: &str,
+        _root: &Path,
+    ) -> Result<Vec<PathBuf>> {
+        anyhow::bail!("No VCS available")
+    }
+
+    fn get_revision_file(&self, _root: &Path) -> Option<PathBuf> {
+        None
     }
 }

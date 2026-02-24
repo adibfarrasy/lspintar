@@ -21,4 +21,8 @@ impl BuildToolHandler for NoBuildTool {
     fn get_jdk_dependency_path(&self, _root: &Path) -> Result<Option<PathBuf>> {
         Ok(None)
     }
+
+    fn is_build_file(&self, _path: &Path) -> bool {
+        false
+    }
 }

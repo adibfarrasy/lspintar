@@ -4,7 +4,7 @@ use groovy::GroovySupport;
 use java::JavaSupport;
 use kotlin::KotlinSupport;
 use lsp_core::{
-    build_tools::get_build_tool,
+    build_tools::{BuildToolHandler, get_build_tool},
     language_support::LanguageSupport,
     lsp_error, lsp_info, lsp_logging, lsp_progress, lsp_progress_begin, lsp_progress_end,
     util::{capitalize, extract_prefix, extract_receiver, get_import_text_edit},
@@ -27,7 +27,10 @@ use tree_sitter::Tree;
 
 use crate::{
     Indexer, Repository,
-    constants::FILE_CACHE_TTL_SECS,
+    constants::{
+        DB_PATH_FRAGMENT, FILE_CACHE_TTL_SECS, INDEX_PATH_FRAGMENT, INDEX_VERSION,
+        MANIFEST_PATH_FRAGMENT,
+    },
     enums::ResolvedSymbol,
     lsp_convert::{AsLspHover, AsLspLocation},
     models::symbol::Symbol,
@@ -44,9 +47,14 @@ pub struct Backend {
     workspace_root: Arc<RwLock<Option<PathBuf>>>,
     languages: HashMap<String, Arc<dyn LanguageSupport + Send + Sync>>,
     vcs_handler: Arc<RwLock<Option<Arc<dyn VcsHandler + Send + Sync>>>>,
+    last_known_revision: Arc<RwLock<Option<String>>>,
+    build_tool: Arc<RwLock<Option<Arc<dyn BuildToolHandler + Send + Sync>>>>,
 
-    // optimization to avoid excessive I/O calls for reading opened file contents
+    // Optimizations
+    /// Caches open document contents to avoid excessive I/O reads.
     documents: DashMap<String, (String, Instant)>,
+    /// Debounces `didChangeWatchedFiles` to avoid redundant reindexing.
+    debounce_tx: tokio::sync::mpsc::Sender<PathBuf>,
 }
 
 impl Backend {
@@ -58,15 +66,76 @@ impl Backend {
         languages.insert("java".to_string(), Arc::new(JavaSupport::new()));
         languages.insert("kt".to_string(), Arc::new(KotlinSupport::new()));
 
-        Self {
+        let (debounce_tx, debounce_rx) = tokio::sync::mpsc::channel::<PathBuf>(64);
+        let backend = Self {
             client,
             indexer: Arc::new(RwLock::new(None)),
             repo: OnceCell::new(),
             workspace_root: Arc::new(RwLock::new(None)),
             languages,
             vcs_handler: Arc::new(RwLock::new(None)),
+            last_known_revision: Arc::new(RwLock::new(None)),
+            build_tool: Arc::new(RwLock::new(None)),
             documents: DashMap::new(),
-        }
+            debounce_tx,
+        };
+
+        backend.spawn_debounce_task(debounce_rx);
+        backend
+    }
+
+    fn spawn_debounce_task(&self, mut debounce_rx: tokio::sync::mpsc::Receiver<PathBuf>) {
+        let indexer = Arc::clone(&self.indexer);
+        let repo = self.repo.clone();
+
+        tokio::spawn(async move {
+            let mut pending: Vec<PathBuf> = Vec::new();
+
+            loop {
+                tokio::select! {
+                    Some(path) = debounce_rx.recv() => {
+                        if !pending.contains(&path) {
+                            pending.push(path);
+                        }
+                    }
+                    _ = tokio::time::sleep(Duration::from_millis(300)), if !pending.is_empty() => {
+                        let batch = std::mem::take(&mut pending);
+                        let indexer_guard = indexer.read().await;
+                        let Some(indexer) = indexer_guard.as_ref().cloned() else { continue };
+                        let Some(repo) = repo.get().cloned() else { continue };
+
+                        for path in batch {
+                            let indexer = indexer.clone();
+                            let path_clone = path.clone();
+                            let result = tokio::task::spawn_blocking(move || indexer.index_file(&path_clone)).await;
+
+                            // TODO: similar logic to did_save. maybe extract common logic?
+                            match result {
+                                Ok(Ok(Some((symbols, supers)))) => {
+                                    for chunk in symbols.chunks(1000) {
+                                        if let Err(e) = repo.insert_symbols(chunk).await {
+                                            warn!("Failed to insert symbols: {e}");
+                                        }
+                                    }
+                                    for chunk in supers.chunks(1000) {
+                                        let mappings = chunk.iter()
+                                            .map(|m| (&*m.symbol_fqn, &*m.super_short_name, m.super_fqn.as_deref()))
+                                            .collect::<Vec<_>>();
+                                        if let Err(e) = repo.insert_symbol_super_mappings(mappings).await {
+                                            warn!("Failed to insert mappings: {e}");
+                                        }
+                                    }
+                                    debug!("Re-indexed: {}", path.display());
+                                }
+                                Ok(Ok(None)) => warn!("Unsupported file type: {}", path.display()),
+                                Ok(Err(e)) => warn!("Parse error, skipping: {e}"),
+                                Err(e) => warn!("Failed to spawn index task: {e}"),
+                            }
+                        }
+                    }
+                }
+            }
+        });
     }
 
     #[tracing::instrument(skip_all)]
@@ -773,6 +842,87 @@ impl Backend {
         self.documents.insert(uri, (text, Instant::now()));
         line
     }
+
+    async fn handle_build_file_changed(&self, root: &Path) {
+        let manifest_path = root.join(MANIFEST_PATH_FRAGMENT);
+
+        let previous: Vec<(Option<PathBuf>, Option<PathBuf>)> = tokio::fs::read(&manifest_path)
+            .await
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default();
+
+        let build_tool_guard = self.build_tool.read().await;
+        let Some(build_tool) = build_tool_guard.as_ref().cloned() else {
+            return;
+        };
+        drop(build_tool_guard);
+
+        let root_clone = root.to_path_buf();
+        let Ok(Ok(current)) =
+            tokio::task::spawn_blocking(move || build_tool.get_dependency_paths(&root_clone)).await
+        else {
+            lsp_error!("Failed to resolve dependencies");
+            return;
+        };
+
+        let previous_jars: HashSet<PathBuf> =
+            previous.iter().filter_map(|(b, _)| b.clone()).collect();
+        let current_jars: HashSet<PathBuf> =
+            current.iter().filter_map(|(b, _)| b.clone()).collect();
+
+        let removed: Vec<PathBuf> = previous_jars.difference(&current_jars).cloned().collect();
+        let added: Vec<(Option<PathBuf>, Option<PathBuf>)> = current
+            .iter()
+            .filter(|(b, _)| b.as_ref().map_or(false, |p| !previous_jars.contains(p)))
+            .cloned()
+            .collect();
+
+        let Some(repo) = self.repo.get().cloned() else {
+            return;
+        };
+
+        for jar in &removed {
+            if let Err(e) = repo
+                .delete_external_symbols_for_jar(&jar.to_string_lossy())
+                .await
+            {
+                lsp_error!("Failed to remove stale JAR {}: {e}", jar.display());
+            }
+        }
+
+        if !added.is_empty() {
+            let indexer_guard = self.indexer.read().await;
+            let Some(indexer) = indexer_guard.as_ref().cloned() else {
+                return;
+            };
+            drop(indexer_guard);
+            indexer
+                .index_external_deps(added, |_, _| {}, |_, _| {})
+                .await;
+        }
+
+        if let Ok(json) = serde_json::to_string(&current) {
+            if let Err(e) = tokio::fs::write(&manifest_path, json).await {
+                lsp_error!("Failed to update manifest file: {e}");
+            }
+        }
+    }
+
+    fn needs_full_reindex(&self, root: &Path) -> bool {
+        let version_path = root.join(INDEX_PATH_FRAGMENT);
+        let db_path = root.join(DB_PATH_FRAGMENT);
+        let manifest_path = root.join(MANIFEST_PATH_FRAGMENT);
+
+        if !manifest_path.exists() || !db_path.exists() {
+            return true;
+        }
+
+        match std::fs::read_to_string(&version_path) {
+            Ok(v) => v.trim() != INDEX_VERSION,
+            Err(_) => true,
+        }
+    }
 }
 
 #[tower_lsp::async_trait]
@@ -796,21 +946,25 @@ impl LanguageServer for Backend {
 
             // test setup initialized the repo before this stage
             if self.repo.get().is_none() {
-                let lspintar_dir = root.join(".lspintar");
+                let (dir_fragment, file_name) = DB_PATH_FRAGMENT
+                    .split_once('/')
+                    .expect(&format!("Failed to split {DB_PATH_FRAGMENT} directory"));
+
+                let lspintar_dir = root.join(dir_fragment);
                 std::fs::DirBuilder::new()
                     .recursive(true)
                     .mode(0o755)
                     .create(&lspintar_dir)
                     .map_err(|e| {
-                        tracing::error!("failed to create .lspintar dir: {}", e);
+                        tracing::error!("failed to create {dir_fragment} dir: {}", e);
                         tower_lsp::jsonrpc::Error::internal_error()
                     })?;
 
-                let db_path = lspintar_dir.join("index.db");
+                let db_path = lspintar_dir.join(file_name);
                 let repo = Repository::new(db_path.to_str().unwrap())
                     .await
                     .map_err(|e| {
-                        debug!("Failed to create index.db on {:?}: {e}", root);
+                        debug!("Failed to create {DB_PATH_FRAGMENT} in {:?}: {e}", root);
                         tower_lsp::jsonrpc::Error::internal_error()
                     })?;
 
@@ -869,6 +1023,7 @@ impl LanguageServer for Backend {
                 lsp_error!("Failed to initialize index repository");
                 return;
             };
+
             let indexer_lock = Arc::clone(&self.indexer);
             let vcs_handler_lock = Arc::clone(&self.vcs_handler);
             let workspace_root_lock = Arc::clone(&self.workspace_root);
@@ -880,137 +1035,173 @@ impl LanguageServer for Backend {
 
             let vcs = get_vcs_handler(&root);
             let build_tool = get_build_tool(&root);
+            *self.build_tool.write().await = Some(Arc::clone(&build_tool));
 
             let mut indexer = Indexer::new(Arc::clone(repo));
             languages.iter().for_each(|(k, v)| {
                 indexer.register_language(k, v.clone());
             });
 
-            let indexing_start = Instant::now();
-
-            lsp_info!("Resolving dependencies...");
-            tokio::time::sleep(Duration::from_millis(500)).await;
-
-            let external_deps = match build_tool.get_dependency_paths(&root) {
-                Ok(deps) => deps,
-                Err(e) => {
-                    let message = format!("Failed to get dependencies: {e}");
-                    lsp_error!("{}", message);
-                    tokio::time::sleep(Duration::from_millis(500)).await;
-                    panic!("{}", message);
+            if self.needs_full_reindex(&root) {
+                debug!("Full reindex required, clearing existing index.");
+                let _ = tokio::fs::remove_file(root.join(MANIFEST_PATH_FRAGMENT)).await;
+                if let Err(e) = repo.clear_all().await {
+                    lsp_error!("Failed to clear index: {e}");
+                    return;
                 }
-            };
-            let jdk_sources = match build_tool.get_jdk_dependency_path(&root) {
-                Ok(deps) => deps,
-                Err(e) => {
-                    let message = format!("Failed to get JDK sources: {e}");
-                    lsp_error!("{}", message);
-                    tokio::time::sleep(Duration::from_millis(500)).await;
-                    panic!("{}", message);
-                }
-            };
-            let mut jars: Vec<_> = external_deps;
-            if let Some(src_zip) = jdk_sources {
-                jars.push((None, Some(src_zip)));
-            }
 
-            let token_ws = format!("idx-ws-{}", uuid::Uuid::new_v4());
-            let token_ws_end = token_ws.clone();
+                let indexing_start = Instant::now();
 
-            let token_ws_save = format!("idx-ws-save-{}", uuid::Uuid::new_v4());
-            let token_ws_save_end = token_ws_save.clone();
-
-            lsp_progress_begin!(&token_ws, "Indexing...");
-
-            let save_ws_begun = std::sync::Once::new();
-
-            let ws_result = indexer
-                .index_workspace(
-                    &root,
-                    move |completed, total| {
-                        lsp_progress!(
-                            &token_ws,
-                            &format!("(1/2) Indexing workspace ({}/{})", completed, total),
-                            (completed as f32 / total as f32) * 100.0
-                        );
-                        if completed == total {
-                            lsp_progress_end!(&token_ws_end);
-                        }
-                    },
-                    move |completed, total| {
-                        save_ws_begun
-                            .call_once(|| lsp_progress_begin!(&token_ws_save, "Saving data..."));
-                        lsp_progress!(
-                            &token_ws_save,
-                            &format!(
-                                "(2/2) Saving project symbol indexes ({}/{})",
-                                completed, total
-                            ),
-                            (completed as f32 / total as f32) * 100.0
-                        );
-                        if completed == total {
-                            lsp_progress_end!(&token_ws_save_end);
-                        }
-                    },
-                )
-                .await;
-
-            if let Err(e) = ws_result {
-                let message = format!("Failed to index workspace: {e}");
-                lsp_error!("{}", message);
+                lsp_info!("Resolving dependencies...");
                 tokio::time::sleep(Duration::from_millis(500)).await;
-                panic!("{}", message);
+
+                let external_deps = match build_tool.get_dependency_paths(&root) {
+                    Ok(deps) => deps,
+                    Err(e) => {
+                        let message = format!("Failed to get dependencies: {e}");
+                        lsp_error!("{}", message);
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                        panic!("{}", message);
+                    }
+                };
+                let jdk_sources = match build_tool.get_jdk_dependency_path(&root) {
+                    Ok(deps) => deps,
+                    Err(e) => {
+                        let message = format!("Failed to get JDK sources: {e}");
+                        lsp_error!("{}", message);
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                        panic!("{}", message);
+                    }
+                };
+                let mut jars: Vec<(Option<PathBuf>, Option<PathBuf>)> = external_deps;
+
+                // exclude JDK
+                let jars_for_manifest = jars.clone();
+
+                if let Some(src_zip) = jdk_sources {
+                    jars.push((None, Some(src_zip)));
+                }
+
+                let token_ws = format!("idx-ws-{}", uuid::Uuid::new_v4());
+                let token_ws_end = token_ws.clone();
+
+                let token_ws_save = format!("idx-ws-save-{}", uuid::Uuid::new_v4());
+                let token_ws_save_end = token_ws_save.clone();
+
+                lsp_progress_begin!(&token_ws, "Indexing...");
+
+                let save_ws_begun = std::sync::Once::new();
+
+                let ws_result = indexer
+                    .index_workspace(
+                        &root,
+                        move |completed, total| {
+                            lsp_progress!(
+                                &token_ws,
+                                &format!("(1/2) Indexing workspace ({}/{})", completed, total),
+                                (completed as f32 / total as f32) * 100.0
+                            );
+                            if completed == total {
+                                lsp_progress_end!(&token_ws_end);
+                            }
+                        },
+                        move |completed, total| {
+                            save_ws_begun.call_once(|| {
+                                lsp_progress_begin!(&token_ws_save, "Saving data...")
+                            });
+                            lsp_progress!(
+                                &token_ws_save,
+                                &format!(
+                                    "(2/2) Saving project symbol indexes ({}/{})",
+                                    completed, total
+                                ),
+                                (completed as f32 / total as f32) * 100.0
+                            );
+                            if completed == total {
+                                lsp_progress_end!(&token_ws_save_end);
+                            }
+                        },
+                    )
+                    .await;
+
+                if let Err(e) = ws_result {
+                    let message = format!("Failed to index workspace: {e}");
+                    lsp_error!("{}", message);
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    panic!("{}", message);
+                }
+
+                let token_jar = format!("idx-ext-{}", uuid::Uuid::new_v4());
+                let token_jar_end = token_jar.clone();
+
+                let token_jar_save = format!("idx-ext-save-{}", uuid::Uuid::new_v4());
+                let token_jar_save_end = token_jar_save.clone();
+
+                lsp_progress_begin!(&token_jar, "Indexing...");
+
+                let save_jar_begun = std::sync::Once::new();
+
+                indexer
+                    .index_external_deps(
+                        jars,
+                        move |completed, total| {
+                            lsp_progress!(
+                                &token_jar,
+                                &format!("(2/2) Indexing JARs ({}/{})", completed, total),
+                                (completed as f32 / total as f32) * 100.0
+                            );
+                            if completed == total {
+                                lsp_progress_end!(&token_jar_end);
+                            }
+                        },
+                        move |completed, total| {
+                            save_jar_begun.call_once(|| {
+                                lsp_progress_begin!(&token_jar_save, "Saving data...")
+                            });
+                            lsp_progress!(
+                                &token_jar_save,
+                                &format!(
+                                    "(2/2) Saving external symbol indexes ({}/{})",
+                                    completed, total
+                                ),
+                                (completed as f32 / total as f32) * 100.0
+                            );
+                            if completed == total {
+                                lsp_progress_end!(&token_jar_save_end);
+                            }
+                        },
+                    )
+                    .await;
+
+                let manifest_path = root.join(MANIFEST_PATH_FRAGMENT);
+                match serde_json::to_string(&jars_for_manifest) {
+                    Ok(json) => {
+                        if let Err(e) = tokio::fs::write(&manifest_path, json).await {
+                            lsp_error!("Failed to write manifest file: {e}");
+                        }
+                    }
+                    Err(e) => lsp_error!("Failed to serialize manifest file: {e}"),
+                }
+
+                lsp_info!(
+                    "Indexing finished in {:.2}s",
+                    indexing_start.elapsed().as_secs_f64()
+                );
             }
-
-            let token_jar = format!("idx-ext-{}", uuid::Uuid::new_v4());
-            let token_jar_end = token_jar.clone();
-
-            let token_jar_save = format!("idx-ext-save-{}", uuid::Uuid::new_v4());
-            let token_jar_save_end = token_jar_save.clone();
-
-            lsp_progress_begin!(&token_jar, "Indexing...");
-
-            let save_jar_begun = std::sync::Once::new();
-
-            indexer
-                .index_external_deps(
-                    jars,
-                    move |completed, total| {
-                        lsp_progress!(
-                            &token_jar,
-                            &format!("(2/2) Indexing JARs ({}/{})", completed, total),
-                            (completed as f32 / total as f32) * 100.0
-                        );
-                        if completed == total {
-                            lsp_progress_end!(&token_jar_end);
-                        }
-                    },
-                    move |completed, total| {
-                        save_jar_begun
-                            .call_once(|| lsp_progress_begin!(&token_jar_save, "Saving data..."));
-                        lsp_progress!(
-                            &token_jar_save,
-                            &format!(
-                                "(2/2) Saving external symbol indexes ({}/{})",
-                                completed, total
-                            ),
-                            (completed as f32 / total as f32) * 100.0
-                        );
-                        if completed == total {
-                            lsp_progress_end!(&token_jar_save_end);
-                        }
-                    },
-                )
-                .await;
-
-            lsp_info!(
-                "Indexing finished in {:.2}s",
-                indexing_start.elapsed().as_secs_f64()
-            );
 
             *indexer_lock.write().await = Some(indexer);
             *vcs_handler_lock.write().await = Some(vcs);
-            *workspace_root_lock.write().await = Some(root);
+            *workspace_root_lock.write().await = Some(root.clone());
+
+            if let Some(vcs) = self.vcs_handler.read().await.as_ref() {
+                if let Ok(rev) = vcs.get_current_revision() {
+                    *self.last_known_revision.write().await = Some(rev);
+                }
+            }
+
+            if let Err(e) = tokio::fs::write(root.join(INDEX_PATH_FRAGMENT), INDEX_VERSION).await {
+                lsp_error!("Failed to write {INDEX_PATH_FRAGMENT}: {e}");
+            }
         }
     }
 
@@ -1372,6 +1563,64 @@ impl LanguageServer for Backend {
             Ok(None)
         } else {
             Ok(Some(CompletionResponse::Array(items)))
+        }
+    }
+
+    async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
+        let Some(root) = self.workspace_root.read().await.clone() else {
+            return;
+        };
+
+        let vcs_guard = self.vcs_handler.read().await;
+        let revision_file = vcs_guard
+            .as_ref()
+            .and_then(|vcs| vcs.get_revision_file(&root));
+
+        for change in params.changes {
+            let Ok(path) = change.uri.to_file_path() else {
+                continue;
+            };
+
+            if change.typ == FileChangeType::DELETED {
+                self.documents.remove(&change.uri.to_string());
+                let Some(repo) = self.repo.get() else {
+                    continue;
+                };
+                if let Err(e) = repo.delete_symbols_for_file(&path.to_string_lossy()).await {
+                    lsp_error!("Failed to remove symbols for {}: {e}", path.display());
+                }
+            } else if revision_file.as_deref() == Some(&path) {
+                let Some(vcs) = vcs_guard.as_ref() else {
+                    continue;
+                };
+                let Ok(new_rev) = vcs.get_current_revision() else {
+                    continue;
+                };
+                let old_rev = self.last_known_revision.read().await.clone();
+
+                if let Some(old) = old_rev {
+                    if old != new_rev {
+                        if let Ok(changed) = vcs.get_changed_files(&old, &new_rev, &root) {
+                            for p in changed {
+                                let _ = self.debounce_tx.send(p).await;
+                            }
+                        }
+                    }
+                }
+
+                *self.last_known_revision.write().await = Some(new_rev);
+            } else {
+                let build_tool_guard = self.build_tool.read().await;
+                if let Some(build_tool) = build_tool_guard.as_ref() {
+                    if build_tool.is_build_file(&path) {
+                        drop(build_tool_guard);
+                        self.handle_build_file_changed(&root).await;
+                        continue;
+                    }
+                }
+
+                let _ = self.debounce_tx.send(path).await;
+            }
         }
     }
 }
