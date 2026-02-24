@@ -25,4 +25,4 @@ pub const MANIFEST_PATH_FRAGMENT: &str = ".lspintar/deps.manifest";
 pub const INDEX_PATH_FRAGMENT: &str = ".lspintar/index.version";
 pub const DB_PATH_FRAGMENT: &str = ".lspintar/index.db";
 
-pub const INDEX_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");

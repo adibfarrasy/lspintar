@@ -1,4 +1,4 @@
-use tower_lsp::lsp_types::Position;
+use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range};
 use tree_sitter::{Node, Query, QueryCursor, StreamingIterator, Tree};
 
 use crate::language_support::ParameterResult;
@@ -118,4 +118,48 @@ pub fn get_node_at_position<'a>(
 
     tree.root_node()
         .descendant_for_byte_range(byte_offset, byte_offset)
+}
+
+pub fn collect_syntax_errors(node: Node, source: &str, diagnostics: &mut Vec<Diagnostic>) {
+    if node.has_error() {
+        if node.is_error() || node.is_missing() {
+            let start_position = Position {
+                line: node.start_position().row as u32,
+                character: node.start_position().column as u32,
+            };
+            let end_position = Position {
+                line: node.end_position().row as u32,
+                character: node.end_position().column as u32,
+            };
+
+            let range = Range {
+                start: start_position,
+                end: end_position,
+            };
+
+            let message = if node.is_missing() {
+                format!("Missing {}", node.kind())
+            } else {
+                let node_text = node.utf8_text(source.as_bytes()).unwrap_or("<unknown>");
+                format!("Syntax error: unexpected '{}'", node_text)
+            };
+
+            diagnostics.push(Diagnostic {
+                range,
+                severity: Some(DiagnosticSeverity::ERROR),
+                code: None,
+                code_description: None,
+                source: Some("lspintar".to_string()),
+                message,
+                related_information: None,
+                tags: None,
+                data: None,
+            });
+        }
+
+        // Continue checking children for more errors
+        for child in node.children(&mut node.walk()) {
+            collect_syntax_errors(child, source, diagnostics);
+        }
+    }
 }

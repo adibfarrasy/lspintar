@@ -2,7 +2,7 @@ use lsp_core::{
     language_support::{IdentResult, LanguageSupport, ParameterResult, ParseResult},
     languages::Language,
     node_kind::NodeKind,
-    ts_helper::{self, get_node_at_position, node_contains_position},
+    ts_helper::{self, collect_syntax_errors, get_node_at_position, node_contains_position},
 };
 use std::{cell::RefCell, fs, path::Path};
 
@@ -783,6 +783,16 @@ impl LanguageSupport for GroovySupport {
             }
         }
         results
+    }
+
+    fn collect_diagnostics(
+        &self,
+        tree: &Tree,
+        source: &str,
+    ) -> Vec<tower_lsp::lsp_types::Diagnostic> {
+        let mut diagnostics = Vec::new();
+        collect_syntax_errors(tree.root_node(), source, &mut diagnostics);
+        diagnostics
     }
 }
 

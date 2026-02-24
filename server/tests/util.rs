@@ -2,9 +2,9 @@ use std::{
     env,
     sync::{Arc, LazyLock},
 };
-use tower_lsp::{ClientSocket, LanguageServer};
+use tower_lsp::LanguageServer;
 
-use lspintar_server::{Repository, server::Backend};
+use lspintar_server::{Repository, constants::MANIFEST_PATH_FRAGMENT, server::Backend};
 use tower_lsp::{
     LspService,
     lsp_types::{InitializeParams, InitializedParams, Url},
@@ -33,6 +33,14 @@ impl TestServer {
             Url::from_file_path(root.join("tests/fixtures").join(fixture))
                 .expect("cannot parse root URI"),
         );
+
+        let _ = tokio::fs::remove_file(
+            root.join("tests/fixtures")
+                .join(fixture)
+                .join(MANIFEST_PATH_FRAGMENT),
+        )
+        .await;
+
         backend.initialize(init_params).await.unwrap();
         backend.initialized(InitializedParams {}).await;
         Self { backend }

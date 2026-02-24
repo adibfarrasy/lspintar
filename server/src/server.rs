@@ -28,7 +28,7 @@ use tree_sitter::Tree;
 use crate::{
     Indexer, Repository,
     constants::{
-        DB_PATH_FRAGMENT, FILE_CACHE_TTL_SECS, INDEX_PATH_FRAGMENT, INDEX_VERSION,
+        APP_VERSION, DB_PATH_FRAGMENT, FILE_CACHE_TTL_SECS, INDEX_PATH_FRAGMENT,
         MANIFEST_PATH_FRAGMENT,
     },
     enums::ResolvedSymbol,
@@ -87,6 +87,8 @@ impl Backend {
     fn spawn_debounce_task(&self, mut debounce_rx: tokio::sync::mpsc::Receiver<PathBuf>) {
         let indexer = Arc::clone(&self.indexer);
         let repo = self.repo.clone();
+        let languages = self.languages.clone();
+        let client = self.client.clone();
 
         tokio::spawn(async move {
             let mut pending: Vec<PathBuf> = Vec::new();
@@ -125,7 +127,19 @@ impl Backend {
                                             warn!("Failed to insert mappings: {e}");
                                         }
                                     }
+
                                     debug!("Re-indexed: {}", path.display());
+
+                                    if let Ok(uri) = Url::from_file_path(&path) {
+                                        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                                            if let Some(lang) = languages.get(ext) {
+                                                if let Some((tree, content)) = lang.parse(&path) {
+                                                    let diagnostics = lang.collect_diagnostics(&tree, &content);
+                                                    client.publish_diagnostics(uri, diagnostics, None).await;
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                                 Ok(Ok(None)) => warn!("Unsupported file type: {}", path.display()),
                                 Ok(Err(e)) => warn!("Parse error, skipping: {e}"),
@@ -540,6 +554,7 @@ impl Backend {
             {
                 return symbols.into_iter().map(ResolvedSymbol::Project).collect();
             }
+
             repo.find_external_symbols_by_parent_name(&fqn)
                 .await
                 .unwrap_or_default()
@@ -919,9 +934,26 @@ impl Backend {
         }
 
         match std::fs::read_to_string(&version_path) {
-            Ok(v) => v.trim() != INDEX_VERSION,
+            Ok(v) => v.trim() != APP_VERSION,
             Err(_) => true,
         }
+    }
+
+    async fn publish_diagnostics(&self, uri: Url) {
+        let path = PathBuf::from_str(uri.path()).unwrap();
+        let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+            return;
+        };
+        let Some(lang) = self.languages.get(ext) else {
+            return;
+        };
+        let Some((tree, content)) = lang.parse(&path) else {
+            return;
+        };
+        let diagnostics = lang.collect_diagnostics(&tree, &content);
+        self.client
+            .publish_diagnostics(uri, diagnostics, None)
+            .await;
     }
 }
 
@@ -987,6 +1019,45 @@ impl LanguageServer for Backend {
             }
         });
 
+        self.client
+            .register_capability(vec![Registration {
+                id: "workspace/didChangeWatchedFiles".to_string(),
+                method: "workspace/didChangeWatchedFiles".to_string(),
+                register_options: Some(
+                    serde_json::to_value(DidChangeWatchedFilesRegistrationOptions {
+                        watchers: vec![
+                            FileSystemWatcher {
+                                glob_pattern: GlobPattern::String("**/*.groovy".to_string()),
+                                kind: Some(WatchKind::all()),
+                            },
+                            FileSystemWatcher {
+                                glob_pattern: GlobPattern::String("**/*.java".to_string()),
+                                kind: Some(WatchKind::all()),
+                            },
+                            FileSystemWatcher {
+                                glob_pattern: GlobPattern::String("**/*.kt".to_string()),
+                                kind: Some(WatchKind::all()),
+                            },
+                            FileSystemWatcher {
+                                glob_pattern: GlobPattern::String("**/*.kts".to_string()),
+                                kind: Some(WatchKind::all()),
+                            },
+                            FileSystemWatcher {
+                                glob_pattern: GlobPattern::String("**/*.gradle".to_string()),
+                                kind: Some(WatchKind::all()),
+                            },
+                            FileSystemWatcher {
+                                glob_pattern: GlobPattern::String("**/*.gradle.kts".to_string()),
+                                kind: Some(WatchKind::all()),
+                            },
+                        ],
+                    })
+                    .unwrap(),
+                ),
+            }])
+            .await
+            .ok();
+
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
@@ -1010,7 +1081,7 @@ impl LanguageServer for Backend {
             },
             server_info: Some(ServerInfo {
                 name: "lspintar".to_string(),
-                version: Some("0.1.0".to_string()),
+                version: Some(APP_VERSION.to_string()),
             }),
         })
     }
@@ -1199,7 +1270,7 @@ impl LanguageServer for Backend {
                 }
             }
 
-            if let Err(e) = tokio::fs::write(root.join(INDEX_PATH_FRAGMENT), INDEX_VERSION).await {
+            if let Err(e) = tokio::fs::write(root.join(INDEX_PATH_FRAGMENT), APP_VERSION).await {
                 lsp_error!("Failed to write {INDEX_PATH_FRAGMENT}: {e}");
             }
         }
@@ -1380,11 +1451,12 @@ impl LanguageServer for Backend {
         Ok(())
     }
 
-    async fn did_change(&self, params: DidChangeTextDocumentParams) {
-        if let Some(change) = params.content_changes.into_iter().last() {
-            let uri = params.text_document.uri.to_string();
-            self.documents.insert(uri, (change.text, Instant::now()));
-        }
+    async fn did_open(&self, params: DidOpenTextDocumentParams) {
+        let uri = params.text_document.uri.clone();
+        let text = params.text_document.text.clone();
+        self.documents
+            .insert(uri.to_string(), (text, Instant::now()));
+        self.publish_diagnostics(uri).await;
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
@@ -1424,6 +1496,8 @@ impl LanguageServer for Backend {
             Ok(Err(e)) => warn!("Parse error on save, skipping reindex: {e}"),
             Err(e) => warn!("Failed to spawn index task: {e}"),
         }
+
+        self.publish_diagnostics(params.text_document.uri).await;
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
@@ -1565,6 +1639,8 @@ impl LanguageServer for Backend {
             Ok(Some(CompletionResponse::Array(items)))
         }
     }
+
+    async fn did_change(&self, _params: DidChangeTextDocumentParams) {}
 
     async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
         let Some(root) = self.workspace_root.read().await.clone() else {

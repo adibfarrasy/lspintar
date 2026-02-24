@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use tower_lsp::lsp_types::{Position, Range};
+use tower_lsp::lsp_types::{Diagnostic, Position, Range};
 use tree_sitter::{Node, Tree};
 
 use crate::{languages::Language, node_kind::NodeKind};
@@ -105,4 +105,6 @@ pub trait LanguageSupport: Send + Sync {
         content: &str,
         position: &Position,
     ) -> Option<(String, Vec<String>)>;
+
+    fn collect_diagnostics(&self, tree: &Tree, source: &str) -> Vec<Diagnostic>;
 }
