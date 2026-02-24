@@ -200,6 +200,52 @@ impl JavaSupport {
         Some((name_text.to_string(), Some(scope_text.to_string())))
     }
 
+    fn traverse_scope_nodes<F>(
+        &self,
+        scope_node: Node,
+        content: &str,
+        reference_byte: usize,
+        process_node: &mut F,
+    ) where
+        F: FnMut(Node, &str) -> bool, // true = continue, false = stop
+    {
+        let mut stack = Vec::new();
+        stack.push(scope_node);
+
+        while let Some(current_node) = stack.pop() {
+            let mut cursor = current_node.walk();
+            if !cursor.goto_first_child() {
+                continue;
+            }
+
+            loop {
+                let child = cursor.node();
+                if child.start_byte() >= reference_byte {
+                    break;
+                }
+
+                match child.kind() {
+                    "variable_declaration" | "field_declaration" | "parameter" => {
+                        if !process_node(child, content) {
+                            return;
+                        }
+                    }
+                    "expression_statement"
+                    | "assignment_expression"
+                    | "object_creation_expression"
+                    | "parameters" => {
+                        stack.push(child);
+                    }
+                    _ => {}
+                }
+
+                if !cursor.goto_next_sibling() {
+                    break;
+                }
+            }
+        }
+    }
+
     fn find_in_current_scope(
         &self,
         scope_node: Node,
@@ -207,56 +253,31 @@ impl JavaSupport {
         var_name: &str,
         reference_byte: usize,
     ) -> Option<(Option<String>, Position)> {
-        let mut cursor = scope_node.walk();
-        if !cursor.goto_first_child() {
-            return None;
-        }
-        loop {
-            let child = cursor.node();
-            // Only process nodes that come before the reference
-            if child.start_byte() >= reference_byte {
-                break;
-            }
-            match child.kind() {
-                "variable_declaration" | "field_declaration" | "parameter" => {
-                    if self.declares_variable(child, content, var_name) {
-                        let type_node = child.child_by_field_name("type")?;
-                        let type_position = Position {
-                            line: type_node.start_position().row as u32,
-                            character: type_node.start_position().column as u32,
-                        };
-                        let var_type = self.get_type_at_position(child, content, &type_position);
+        let mut result = None;
+        let mut process_node = |child: Node, content: &str| -> bool {
+            if self.declares_variable(child, content, var_name) {
+                if let Some(type_node) = child.child_by_field_name("type") {
+                    let type_position = Position {
+                        line: type_node.start_position().row as u32,
+                        character: type_node.start_position().column as u32,
+                    };
+                    let var_type = self.get_type_at_position(child, content, &type_position);
 
-                        let (_, var_position) = ts_helper::get_one_with_position(
-                            &child,
-                            content,
-                            &DECLARES_VARIABLE_QUERY,
-                        )?;
-
-                        return Some((var_type, var_position));
-                    }
-                }
-                "expression_statement"
-                | "assignment_expression"
-                | "object_creation_expression"
-                | "parameters" => {
-                    if let Some(result) =
-                        self.find_in_current_scope(child, content, var_name, reference_byte)
+                    if let Some((_, var_position)) =
+                        ts_helper::get_one_with_position(&child, content, &DECLARES_VARIABLE_QUERY)
                     {
-                        return Some(result);
+                        result = Some((var_type, var_position));
+                        return false;
                     }
                 }
-                _ => {}
             }
-            if !cursor.goto_next_sibling() {
-                break;
-            }
-        }
-        None
+            true
+        };
+
+        self.traverse_scope_nodes(scope_node, content, reference_byte, &mut process_node);
+        result
     }
 
-    // TODO: this is very similar to find_in_current_scope. maybe extract common logic?
-    #[allow(clippy::only_used_in_recursion)]
     fn collect_declarations_in_scope(
         &self,
         scope_node: Node,
@@ -264,38 +285,20 @@ impl JavaSupport {
         reference_byte: usize,
         results: &mut Vec<(String, Option<String>)>,
     ) {
-        let mut cursor = scope_node.walk();
-        if !cursor.goto_first_child() {
-            return;
-        }
-        loop {
-            let child = cursor.node();
-            if child.start_byte() >= reference_byte {
-                break;
+        let mut process_node = |child: Node, content: &str| -> bool {
+            let names = ts_helper::get_many(&child, content, &DECLARES_VARIABLE_QUERY, Some(1));
+            let var_type = child
+                .child_by_field_name("type")
+                .map(|t| content[t.start_byte()..t.end_byte()].to_string());
+
+            for name in names {
+                results.push((name, var_type.clone()));
             }
-            match child.kind() {
-                "variable_declaration" | "field_declaration" | "parameter" => {
-                    let names =
-                        ts_helper::get_many(&child, content, &DECLARES_VARIABLE_QUERY, Some(1));
-                    let var_type = child
-                        .child_by_field_name("type")
-                        .map(|t| content[t.start_byte()..t.end_byte()].to_string());
-                    for name in names {
-                        results.push((name, var_type.clone()));
-                    }
-                }
-                "expression_statement"
-                | "assignment_expression"
-                | "object_creation_expression"
-                | "parameters" => {
-                    self.collect_declarations_in_scope(child, content, reference_byte, results);
-                }
-                _ => {}
-            }
-            if !cursor.goto_next_sibling() {
-                break;
-            }
-        }
+
+            true
+        };
+
+        self.traverse_scope_nodes(scope_node, content, reference_byte, &mut process_node);
     }
 
     fn declares_variable(&self, node: Node, content: &str, var_name: &str) -> bool {

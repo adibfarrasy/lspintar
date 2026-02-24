@@ -203,6 +203,193 @@ impl KotlinSupport {
         Some((name, qualifier))
     }
 
+    fn traverse_scope_nodes<F>(
+        &self,
+        scope_node: Node,
+        content: &str,
+        reference_byte: usize,
+        process_node: &mut F,
+    ) where
+        F: FnMut(Node, &str) -> bool,
+    {
+        let mut stack = Vec::new();
+        stack.push(scope_node);
+
+        while let Some(current_node) = stack.pop() {
+            let mut cursor = current_node.walk();
+            if !cursor.goto_first_child() {
+                continue;
+            }
+
+            loop {
+                let child = cursor.node();
+                if child.start_byte() >= reference_byte {
+                    break;
+                }
+
+                match child.kind() {
+                    "property_declaration"
+                    | "class_parameter"
+                    | "parameter"
+                    | "variable_declaration" => {
+                        if !process_node(child, content) {
+                            return;
+                        }
+                    }
+                    "statements" | "function_body" | "lambda_literal" | "parameters"
+                    | "lambda_parameters" => {
+                        stack.push(child);
+                    }
+                    _ => {}
+                }
+
+                if !cursor.goto_next_sibling() {
+                    break;
+                }
+            }
+        }
+    }
+
+    // Helper function to extract variable info from a node
+    fn extract_variable_info(
+        &self,
+        node: Node,
+        content: &str,
+        var_name: &str,
+    ) -> Option<(Option<String>, Position)> {
+        match node.kind() {
+            "property_declaration" => {
+                let mut var_cursor = node.walk();
+                for var_child in node.children(&mut var_cursor) {
+                    if var_child.kind() == "variable_declaration"
+                        && self.declares_variable(var_child, content, var_name)
+                    {
+                        // Try to get explicit type
+                        let mut type_cursor = var_child.walk();
+                        for type_child in var_child.children(&mut type_cursor) {
+                            if type_child.kind() == "user_type"
+                                || type_child.kind() == "nullable_type"
+                            {
+                                let type_name = type_child
+                                    .utf8_text(content.as_bytes())
+                                    .ok()
+                                    .map(|s| s.to_string());
+
+                                let (_, var_position) = ts_helper::get_one_with_position(
+                                    &node,
+                                    content,
+                                    &DECLARES_VARIABLE_QUERY,
+                                )?;
+
+                                return Some((type_name, var_position));
+                            }
+                        }
+
+                        // Infer from value if no explicit type
+                        let mut value_cursor = node.walk();
+                        for value_child in node.children(&mut value_cursor) {
+                            if value_child.kind() == "call_expression" {
+                                let type_name = self.infer_type_from_value(value_child, content);
+                                let identifier = var_child.child_by_field_name("name")?;
+                                let var_position = Position {
+                                    line: identifier.start_position().row as u32,
+                                    character: identifier.start_position().column as u32,
+                                };
+                                return Some((type_name, var_position));
+                            }
+                        }
+                    }
+                }
+                None
+            }
+            "class_parameter" | "parameter" => {
+                if self.declares_variable(node, content, var_name) {
+                    let type_node = node.child_by_field_name("type")?;
+                    let type_name = type_node
+                        .utf8_text(content.as_bytes())
+                        .ok()
+                        .map(|s| s.to_string());
+                    let identifier = node.child_by_field_name("name")?;
+                    let var_position = Position {
+                        line: identifier.start_position().row as u32,
+                        character: identifier.start_position().column as u32,
+                    };
+                    Some((type_name, var_position))
+                } else {
+                    None
+                }
+            }
+            "variable_declaration" => {
+                if self.declares_variable(node, content, var_name)
+                    && let Some(type_node) = node.child_by_field_name("type")
+                {
+                    let type_name = type_node
+                        .utf8_text(content.as_bytes())
+                        .ok()
+                        .map(|s| s.to_string());
+                    let identifier = node.child_by_field_name("name")?;
+                    let var_position = Position {
+                        line: identifier.start_position().row as u32,
+                        character: identifier.start_position().column as u32,
+                    };
+                    Some((type_name, var_position))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    // Helper function to collect variable names from a node
+    fn collect_variable_names(&self, node: Node, content: &str) -> Vec<(String, Option<String>)> {
+        let mut results = Vec::new();
+
+        match node.kind() {
+            "property_declaration" => {
+                let mut var_cursor = node.walk();
+                for var_child in node.children(&mut var_cursor) {
+                    if var_child.kind() == "variable_declaration" {
+                        let names = ts_helper::get_many(
+                            &var_child,
+                            content,
+                            &DECLARES_VARIABLE_QUERY,
+                            Some(1),
+                        );
+                        let mut type_cursor = var_child.walk();
+                        let var_type = var_child
+                            .children(&mut type_cursor)
+                            .find(|c| c.kind() == "user_type" || c.kind() == "nullable_type")
+                            .and_then(|t| {
+                                t.utf8_text(content.as_bytes()).ok().map(|s| s.to_string())
+                            })
+                            .or_else(|| {
+                                let mut value_cursor = node.walk();
+                                node.children(&mut value_cursor)
+                                    .find(|c| c.kind() == "call_expression")
+                                    .and_then(|v| self.infer_type_from_value(v, content))
+                            });
+                        for name in names {
+                            results.push((name, var_type.clone()));
+                        }
+                    }
+                }
+            }
+            "class_parameter" | "parameter" | "variable_declaration" => {
+                let names = ts_helper::get_many(&node, content, &DECLARES_VARIABLE_QUERY, Some(1));
+                let var_type = node
+                    .child_by_field_name("type")
+                    .and_then(|t| t.utf8_text(content.as_bytes()).ok().map(|s| s.to_string()));
+                for name in names {
+                    results.push((name, var_type.clone()));
+                }
+            }
+            _ => {}
+        }
+
+        results
+    }
+
     fn find_in_current_scope(
         &self,
         scope_node: Node,
@@ -210,111 +397,20 @@ impl KotlinSupport {
         var_name: &str,
         reference_byte: usize,
     ) -> Option<(Option<String>, Position)> {
-        let mut cursor = scope_node.walk();
-        if !cursor.goto_first_child() {
-            return None;
-        }
-        loop {
-            let child = cursor.node();
-            // Only process nodes that come before the reference
-            if child.start_byte() >= reference_byte {
-                break;
+        let mut result = None;
+        let mut process_node = |child: Node, content: &str| -> bool {
+            if let Some(info) = self.extract_variable_info(child, content, var_name) {
+                result = Some(info);
+                false
+            } else {
+                true
             }
-            match child.kind() {
-                "property_declaration" => {
-                    let mut var_cursor = child.walk();
-                    for var_child in child.children(&mut var_cursor) {
-                        if var_child.kind() == "variable_declaration"
-                            && self.declares_variable(var_child, content, var_name)
-                        {
-                            // Try to get explicit type
-                            let mut type_cursor = var_child.walk();
-                            for type_child in var_child.children(&mut type_cursor) {
-                                if type_child.kind() == "user_type"
-                                    || type_child.kind() == "nullable_type"
-                                {
-                                    let type_name = type_child
-                                        .utf8_text(content.as_bytes())
-                                        .ok()
-                                        .map(|s| s.to_string());
+        };
 
-                                    let (_, var_position) = ts_helper::get_one_with_position(
-                                        &child,
-                                        content,
-                                        &DECLARES_VARIABLE_QUERY,
-                                    )?;
-
-                                    return Some((type_name, var_position));
-                                }
-                            }
-
-                            // Infer from value if no explicit type
-                            let mut value_cursor = child.walk();
-                            for value_child in child.children(&mut value_cursor) {
-                                if value_child.kind() == "call_expression" {
-                                    let type_name =
-                                        self.infer_type_from_value(value_child, content);
-                                    let identifier = var_child.child_by_field_name("name")?;
-                                    let var_position = Position {
-                                        line: identifier.start_position().row as u32,
-                                        character: identifier.start_position().column as u32,
-                                    };
-                                    return Some((type_name, var_position));
-                                }
-                            }
-                        }
-                    }
-                }
-                "class_parameter" | "parameter" => {
-                    if self.declares_variable(child, content, var_name) {
-                        let type_node = child.child_by_field_name("type")?;
-                        let type_name = type_node
-                            .utf8_text(content.as_bytes())
-                            .ok()
-                            .map(|s| s.to_string());
-                        let identifier = child.child_by_field_name("name")?;
-                        let var_position = Position {
-                            line: identifier.start_position().row as u32,
-                            character: identifier.start_position().column as u32,
-                        };
-                        return Some((type_name, var_position));
-                    }
-                }
-                "variable_declaration" => {
-                    if self.declares_variable(child, content, var_name)
-                        && let Some(type_node) = child.child_by_field_name("type")
-                    {
-                        let type_name = type_node
-                            .utf8_text(content.as_bytes())
-                            .ok()
-                            .map(|s| s.to_string());
-                        let identifier = child.child_by_field_name("name")?;
-                        let var_position = Position {
-                            line: identifier.start_position().row as u32,
-                            character: identifier.start_position().column as u32,
-                        };
-                        return Some((type_name, var_position));
-                    }
-                }
-                "statements" | "function_body" | "lambda_literal" | "parameters"
-                | "lambda_parameters" => {
-                    if let Some(result) =
-                        self.find_in_current_scope(child, content, var_name, reference_byte)
-                    {
-                        return Some(result);
-                    }
-                }
-                _ => {}
-            }
-            if !cursor.goto_next_sibling() {
-                break;
-            }
-        }
-        None
+        self.traverse_scope_nodes(scope_node, content, reference_byte, &mut process_node);
+        result
     }
 
-    // TODO: this is very similar to find_in_current_scope. maybe extract common logic?
-    #[allow(clippy::only_used_in_recursion)]
     fn collect_declarations_in_scope(
         &self,
         scope_node: Node,
@@ -322,76 +418,13 @@ impl KotlinSupport {
         reference_byte: usize,
         results: &mut Vec<(String, Option<String>)>,
     ) {
-        let mut cursor = scope_node.walk();
-        if !cursor.goto_first_child() {
-            return;
-        }
-        loop {
-            let child = cursor.node();
-            if child.start_byte() >= reference_byte {
-                break;
-            }
-            match child.kind() {
-                "property_declaration" => {
-                    let mut var_cursor = child.walk();
-                    for var_child in child.children(&mut var_cursor) {
-                        if var_child.kind() == "variable_declaration" {
-                            let names = ts_helper::get_many(
-                                &var_child,
-                                content,
-                                &DECLARES_VARIABLE_QUERY,
-                                Some(1),
-                            );
-                            let mut type_cursor = var_child.walk();
-                            let var_type = var_child
-                                .children(&mut type_cursor)
-                                .find(|c| c.kind() == "user_type" || c.kind() == "nullable_type")
-                                .and_then(|t| {
-                                    t.utf8_text(content.as_bytes()).ok().map(|s| s.to_string())
-                                })
-                                .or_else(|| {
-                                    let mut value_cursor = child.walk();
-                                    child
-                                        .children(&mut value_cursor)
-                                        .find(|c| c.kind() == "call_expression")
-                                        .and_then(|v| self.infer_type_from_value(v, content))
-                                });
-                            for name in names {
-                                results.push((name, var_type.clone()));
-                            }
-                        }
-                    }
-                }
-                "class_parameter" | "parameter" => {
-                    let names =
-                        ts_helper::get_many(&child, content, &DECLARES_VARIABLE_QUERY, Some(1));
-                    let var_type = child
-                        .child_by_field_name("type")
-                        .and_then(|t| t.utf8_text(content.as_bytes()).ok().map(|s| s.to_string()));
-                    for name in names {
-                        results.push((name, var_type.clone()));
-                    }
-                }
-                "variable_declaration" => {
-                    let names =
-                        ts_helper::get_many(&child, content, &DECLARES_VARIABLE_QUERY, Some(1));
-                    let var_type = child
-                        .child_by_field_name("type")
-                        .and_then(|t| t.utf8_text(content.as_bytes()).ok().map(|s| s.to_string()));
-                    for name in names {
-                        results.push((name, var_type.clone()));
-                    }
-                }
-                "statements" | "function_body" | "lambda_literal" | "parameters"
-                | "lambda_parameters" => {
-                    self.collect_declarations_in_scope(child, content, reference_byte, results);
-                }
-                _ => {}
-            }
-            if !cursor.goto_next_sibling() {
-                break;
-            }
-        }
+        let mut process_node = |child: Node, content: &str| -> bool {
+            let names = self.collect_variable_names(child, content);
+            results.extend(names);
+            true
+        };
+
+        self.traverse_scope_nodes(scope_node, content, reference_byte, &mut process_node);
     }
 
     fn infer_type_from_value(&self, value_node: Node, content: &str) -> Option<String> {
