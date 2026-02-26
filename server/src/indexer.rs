@@ -266,6 +266,19 @@ impl Indexer {
                     };
 
                     match node_kind {
+                        Some(NodeKind::Class) => {
+                            metadata.parameters =
+                                lang.get_parameters(&node, content).map(|params| {
+                                    params
+                                        .into_iter()
+                                        .map(|(name, type_name, default_value)| SymbolParameter {
+                                            name,
+                                            type_name,
+                                            default_value,
+                                        })
+                                        .collect()
+                                });
+                        }
                         Some(NodeKind::Function) => {
                             let symbol_params = lang
                                 .get_parameters(&node, content)

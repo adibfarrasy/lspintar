@@ -42,15 +42,15 @@ impl NodeKind {
         match self {
             NodeKind::Class => Some("class"),
             NodeKind::Interface => match file_type {
-                "kt" => Some("interface"),
+                "kotlin" => Some("interface"),
                 _ => Some("interface"),
             },
             NodeKind::Function => match file_type {
-                "kt" => Some("fun"),
+                "kotlin" => Some("fun"),
                 _ => None,
             },
             NodeKind::Enum => match file_type {
-                "kt" => Some("enum class"),
+                "kotlin" => Some("enum class"),
                 _ => Some("enum"),
             },
             NodeKind::Annotation => Some("@interface"),

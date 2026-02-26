@@ -591,12 +591,12 @@ async fn gtd_goto_data_class_field() {
         .unwrap(),
         Range {
             start: Position {
-                line: 2,
-                character: 34,
+                line: 4,
+                character: 8,
             },
             end: Position {
-                line: 2,
-                character: 38,
+                line: 4,
+                character: 12,
             },
         },
     );

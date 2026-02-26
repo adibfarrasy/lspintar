@@ -6,7 +6,7 @@ use lspintar_server::{
     Indexer, Repository,
     models::{
         external_symbol::ExternalSymbol,
-        symbol::{Symbol, SymbolMetadata},
+        symbol::{Symbol, SymbolMetadata, SymbolParameter},
     },
 };
 use pretty_assertions::assert_eq;
@@ -602,15 +602,36 @@ async fn index_kotlin_data_class() {
             symbol_type: "Class".to_string(),
             modifiers: Json(vec!["data".to_string()]),
             line_start: 2,
-            line_end: 2,
+            line_end: 7,
             char_start: 0,
-            char_end: 47,
+            char_end: 1,
             ident_line_start: 2,
             ident_line_end: 2,
             ident_char_start: 11,
             ident_char_end: 15,
             metadata: Json(SymbolMetadata {
-                parameters: None,
+                parameters: Some(vec![
+                    SymbolParameter {
+                        name: "val id".to_string(),
+                        type_name: Some("Long".to_string()),
+                        default_value: None,
+                    },
+                    SymbolParameter {
+                        name: "val name".to_string(),
+                        type_name: Some("String".to_string()),
+                        default_value: None,
+                    },
+                    SymbolParameter {
+                        name: "val status".to_string(),
+                        type_name: Some("String".to_string()),
+                        default_value: None,
+                    },
+                    SymbolParameter {
+                        name: "val occupation".to_string(),
+                        type_name: Some("String".to_string()),
+                        default_value: Some("\"unemployed\"".to_string()),
+                    },
+                ],),
                 return_type: None,
                 documentation: None,
                 annotations: Some(vec![])
@@ -641,15 +662,15 @@ async fn index_kotlin_data_class() {
                 .to_string(),
             file_type: "kotlin".to_string(),
             symbol_type: "Field".to_string(),
-            modifiers: Json(vec![]),
-            line_start: 2,
-            line_end: 2,
-            char_start: 30,
-            char_end: 46,
-            ident_line_start: 2,
-            ident_line_end: 2,
-            ident_char_start: 34,
-            ident_char_end: 38,
+            modifiers: Json(vec!["val".to_string()]),
+            line_start: 4,
+            line_end: 4,
+            char_start: 4,
+            char_end: 20,
+            ident_line_start: 4,
+            ident_line_end: 4,
+            ident_char_start: 8,
+            ident_char_end: 12,
             metadata: Json(SymbolMetadata {
                 parameters: None,
                 return_type: Some("String".to_string()),

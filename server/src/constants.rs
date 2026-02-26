@@ -26,3 +26,6 @@ pub const INDEX_PATH_FRAGMENT: &str = ".lspintar/index.version";
 pub const DB_PATH_FRAGMENT: &str = ".lspintar/index.db";
 
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+pub const HOVER_MODIFIER_FILTER: [&str; 1] = ["override"];
+pub const HOVER_ANNOTATION_FILTER: [&str; 1] = ["Override"];

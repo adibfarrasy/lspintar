@@ -34,8 +34,30 @@ pub static GET_IMPLEMENTS_QUERY: LazyLock<Query> = LazyLock::new(|| {
     .unwrap()
 });
 
-pub static GET_MODIFIERS_QUERY: LazyLock<Query> =
-    LazyLock::new(|| Query::new(&KOTLIN_TS_LANGUAGE, r#"(modifiers) @modifier"#).unwrap());
+pub static GET_MODIFIERS_QUERY: LazyLock<Query> = LazyLock::new(|| {
+    Query::new(
+        &KOTLIN_TS_LANGUAGE,
+        r#"
+        [
+
+            (modifiers 
+            [
+                (class_modifier)
+                (member_modifier)
+                (visibility_modifier)
+                (function_modifier)
+                (property_modifier)
+                (inheritance_modifier)
+                (parameter_modifier)
+                (platform_modifier)
+            ] @modifier
+            )
+            (binding_pattern_kind) @modifier
+        ]
+        "#,
+    )
+    .unwrap()
+});
 
 pub static GET_FIELD_RETURN_QUERY: LazyLock<Query> = LazyLock::new(|| {
     Query::new(
@@ -121,7 +143,10 @@ pub static GET_KDOC_QUERY: LazyLock<Query> =
 pub static GET_PARAMETERS_QUERY: LazyLock<Query> = LazyLock::new(|| {
     Query::new(
         &KOTLIN_TS_LANGUAGE,
-        r#"(function_declaration (parameters (parameter) @arg))"#,
+        r#"[
+            (function_declaration (parameters (parameter) @arg))
+            (class_declaration (primary_constructor (class_parameter) @arg))
+        ]"#,
     )
     .unwrap()
 });

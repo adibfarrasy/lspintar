@@ -76,3 +76,99 @@ async fn hover_external_symbol() {
 
     assert_eq!(result.unwrap(), hover);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn hover_class() {
+    let server = get_test_server("polyglot-spring").await;
+
+    let root = env::current_dir().expect("cannot get current dir");
+
+    let params = HoverParams {
+        text_document_position_params: TextDocumentPositionParams {
+            text_document: TextDocumentIdentifier {
+                uri: Url::from_file_path(root.join("tests/fixtures/polyglot-spring/src/main/groovy/com/example/demo/Controller.groovy"))
+                    .expect("cannot parse root URI"),
+            },
+            position: Position::new(10, 5),
+        },
+        work_done_progress_params: WorkDoneProgressParams::default(),
+    };
+
+    let result = server.backend.hover(params).await.unwrap();
+    assert!(result.is_some());
+
+    let hover = Hover {
+        contents: HoverContents::Markup(MarkupContent {
+            kind: MarkupKind::Markdown,
+            value: "```java\npackage com.example\n\n@Service\npublic class JavaService\n```"
+                .to_string(),
+        }),
+        range: None,
+    };
+
+    assert_eq!(result.unwrap(), hover);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn hover_interface() {
+    let server = get_test_server("polyglot-spring").await;
+
+    let root = env::current_dir().expect("cannot get current dir");
+
+    let params = HoverParams {
+        text_document_position_params: TextDocumentPositionParams {
+            text_document: TextDocumentIdentifier {
+                uri: Url::from_file_path(root.join("tests/fixtures/polyglot-spring/src/main/kotlin/com/example/demo/UserRepository.kt"))
+                    .expect("cannot parse root URI"),
+            },
+            position: Position::new(5, 24),
+        },
+        work_done_progress_params: WorkDoneProgressParams::default(),
+    };
+
+    let result = server.backend.hover(params).await.unwrap();
+    assert!(result.is_some());
+
+    let hover = Hover {
+        contents: HoverContents::Markup(MarkupContent {
+            kind: MarkupKind::Markdown,
+            value: "```java\npackage com.example\n\npublic interface BaseRepository\n```"
+                .to_string(),
+        }),
+        range: None,
+    };
+
+    assert_eq!(result.unwrap(), hover);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn hover_method() {
+    let server = get_test_server("polyglot-spring").await;
+
+    let root = env::current_dir().expect("cannot get current dir");
+
+    let params = HoverParams {
+        text_document_position_params: TextDocumentPositionParams {
+            text_document: TextDocumentIdentifier {
+                uri: Url::from_file_path(root.join("tests/fixtures/polyglot-spring/src/main/groovy/com/example/demo/Controller.groovy"))
+                    .expect("cannot parse root URI"),
+            },
+            position: Position::new(30, 45),
+        },
+        work_done_progress_params: WorkDoneProgressParams::default(),
+    };
+
+    let result = server.backend.hover(params).await.unwrap();
+    assert!(result.is_some());
+
+    let hover = Hover {
+        contents: HoverContents::Markup(MarkupContent {
+            kind: MarkupKind::Markdown,
+            value: "```groovy\npackage com.example\n\nString process(String input)\n```"
+                .to_string(),
+        }),
+        range: None,
+    };
+
+    assert_eq!(result.unwrap(), hover);
+}

@@ -162,7 +162,7 @@ fn test_get_modifiers() {
     let class_node = find_node_by_kind(parsed.0.root_node(), "class_declaration").unwrap();
     let field_node = find_node_by_kind(class_node, "property_declaration").unwrap();
     let modifiers = support.get_modifiers(&field_node, &parsed.1);
-    assert!(modifiers.is_empty());
+    assert_eq!(modifiers, vec!["val"]);
 
     let content = "class Qux {}";
     let parsed = support.parse_str(&content).expect("cannot parse content");
@@ -253,6 +253,18 @@ fn test_get_parameters() {
         vec![
             ("arg1".to_string(), Some("String".to_string()), None),
             ("arg2".to_string(), Some("Int".to_string()), None),
+        ]
+    );
+
+    let content = "data class Foo(val arg1: String, var arg2: Int)";
+    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let node = find_node_by_kind(parsed.0.root_node(), "class_declaration").unwrap();
+    let arguments = support.get_parameters(&node, &parsed.1).unwrap();
+    assert_eq!(
+        arguments,
+        vec![
+            ("val arg1".to_string(), Some("String".to_string()), None),
+            ("var arg2".to_string(), Some("Int".to_string()), None),
         ]
     );
 }

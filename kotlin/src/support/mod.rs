@@ -630,9 +630,7 @@ impl LanguageSupport for KotlinSupport {
 
     fn get_modifiers(&self, node: &Node, source: &str) -> Vec<String> {
         match self.get_kind(node) {
-            Some(_) => ts_helper::get_one(node, source, &GET_MODIFIERS_QUERY)
-                .map(|line| line.split_whitespace().map(|m| m.to_string()).collect())
-                .unwrap_or_default(),
+            Some(_) => ts_helper::get_many(node, source, &GET_MODIFIERS_QUERY, Some(1)),
             None => Vec::new(),
         }
     }
@@ -653,14 +651,15 @@ impl LanguageSupport for KotlinSupport {
     }
 
     fn get_parameters(&self, node: &Node, source: &str) -> Option<Vec<ParameterResult>> {
-        if let Some(NodeKind::Function) = self.get_kind(node) {
-            let params = ts_helper::get_many(node, source, &GET_PARAMETERS_QUERY, Some(1))
-                .into_iter()
-                .map(|p| self.parse_parameter(&p))
-                .collect();
-            Some(params)
-        } else {
-            None
+        match self.get_kind(node) {
+            Some(NodeKind::Function) | Some(NodeKind::Class) => {
+                let params = ts_helper::get_many(node, source, &GET_PARAMETERS_QUERY, Some(1))
+                    .into_iter()
+                    .map(|p| self.parse_parameter(&p))
+                    .collect();
+                Some(params)
+            }
+            _ => None,
         }
     }
 
