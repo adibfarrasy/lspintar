@@ -13,7 +13,7 @@ use crate::util::get_test_server;
 
 mod util;
 
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test]
 async fn completion_chain_with_import() {
     let server = get_test_server("polyglot-spring").await;
 
@@ -25,7 +25,7 @@ async fn completion_chain_with_import() {
                 uri: Url::from_file_path(root.join("tests/fixtures/polyglot-spring/src/main/groovy/com/example/demo/Controller.groovy"))
                     .expect("cannot parse root URI"),
             },
-            position: Position::new(24, 36),
+            position: Position::new(25, 36),
         },
         context: None,
         work_done_progress_params: WorkDoneProgressParams::default(),
@@ -50,7 +50,7 @@ async fn completion_chain_with_import() {
     }
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test]
 async fn completion_prefix_with_import() {
     let server = get_test_server("polyglot-spring").await;
 
@@ -62,7 +62,7 @@ async fn completion_prefix_with_import() {
                 uri: Url::from_file_path(root.join("tests/fixtures/polyglot-spring/src/main/groovy/com/example/demo/Controller.groovy"))
                     .expect("cannot parse root URI"),
             },
-            position: Position::new(24, 31),
+            position: Position::new(25, 31),
         },
         context: None,
         work_done_progress_params: WorkDoneProgressParams::default(),

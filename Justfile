@@ -2,10 +2,10 @@ default:
     @just --list
 
 tp filter="":
-    @cargo test --release -p {{filter}} -- --show-output  
+    @cargo test --release --features integration-test -p {{filter}} -- --show-output
 
 tt filter="":
-    @cargo test --release {{filter}} -- --show-output --test-threads=1
+    @cargo test --release --features integration-test {{filter}} -- --show-output
 
 b:
     @cargo build --release

@@ -17,7 +17,7 @@ mod util;
 static HOME_DIR: LazyLock<PathBuf> =
     LazyLock::new(|| dirs::home_dir().expect("cannot get home dir"));
 
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test]
 async fn gtd_simple() {
     let server = get_test_server("groovy-gradle-multi").await;
 
@@ -58,7 +58,7 @@ async fn gtd_simple() {
     assert_eq!(result.unwrap(), GotoDefinitionResponse::from(location));
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test]
 async fn gtd_static_member() {
     let server = get_test_server("groovy-gradle-multi").await;
 
@@ -99,7 +99,7 @@ async fn gtd_static_member() {
     assert_eq!(result.unwrap(), GotoDefinitionResponse::from(location));
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test]
 async fn gtd_this_member() {
     let server = get_test_server("groovy-gradle-multi").await;
 
@@ -140,7 +140,7 @@ async fn gtd_this_member() {
     assert_eq!(result.unwrap(), GotoDefinitionResponse::from(location));
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test]
 async fn gtd_this_super_member() {
     let server = get_test_server("groovy-gradle-multi").await;
 
@@ -181,7 +181,7 @@ async fn gtd_this_super_member() {
     assert_eq!(result.unwrap(), GotoDefinitionResponse::from(location));
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test]
 async fn gtd_instance_member_access() {
     let server = get_test_server("groovy-gradle-multi").await;
 
@@ -222,7 +222,7 @@ async fn gtd_instance_member_access() {
     assert_eq!(result.unwrap(), GotoDefinitionResponse::from(location));
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test]
 async fn gtd_resolve_chain() {
     let server = get_test_server("groovy-gradle-multi").await;
 
@@ -297,7 +297,7 @@ async fn gtd_resolve_chain() {
     assert_eq!(result.unwrap(), GotoDefinitionResponse::from(location));
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test]
 async fn gtd_method_overloading() {
     let server = get_test_server("groovy-gradle-multi").await;
 
@@ -440,7 +440,7 @@ async fn gtd_method_overloading() {
     assert_eq!(result.unwrap(), GotoDefinitionResponse::from(location));
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test]
 async fn gtd_goto_superclass() {
     let server = get_test_server("groovy-gradle-multi").await;
 
@@ -481,7 +481,7 @@ async fn gtd_goto_superclass() {
     assert_eq!(result.unwrap(), GotoDefinitionResponse::from(location));
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test]
 async fn gtd_goto_interface() {
     let server = get_test_server("groovy-gradle-multi").await;
 
@@ -522,7 +522,7 @@ async fn gtd_goto_interface() {
     assert_eq!(result.unwrap(), GotoDefinitionResponse::from(location));
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test]
 async fn gtd_goto_property() {
     let server = get_test_server("polyglot-spring").await;
 
@@ -534,7 +534,7 @@ async fn gtd_goto_property() {
                 uri: Url::from_file_path(root.join("tests/fixtures/polyglot-spring/src/main/groovy/com/example/demo/Controller.groovy"))
                     .expect("cannot parse root URI"),
             },
-            position: Position::new(27, 29),
+            position: Position::new(28, 29),
         },
         work_done_progress_params: WorkDoneProgressParams::default(),
         partial_result_params: PartialResultParams::default(),
@@ -550,11 +550,11 @@ async fn gtd_goto_property() {
         .unwrap(),
         Range {
             start: Position {
-                line: 10,
+                line: 11,
                 character: 16,
             },
             end: Position {
-                line: 10,
+                line: 11,
                 character: 16,
             },
         },
@@ -563,7 +563,7 @@ async fn gtd_goto_property() {
     assert_eq!(result.unwrap(), GotoDefinitionResponse::from(location));
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test]
 async fn gtd_goto_data_class_field() {
     let server = get_test_server("polyglot-spring").await;
 
@@ -575,7 +575,7 @@ async fn gtd_goto_data_class_field() {
                 uri: Url::from_file_path(root.join("tests/fixtures/polyglot-spring/src/main/groovy/com/example/demo/Controller.groovy"))
                     .expect("cannot parse root URI"),
             },
-            position: Position::new(42, 32),
+            position: Position::new(43, 32),
         },
         work_done_progress_params: WorkDoneProgressParams::default(),
         partial_result_params: PartialResultParams::default(),
@@ -604,7 +604,7 @@ async fn gtd_goto_data_class_field() {
     assert_eq!(result.unwrap(), GotoDefinitionResponse::from(location));
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test]
 async fn gtd_resolve_chain_external() {
     let server = get_test_server("polyglot-spring").await;
 
@@ -616,7 +616,7 @@ async fn gtd_resolve_chain_external() {
                 uri: Url::from_file_path(root.join("tests/fixtures/polyglot-spring/src/main/groovy/com/example/demo/Controller.groovy"))
                     .expect("cannot parse root URI"),
             },
-            position: Position::new(24, 36),
+            position: Position::new(25, 36),
         },
         work_done_progress_params: WorkDoneProgressParams::default(),
         partial_result_params: PartialResultParams::default(),

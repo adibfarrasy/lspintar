@@ -52,7 +52,7 @@ pub struct Backend {
 
     // Optimizations
     /// Caches open document contents to avoid excessive I/O reads.
-    documents: DashMap<String, (String, Instant)>,
+    pub documents: DashMap<String, (String, Instant)>,
     /// Debounces `didChangeWatchedFiles` to avoid redundant reindexing.
     debounce_tx: tokio::sync::mpsc::Sender<PathBuf>,
 }
@@ -924,18 +924,27 @@ impl Backend {
         }
     }
 
-    fn needs_full_reindex(&self, root: &Path) -> bool {
-        let version_path = root.join(INDEX_PATH_FRAGMENT);
-        let db_path = root.join(DB_PATH_FRAGMENT);
-        let manifest_path = root.join(MANIFEST_PATH_FRAGMENT);
-
-        if !manifest_path.exists() || !db_path.exists() {
-            return true;
+    #[allow(unused)]
+    async fn needs_full_reindex(&self, root: &Path) -> bool {
+        #[cfg(feature = "integration-test")]
+        {
+            return self.indexer.read().await.is_none();
         }
 
-        match std::fs::read_to_string(&version_path) {
-            Ok(v) => v.trim() != APP_VERSION,
-            Err(_) => true,
+        #[cfg(not(feature = "integration-test"))]
+        {
+            let version_path = root.join(INDEX_PATH_FRAGMENT);
+            let db_path = root.join(DB_PATH_FRAGMENT);
+            let manifest_path = root.join(MANIFEST_PATH_FRAGMENT);
+
+            if !manifest_path.exists() || !db_path.exists() {
+                return true;
+            }
+
+            match std::fs::read_to_string(&version_path) {
+                Ok(v) => v.trim() != APP_VERSION,
+                Err(_) => true,
+            }
         }
     }
 
@@ -1113,7 +1122,7 @@ impl LanguageServer for Backend {
                 indexer.register_language(k, v.clone());
             });
 
-            if self.needs_full_reindex(&root) {
+            if self.needs_full_reindex(&root).await {
                 debug!("Full reindex required, clearing existing index.");
                 let _ = tokio::fs::remove_file(root.join(MANIFEST_PATH_FRAGMENT)).await;
                 if let Err(e) = repo.clear_all().await {
@@ -1436,9 +1445,7 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
 
-        let symbol = symbols
-            .into_iter()
-            .find(|s| !matches!(s, ResolvedSymbol::Local { .. }));
+        let symbol = symbols.first();
 
         let Some(symbol) = symbol else {
             return Ok(None);

@@ -40,3 +40,6 @@ tempfile = { workspace = true }
 classfile-parser = "0.3.8"
 uuid = { version = "1", features = ["v4"] }
 dashmap = { workspace = true }
+
+[features]
+integration-test = []

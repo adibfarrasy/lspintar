@@ -4,24 +4,24 @@ use std::{
 };
 use tower_lsp::LanguageServer;
 
-use lspintar_server::{Repository, constants::MANIFEST_PATH_FRAGMENT, server::Backend};
+use lspintar_server::{Repository, server::Backend};
 use tower_lsp::{
     LspService,
     lsp_types::{InitializeParams, InitializedParams, Url},
 };
-use uuid::Uuid;
 
 use dashmap::DashMap;
 use tokio::sync::OnceCell;
 
 pub struct TestServer {
     pub backend: Backend,
+    _temp_file: tempfile::NamedTempFile,
 }
 
 impl TestServer {
     async fn new(fixture: &str) -> Self {
-        let db_name = Uuid::new_v4();
-        let db_dir = format!("file:{}?mode=memory&cache=shared", db_name);
+        let temp_file = tempfile::NamedTempFile::new().unwrap();
+        let db_dir = format!("sqlite:{}", temp_file.path().display());
         let repo = Arc::new(Repository::new(&db_dir).await.unwrap());
         let (service, _socket) = LspService::new(|client| Backend::new(client));
         let backend = service.inner().clone();
@@ -34,16 +34,12 @@ impl TestServer {
                 .expect("cannot parse root URI"),
         );
 
-        let _ = tokio::fs::remove_file(
-            root.join("tests/fixtures")
-                .join(fixture)
-                .join(MANIFEST_PATH_FRAGMENT),
-        )
-        .await;
-
         backend.initialize(init_params).await.unwrap();
         backend.initialized(InitializedParams {}).await;
-        Self { backend }
+        Self {
+            backend,
+            _temp_file: temp_file,
+        }
     }
 }
 
@@ -56,7 +52,10 @@ pub async fn get_test_server(fixture: &'static str) -> Arc<TestServer> {
         .or_insert_with(|| Arc::new(OnceCell::new()))
         .clone();
 
-    cell.get_or_init(|| async { Arc::new(TestServer::new(fixture).await) })
+    let server = cell
+        .get_or_init(|| async { Arc::new(TestServer::new(fixture).await) })
         .await
-        .clone()
+        .clone();
+
+    server
 }

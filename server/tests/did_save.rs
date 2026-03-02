@@ -9,7 +9,7 @@ use crate::util::get_test_server;
 
 mod util;
 
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test]
 async fn did_save_reindexes_file() {
     let server = get_test_server("polyglot-spring").await;
     let root = env::current_dir().expect("cannot get current dir");

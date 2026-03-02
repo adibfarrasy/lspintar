@@ -14,7 +14,7 @@ use crate::util::get_test_server;
 
 mod util;
 
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test]
 async fn gti_interface_impl() {
     let server = get_test_server("groovy-gradle-multi").await;
 
@@ -55,7 +55,7 @@ async fn gti_interface_impl() {
     assert_eq!(result.unwrap(), GotoImplementationResponse::from(location));
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test]
 async fn gti_superclass_extends() {
     let server = get_test_server("groovy-gradle-multi").await;
 
@@ -96,7 +96,7 @@ async fn gti_superclass_extends() {
     assert_eq!(result.unwrap(), GotoImplementationResponse::from(location));
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test]
 async fn gti_method_implementation() {
     let server = get_test_server("groovy-gradle-multi").await;
 

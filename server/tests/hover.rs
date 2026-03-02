@@ -13,7 +13,7 @@ use crate::util::get_test_server;
 
 mod util;
 
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test]
 async fn hover_project_symbol() {
     let server = get_test_server("groovy-gradle-multi").await;
 
@@ -45,7 +45,7 @@ async fn hover_project_symbol() {
     assert_eq!(result.unwrap(), hover);
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test]
 async fn hover_external_symbol() {
     let server = get_test_server("polyglot-spring").await;
 
@@ -57,7 +57,7 @@ async fn hover_external_symbol() {
                 uri: Url::from_file_path(root.join("tests/fixtures/polyglot-spring/src/main/groovy/com/example/demo/Controller.groovy"))
                     .expect("cannot parse root URI"),
             },
-            position: Position::new(24, 24),
+            position: Position::new(25, 24),
         },
         work_done_progress_params: WorkDoneProgressParams::default(),
     };
@@ -77,7 +77,7 @@ async fn hover_external_symbol() {
     assert_eq!(result.unwrap(), hover);
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test]
 async fn hover_class() {
     let server = get_test_server("polyglot-spring").await;
 
@@ -89,7 +89,7 @@ async fn hover_class() {
                 uri: Url::from_file_path(root.join("tests/fixtures/polyglot-spring/src/main/groovy/com/example/demo/Controller.groovy"))
                     .expect("cannot parse root URI"),
             },
-            position: Position::new(10, 5),
+            position: Position::new(11, 5),
         },
         work_done_progress_params: WorkDoneProgressParams::default(),
     };
@@ -109,7 +109,7 @@ async fn hover_class() {
     assert_eq!(result.unwrap(), hover);
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test]
 async fn hover_interface() {
     let server = get_test_server("polyglot-spring").await;
 
@@ -141,7 +141,7 @@ async fn hover_interface() {
     assert_eq!(result.unwrap(), hover);
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test]
 async fn hover_method() {
     let server = get_test_server("polyglot-spring").await;
 
@@ -153,7 +153,7 @@ async fn hover_method() {
                 uri: Url::from_file_path(root.join("tests/fixtures/polyglot-spring/src/main/groovy/com/example/demo/Controller.groovy"))
                     .expect("cannot parse root URI"),
             },
-            position: Position::new(30, 45),
+            position: Position::new(31, 45),
         },
         work_done_progress_params: WorkDoneProgressParams::default(),
     };

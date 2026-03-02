@@ -2947,7 +2947,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-groovy"
 version = "0.0.1"
-source = "git+https://github.com/adibfarrasy/tree-sitter-groovy#5f6e01b05317e573db708c3ad05ec2135f59fa58"
+source = "git+https://github.com/adibfarrasy/tree-sitter-groovy#a206cdb3250481cbf22f0341ecd3d10e00d1797b"
 dependencies = [
  "cc",
  "just",
@@ -3190,7 +3190,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
