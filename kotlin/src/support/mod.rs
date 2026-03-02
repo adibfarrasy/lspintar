@@ -15,7 +15,7 @@ use crate::{
         DECLARES_VARIABLE_QUERY, GET_ANNOTATIONS_QUERY, GET_EXTENDS_QUERY, GET_FIELD_RETURN_QUERY,
         GET_FIELD_SHORT_NAME_QUERY, GET_FUNCTION_RETURN_QUERY, GET_IMPLEMENTS_QUERY,
         GET_IMPORTS_QUERY, GET_KDOC_QUERY, GET_MODIFIERS_QUERY, GET_PACKAGE_NAME_QUERY,
-        GET_PARAMETERS_QUERY, GET_SHORT_NAME_QUERY, IDENT_QUERY,
+        GET_PARAMETERS_QUERY, GET_SHORT_NAME_QUERY, GET_TYPE_QUERY, IDENT_QUERY,
     },
 };
 
@@ -708,25 +708,10 @@ impl LanguageSupport for KotlinSupport {
         content: &str,
         position: &Position,
     ) -> Option<String> {
-        let query_text = r#"
-        [
-          (property_declaration (variable_declaration type: (user_type) @identifier))
-          (property_declaration (variable_declaration type: (nullable_type) @identifier))
-          (variable_declaration type: (user_type) @identifier)
-          (variable_declaration type: (nullable_type) @identifier)
-          (parameter type: (user_type) @identifier)
-          (parameter type: (nullable_type) @identifier)
-          (class_parameter type: (user_type) @identifier)
-          (class_parameter type: (nullable_type) @identifier)
-          (interface_declaration name: (type_identifier) @identifier)
-          (class_declaration name: (type_identifier) @identifier)
-        ]
-        "#;
-        let query = Query::new(&self.get_ts_language(), query_text).ok()?;
         let mut result = None;
         let mut cursor = QueryCursor::new();
         cursor
-            .matches(&query, node, content.as_bytes())
+            .matches(&GET_TYPE_QUERY, node, content.as_bytes())
             .find(|match_| {
                 for capture in match_.captures.iter() {
                     let node = capture.node;
@@ -1030,6 +1015,7 @@ mod tests {
     mod get_indexer_data;
     mod get_literal_type;
     mod get_method_receiver_and_params;
+    mod get_type_at_position;
 
     fn find_position(content: &str, marker: &str) -> Position {
         content

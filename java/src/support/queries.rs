@@ -163,3 +163,24 @@ pub static IDENT_QUERY: LazyLock<Query> = LazyLock::new(|| {
     )
     .unwrap()
 });
+
+pub static GET_TYPE_QUERY: LazyLock<Query> = LazyLock::new(|| {
+    Query::new(
+        &JAVA_TS_LANGUAGE,
+        r#"
+        [
+          (field_declaration type: (type_identifier) @identifier)
+          (variable_declaration type: (type_identifier) @identifier)
+          (parameter type: (type_identifier) @identifier)
+          (interface_declaration name: (identifier) @identifier)
+          (class_declaration name: (identifier) @identifier)
+          (enum_declaration name: (identifier) @identifier)
+          (array_type (type_identifier) @identifier)
+          (class_literal (type_identifier) @identifier)
+          (generic_type (type_identifier) @identifier)
+          (generic_type (type_arguments (type_identifier) @identifier))
+        ]
+        "#,
+    )
+    .unwrap()
+});

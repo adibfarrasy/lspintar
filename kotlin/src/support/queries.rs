@@ -196,3 +196,24 @@ pub static IDENT_QUERY: LazyLock<Query> = LazyLock::new(|| {
     )
     .unwrap()
 });
+
+pub static GET_TYPE_QUERY: LazyLock<Query> = LazyLock::new(|| {
+    Query::new(
+        &KOTLIN_TS_LANGUAGE,
+        r#"
+        [
+          (variable_declaration type: (user_type (type_identifier) @identifier))
+          (variable_declaration type: (nullable_type (user_type (type_identifier) @identifier)))
+          (parameter type: (user_type (type_identifier) @identifier))
+          (parameter type: (nullable_type (user_type (type_identifier) @identifier)))
+          (class_parameter type: (user_type (type_identifier) @identifier))
+          (class_parameter type: (nullable_type (user_type (type_identifier) @identifier)))
+          (type_projection (user_type (type_identifier) @identifier))
+          (function_declaration return_type: (user_type (type_identifier) @identifier))
+          (interface_declaration name: (type_identifier) @identifier)
+          (class_declaration name: (type_identifier) @identifier)
+        ]
+        "#,
+    )
+    .unwrap()
+});

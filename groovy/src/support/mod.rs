@@ -15,7 +15,7 @@ use crate::{
         DECLARES_VARIABLE_QUERY, GET_ANNOTATIONS_QUERY, GET_EXTENDS_QUERY, GET_FIELD_RETURN_QUERY,
         GET_FUNCTION_RETURN_QUERY, GET_GROOVYDOC_QUERY, GET_IMPLEMENTS_QUERY, GET_IMPORTS_QUERY,
         GET_MODIFIERS_QUERY, GET_PACKAGE_NAME_QUERY, GET_PARAMETERS_QUERY, GET_SHORT_NAME_QUERY,
-        IDENT_QUERY,
+        GET_TYPE_QUERY, IDENT_QUERY,
     },
 };
 
@@ -257,11 +257,10 @@ impl GroovySupport {
         let mut process_node = |child: Node, content: &str| -> bool {
             if self.declares_variable(child, content, var_name) {
                 if let Some(type_node) = child.child_by_field_name("type") {
-                    let type_position = Position {
-                        line: type_node.start_position().row as u32,
-                        character: type_node.start_position().column as u32,
-                    };
-                    let var_type = self.get_type_at_position(child, content, &type_position);
+                    let var_type = type_node
+                        .utf8_text(content.as_bytes())
+                        .ok()
+                        .map(|s| s.to_string());
 
                     if let Some((_, var_position)) =
                         ts_helper::get_one_with_position(&child, content, &DECLARES_VARIABLE_QUERY)
@@ -527,28 +526,11 @@ impl LanguageSupport for GroovySupport {
         content: &str,
         position: &Position,
     ) -> Option<String> {
-        let query_text = r#"
-        [
-          (field_declaration type: (type_identifier) @identifier)
-          (field_declaration type: (generic_type) @identifier)
-          (variable_declaration type: (type_identifier) @identifier)
-          (variable_declaration type: (generic_type) @identifier)
-          (parameter type: (type_identifier) @identifier)
-          (parameter type: (generic_type) @identifier)
-          (interface_declaration name: (identifier) @identifier)
-          (class_declaration name: (identifier) @identifier)
-          (enum_declaration name: (identifier) @identifier)
-          (array_type (type_identifier) @identifier)
-          (class_literal (type_identifier) @identifier)
-        ]
-        "#;
-        let query = Query::new(&self.get_ts_language(), query_text).ok()?;
-
         let mut result = None;
 
         let mut cursor = QueryCursor::new();
         cursor
-            .matches(&query, node, content.as_bytes())
+            .matches(&GET_TYPE_QUERY, node, content.as_bytes())
             .find(|match_| {
                 for capture in match_.captures.iter() {
                     let node = capture.node;
@@ -812,6 +794,7 @@ mod tests {
     mod get_indexer_data;
     mod get_literal_type;
     mod get_method_receiver_and_params;
+    mod get_type_at_position;
 
     fn find_position(content: &str, marker: &str) -> Position {
         content

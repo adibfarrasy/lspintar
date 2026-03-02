@@ -3,6 +3,7 @@ package com.example
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.stereotype.Component
 import org.apache.commons.lang3.StringUtils
+import java.util.List
 
 @Component
 class Controller {
@@ -41,5 +42,35 @@ class Controller {
         
         // Cursor on name -> should go to User.name (Kotlin data class)
         String userName = user.name
+    }
+
+    void demoItTypeInference() {
+        List<User> users = userRepository.findAll()
+
+        // hover on it      -> User
+        // hover on it.name -> String
+        List<String> names = users.collect { it.name }
+
+        // hover on it      -> User
+        // hover on it.age  -> int
+        List<User> adults = users.findAll { it.age > 18 }
+
+        // chained: first it -> User, second it -> String
+        List<String> trimmed = users.collect { it.name }.collect { it.trim() }
+
+        // nested: outer it -> User, inner it -> String
+        List<List<String>> nested = users.collect { user ->
+            user.name.toList().collect { it.toUpperCase() }
+        }
+
+        // def: hover on defUser -> User
+        def defUser = userRepository.findById(1L)
+
+        // hover on it      -> User
+        // hover on it.name -> String
+        def defNames = users.collect { it.name }
+
+        // def chained: hover on defResult -> String
+        def defResult = groovyService.process("input").trim()
     }
 }
