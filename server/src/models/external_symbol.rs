@@ -201,7 +201,10 @@ impl ExternalSymbol {
             return self.clone();
         };
         for chunk in src_symbols.chunks(1000) {
-            let _ = indexer.repo.insert_external_symbols(chunk).await;
+            match indexer.repo.insert_external_symbols(chunk).await {
+                Ok(_) => tracing::info!("inserted {} src symbols", chunk.len()),
+                Err(e) => tracing::warn!("failed to insert src symbols: {e}"),
+            }
         }
         let Some(src_sym) = src_symbols.iter().find(|s| s.fully_qualified_name == fqn) else {
             return self.clone();

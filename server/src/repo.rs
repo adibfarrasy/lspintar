@@ -235,14 +235,6 @@ impl Repository {
         }
 
         let mut tx = self.pool.begin().await?;
-        let jar_path = &symbols[0].jar_path;
-        let source_file_path = &symbols[0].source_file_path;
-
-        sqlx::query("DELETE FROM external_symbols WHERE jar_path = ? AND source_file_path = ?")
-            .bind(jar_path)
-            .bind(source_file_path)
-            .execute(&mut *tx)
-            .await?;
 
         for s in symbols {
             sqlx::query(
@@ -306,7 +298,7 @@ impl Repository {
         fqn: &str,
     ) -> Result<Option<ExternalSymbol>, sqlx::Error> {
         let result = sqlx::query_as::<_, ExternalSymbol>(
-            "SELECT * FROM external_symbols WHERE fully_qualified_name = ? LIMIT 1",
+            "SELECT * FROM external_symbols WHERE fully_qualified_name = ? ORDER BY needs_decompilation ASC LIMIT 1",
         )
         .bind(fqn)
         .fetch_optional(&self.pool)
@@ -335,22 +327,12 @@ impl Repository {
     ) -> Result<Vec<ExternalSymbol>, sqlx::Error> {
         tracing::info!("find_external_symbols_by_prefix");
         sqlx::query_as::<_, ExternalSymbol>(
-            "SELECT * FROM external_symbols WHERE fully_qualified_name LIKE ? OR short_name LIKE ?",
+            "SELECT * FROM external_symbols WHERE fully_qualified_name LIKE ? OR short_name LIKE ? ORDER BY needs_decompilation ASC",
         )
         .bind(format!("{}%", prefix))
         .bind(format!("{}%", prefix))
         .fetch_all(&self.pool)
         .await
-    }
-
-    // used in tests
-    #[allow(dead_code)]
-    #[tracing::instrument(skip(self))]
-    pub async fn count_external_symbols(&self) -> Result<i64, sqlx::Error> {
-        tracing::info!("count_external_symbols_by_prefix");
-        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM external_symbols ")
-            .fetch_one(&self.pool)
-            .await
     }
 
     pub async fn delete_symbols_for_file(&self, file_path: &str) -> Result<(), sqlx::Error> {

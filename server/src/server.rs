@@ -365,6 +365,7 @@ impl Backend {
         if let Some(repo) = self.repo.get()
             && let Ok(Some(found)) = repo.find_external_symbol_by_fqn(&member_fqn).await
         {
+            tracing::info!("found: {:?}", found);
             return vec![ResolvedSymbol::External(found)];
         }
 

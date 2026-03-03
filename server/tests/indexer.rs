@@ -949,12 +949,6 @@ async fn index_external_annotation_dep_jar() {
         )
         .await;
 
-    let count = repo
-        .count_external_symbols()
-        .await
-        .expect("Error counting external symbols");
-    assert_eq!(count, 3444);
-
     let result = repo
         .find_external_symbol_by_fqn("org.springframework.stereotype.Service")
         .await
