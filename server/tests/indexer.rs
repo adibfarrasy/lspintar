@@ -727,6 +727,7 @@ async fn index_external_dep_source_jar() {
     symbol.id = None;
     symbol.last_modified = 0;
     symbol.jar_path = String::new();
+    symbol.alt_jar_path = None;
 
     let doc_string = "/**\n * A builder for creating JSON payloads.\n * <p>\n * This builder supports the usual builder syntax made of nested method calls and closures,\n * but also some specific aspects of JSON data structures, such as list of values, etc.\n * Please make sure to have a look at the various methods provided by this builder\n * to be able to learn about the various possibilities of usage.\n * <p>\n * Example:\n * <pre><code class=\"groovyTestCase\">\n *       def builder = new groovy.json.JsonBuilder()\n *       def root = builder.people {\n *           person {\n *               firstName 'Guillaume'\n *               lastName 'Laforge'\n *               // Named arguments are valid values for objects too\n *               address(\n *                       city: 'Paris',\n *                       country: 'France',\n *                       zip: 12345,\n *               )\n *               married true\n *               // a list of values\n *               conferences 'JavaOne', 'Gr8conf'\n *           }\n *       }\n *\n *       // creates a data structure made of maps (Json object) and lists (Json array)\n *       assert root instanceof Map\n *\n *       assert builder.toString() == '{\"people\":{\"person\":{\"firstName\":\"Guillaume\",\"lastName\":\"Laforge\",\"address\":{\"city\":\"Paris\",\"country\":\"France\",\"zip\":12345},\"married\":true,\"conferences\":[\"JavaOne\",\"Gr8conf\"]}}}'\n * </code></pre>\n *\n * @since 1.8.0\n */";
 
@@ -736,6 +737,7 @@ async fn index_external_dep_source_jar() {
             id: None,
             jar_path: String::new(),
             source_file_path: "groovy/json/JsonBuilder.java".to_string(),
+            alt_jar_path: None,
             short_name: "JsonBuilder".to_string(),
             fully_qualified_name: "groovy.json.JsonBuilder".to_string(),
             package_name: "groovy.json".to_string(),
@@ -806,6 +808,7 @@ async fn index_external_dep_jar() {
     symbol.id = None;
     symbol.last_modified = 0;
     symbol.jar_path = String::new();
+    symbol.alt_jar_path = None;
 
     assert_eq!(
         symbol,
@@ -813,6 +816,7 @@ async fn index_external_dep_jar() {
             id: None,
             jar_path: String::new(),
             source_file_path: "groovy/json/JsonBuilder.class".to_string(),
+            alt_jar_path: None,
             short_name: "JsonBuilder".to_string(),
             fully_qualified_name: "groovy.json.JsonBuilder".to_string(),
             package_name: "groovy.json".to_string(),
@@ -882,6 +886,7 @@ async fn index_jdk_dep_source_jar() {
             id: None,
             jar_path: String::new(),
             source_file_path: "java.base/java/lang/String.java".to_string(),
+            alt_jar_path: None,
             short_name: "String".to_string(),
             fully_qualified_name: "java.lang.String".to_string(),
             package_name: "java.lang".to_string(),
@@ -961,6 +966,7 @@ async fn index_external_annotation_dep_jar() {
     symbol.last_modified = 0;
     symbol.jar_path = String::new();
     symbol.metadata.documentation = None;
+    symbol.alt_jar_path = None;
 
     assert_eq!(
         symbol,
@@ -968,6 +974,7 @@ async fn index_external_annotation_dep_jar() {
             id: None,
             jar_path: String::new(),
             source_file_path: "org/springframework/stereotype/Service.java".to_string(),
+            alt_jar_path: None,
             short_name: "Service".to_string(),
             fully_qualified_name: "org.springframework.stereotype.Service".to_string(),
             package_name: "org.springframework.stereotype".to_string(),

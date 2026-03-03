@@ -2,6 +2,7 @@ CREATE TABLE external_symbols (
     id INTEGER PRIMARY KEY,
     jar_path TEXT NOT NULL,
     source_file_path TEXT NOT NULL,
+    alt_jar_path TEXT,
     short_name TEXT NOT NULL,
     fully_qualified_name TEXT NOT NULL,
     package_name TEXT NOT NULL,

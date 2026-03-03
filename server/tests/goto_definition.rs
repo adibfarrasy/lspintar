@@ -637,8 +637,6 @@ async fn gtd_resolve_chain_external() {
             .ends_with("org/apache/commons/lang3/StringUtils.java")
     );
 
-    // NOTE: for practical reasons, decompiled classes don't return precise
-    // symbol locations.
-    assert_eq!(location.range.start.line, 0);
-    assert_eq!(location.range.start.character, 0);
+    assert_eq!(location.range.start.line, 536);
+    assert_eq!(location.range.start.character, 25);
 }

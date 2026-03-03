@@ -38,7 +38,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[derive(Clone)]
 pub struct Indexer {
     languages: HashMap<String, Arc<dyn LanguageSupport>>,
-    repo: Arc<Repository>,
+    pub repo: Arc<Repository>,
 }
 
 impl Indexer {
@@ -345,9 +345,10 @@ impl Indexer {
         Ok(())
     }
 
-    fn extract_jar_symbols(
+    pub fn extract_jar_symbols(
         &self,
         jar_path: &Path,
+        src_jar_path: Option<&Path>,
     ) -> Result<(Vec<ExternalSymbol>, Vec<SymbolSuperMapping>)> {
         let file = File::open(jar_path)?;
         let mut archive = ZipArchive::new(file)?;
@@ -369,7 +370,7 @@ impl Indexer {
             })
             .collect();
 
-        let (all_symbols, all_mappings) = entries
+        let (mut all_symbols, all_mappings) = entries
             .into_iter()
             .filter_map(|(entry_name, buffer)| {
                 if buffer.iter().filter(|&&b| b == b'\n').count() > MAX_LINE_COUNT {
@@ -406,6 +407,12 @@ impl Indexer {
                 (s, m)
             });
 
+        if let Some(src) = src_jar_path {
+            let src_str = src.to_string_lossy().to_string();
+            all_symbols.iter_mut().for_each(|s| {
+                s.alt_jar_path = Some(src_str.clone());
+            });
+        }
         Ok((all_symbols, all_mappings))
     }
 
@@ -465,6 +472,7 @@ impl Indexer {
                 id: None,
                 jar_path: jar_path.to_string_lossy().to_string(),
                 source_file_path: source_file_path.to_string(),
+                alt_jar_path: None,
                 short_name: s.short_name,
                 fully_qualified_name: s.fully_qualified_name,
                 package_name: s.package_name,
@@ -522,6 +530,7 @@ impl Indexer {
             id: None,
             jar_path: jar_path.to_string_lossy().to_string(),
             source_file_path: entry_name.to_string(),
+            alt_jar_path: None,
             short_name: short_name.to_string(),
             fully_qualified_name: class_name.clone(),
             package_name: package_name.to_string(),
@@ -567,6 +576,7 @@ impl Indexer {
                 id: None,
                 jar_path: jar_path.to_string_lossy().to_string(),
                 source_file_path: entry_name.to_string(),
+                alt_jar_path: None,
                 short_name: method_name.clone(),
                 fully_qualified_name: format!("{}#{}", class_name, method_name),
                 package_name: package_name.to_string(),
@@ -607,6 +617,7 @@ impl Indexer {
                 id: None,
                 jar_path: jar_path.to_string_lossy().to_string(),
                 source_file_path: entry_name.to_string(),
+                alt_jar_path: None,
                 short_name: field_name.clone(),
                 fully_qualified_name: format!("{}#{}", class_name, field_name),
                 package_name: package_name.to_string(),
@@ -661,14 +672,15 @@ impl Indexer {
                 let on_progress = Arc::clone(&on_progress);
                 async move {
                     // NOTE: prefer byte jars as it's indexed much faster
-                    let jar = match (byte_jar, src_jar) {
-                        (Some(byte), _) => byte,
-                        (None, Some(src)) => src.clone(),
+                    let (jar, src_jar_for_symbols) = match (byte_jar, src_jar) {
+                        (Some(byte), src) => (byte, src),
+                        (None, Some(src)) => (src, None),
                         (None, None) => unreachable!(),
                     };
-                    let result =
-                        tokio::task::spawn_blocking(move || indexer.extract_jar_symbols(&jar))
-                            .await;
+                    let result = tokio::task::spawn_blocking(move || {
+                        indexer.extract_jar_symbols(&jar, src_jar_for_symbols.as_deref())
+                    })
+                    .await;
                     let done = progress_count.fetch_add(1, Ordering::Relaxed) + 1;
                     on_progress.lock().unwrap()(done, total);
                     result?

@@ -246,12 +246,13 @@ impl Repository {
 
         for s in symbols {
             sqlx::query(
-            "INSERT INTO external_symbols (jar_path, source_file_path, short_name, package_name, 
+            "INSERT INTO external_symbols (jar_path, source_file_path, alt_jar_path, short_name, package_name, 
             fully_qualified_name, parent_name, symbol_type, modifiers, line_start, line_end, 
             char_start, char_end, ident_line_start, ident_line_end, ident_char_start,
             ident_char_end, needs_decompilation, metadata, last_modified, file_type)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(jar_path, source_file_path, fully_qualified_name) DO UPDATE SET
+                alt_jar_path = excluded.alt_jar_path,
                 short_name = excluded.short_name,
                 package_name = excluded.package_name,
                 parent_name = excluded.parent_name,
@@ -272,6 +273,7 @@ impl Repository {
         )
         .bind(&s.jar_path)
         .bind(&s.source_file_path)
+        .bind(&s.alt_jar_path)
         .bind(&s.short_name)
         .bind(&s.package_name)
         .bind(&s.fully_qualified_name)

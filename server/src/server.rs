@@ -1,5 +1,6 @@
 use core::panic;
 use dashmap::DashMap;
+use futures::{StreamExt, stream};
 use groovy::GroovySupport;
 use java::JavaSupport;
 use kotlin::KotlinSupport;
@@ -388,27 +389,27 @@ impl Backend {
             None => return vec![],
         };
 
-        let parent_symbol = match self.repo.get() {
+        let resolved_fqn = match self.repo.get() {
             None => return vec![],
-            Some(repo) => match repo.find_symbols_by_fqn(&fqn).await {
-                Ok(symbols) => symbols.into_iter().next(),
-                Err(_) => return vec![],
-            },
+            Some(repo) => {
+                if let Ok(Some(s)) = repo.find_symbol_by_fqn(&fqn).await {
+                    s.fully_qualified_name
+                } else if let Ok(Some(s)) = repo.find_external_symbol_by_fqn(&fqn).await {
+                    s.fully_qualified_name
+                } else {
+                    return vec![];
+                }
+            }
         };
 
-        match parent_symbol {
-            Some(parent) => {
-                Box::pin(self.try_members_with_inheritance(
-                    &parent.fully_qualified_name,
-                    member,
-                    visited,
-                    imports,
-                    package_name,
-                ))
-                .await
-            }
-            None => vec![],
-        }
+        Box::pin(self.try_members_with_inheritance(
+            &resolved_fqn,
+            member,
+            visited,
+            imports,
+            package_name,
+        ))
+        .await
     }
 
     fn resolved_symbols_to_impl_response(
@@ -925,10 +926,10 @@ impl Backend {
     }
 
     #[allow(unused)]
-    async fn needs_full_reindex(&self, root: &Path) -> bool {
+    fn needs_full_reindex(&self, root: &Path) -> bool {
         #[cfg(feature = "integration-test")]
         {
-            return self.indexer.read().await.is_none();
+            return true;
         }
 
         #[cfg(not(feature = "integration-test"))]
@@ -1122,7 +1123,7 @@ impl LanguageServer for Backend {
                 indexer.register_language(k, v.clone());
             });
 
-            if self.needs_full_reindex(&root).await {
+            if self.needs_full_reindex(&root) {
                 debug!("Full reindex required, clearing existing index.");
                 let _ = tokio::fs::remove_file(root.join(MANIFEST_PATH_FRAGMENT)).await;
                 if let Err(e) = repo.clear_all().await {
@@ -1293,10 +1294,24 @@ impl LanguageServer for Backend {
             .resolve_symbol_at_position(&params.text_document_position_params)
             .await?;
 
-        let locations: Vec<Location> = symbols
-            .into_iter()
-            .filter_map(|s| s.as_lsp_location())
-            .collect();
+        let indexer_guard = self.indexer.read().await;
+        let indexer = indexer_guard.as_ref();
+
+        let locations: Vec<Location> = stream::iter(symbols)
+            .then(|s| async move {
+                let indexer = indexer.clone();
+                match s {
+                    ResolvedSymbol::External(sym) => {
+                        let enriched = sym.with_sources(indexer).await;
+                        enriched.as_lsp_location()
+                    }
+                    other => other.as_lsp_location(),
+                }
+            })
+            .filter_map(|l| async move { l })
+            .collect()
+            .await;
+
         match locations.len() {
             0 => Ok(None),
             1 => Ok(Some(GotoDefinitionResponse::from(
@@ -1440,17 +1455,18 @@ impl LanguageServer for Backend {
         let symbols = self
             .resolve_symbol_at_position(&params.text_document_position_params)
             .await;
-
         let Ok(symbols) = symbols else {
             return Ok(None);
         };
-
-        let symbol = symbols.first();
-
-        let Some(symbol) = symbol else {
-            return Ok(None);
+        let indexer_guard = self.indexer.read().await;
+        let indexer = indexer_guard.as_ref().cloned();
+        let symbol = match symbols.into_iter().next() {
+            Some(ResolvedSymbol::External(sym)) => {
+                ResolvedSymbol::External(sym.with_sources(indexer.as_ref()).await)
+            }
+            Some(other) => other,
+            None => return Ok(None),
         };
-
         Ok(symbol.as_lsp_hover())
     }
 
