@@ -286,10 +286,9 @@ impl KotlinSupport {
                         }
 
                         // Infer from value if no explicit type
-                        let mut value_cursor = node.walk();
-                        for value_child in node.children(&mut value_cursor) {
-                            if value_child.kind() == "call_expression" {
-                                let type_name = self.infer_type_from_value(value_child, content);
+                        if let Some(value_child) = node.child_by_field_name("value") {
+                            let type_name = self.infer_type_from_value(value_child, content);
+                            if type_name.is_some() {
                                 let identifier = var_child.child_by_field_name("name")?;
                                 let var_position = Position {
                                     line: identifier.start_position().row as u32,
@@ -364,9 +363,7 @@ impl KotlinSupport {
                                 t.utf8_text(content.as_bytes()).ok().map(|s| s.to_string())
                             })
                             .or_else(|| {
-                                let mut value_cursor = node.walk();
-                                node.children(&mut value_cursor)
-                                    .find(|c| c.kind() == "call_expression")
+                                node.child_by_field_name("value")
                                     .and_then(|v| self.infer_type_from_value(v, content))
                             });
                         for name in names {
@@ -427,17 +424,135 @@ impl KotlinSupport {
         self.traverse_scope_nodes(scope_node, content, reference_byte, &mut process_node);
     }
 
-    fn infer_type_from_value(&self, value_node: Node, content: &str) -> Option<String> {
-        if value_node.kind() == "call_expression"
-            && let Some(ident_node) = value_node.child(0)
-            && ident_node.kind() == "identifier"
-        {
-            return ident_node
+    /// Extracts a `#`-separated chain qualifier from a Kotlin call expression.
+    /// Returns `None` if the expression is not a supported chain pattern.
+    /// Examples:
+    ///   `Bar.create()`     → `Some("Bar#create")`
+    ///   `foo.bar().baz()`  → `Some("foo#bar#baz")`
+    fn extract_invocation_chain(node: &Node, content: &str) -> Option<String> {
+        match node.kind() {
+            "identifier" => node
                 .utf8_text(content.as_bytes())
                 .ok()
-                .map(|s| s.to_string());
+                .map(|s| s.to_string()),
+            "navigation_expression" => {
+                // Standalone property access: it.name
+                // navigation_expression = _expression + navigation_suffix
+                let receiver = node.child(0)?;
+                let nav_suffix = node.child(1)?;
+                let field_name_node = nav_suffix.named_child(0)?;
+                let field_name = field_name_node.utf8_text(content.as_bytes()).ok()?;
+                let receiver_chain = Self::extract_invocation_chain(&receiver, content)?;
+                Some(format!("{}#{}", receiver_chain, field_name))
+            }
+            "call_expression" => {
+                // call_expression = _expression + call_suffix
+                // If child(0) is a navigation_expression, it's a qualified call: receiver.method()
+                // Otherwise it might be a simple call: foo()
+                let first = node.child(0)?;
+                let chain = match first.kind() {
+                    "navigation_expression" => {
+                        // navigation_expression = _expression + navigation_suffix
+                        let receiver = first.child(0)?;
+                        let nav_suffix = first.child(1)?;
+                        // navigation_suffix = _member_access_operator + identifier (or similar)
+                        // The operator (. or ?.) is anonymous; named_child(0) is the identifier
+                        let method_name_node = nav_suffix.named_child(0)?;
+                        let method_name = method_name_node.utf8_text(content.as_bytes()).ok()?;
+                        let receiver_chain_raw =
+                            Self::extract_invocation_chain(&receiver, content)?;
+                        // Strip lambda body info from the receiver chain to avoid
+                        // propagating it into outer chains where it does not apply.
+                        let receiver_chain =
+                            if let Some(idx) = receiver_chain_raw.find("__lb__") {
+                                receiver_chain_raw[..idx].to_string()
+                            } else {
+                                receiver_chain_raw
+                            };
+                        format!("{}#{}", receiver_chain, method_name)
+                    }
+                    "identifier" => {
+                        // simple call: foo()
+                        first.utf8_text(content.as_bytes()).ok()?.to_string()
+                    }
+                    _ => return None,
+                };
+                // If the call has a trailing lambda, encode the body chain.
+                if let Some(body_info) = Self::extract_lambda_body_chain(node, content) {
+                    Some(format!("{}__lb__{}", chain, body_info))
+                } else {
+                    Some(chain)
+                }
+            }
+            _ => None,
         }
-        None
+    }
+
+    /// If `call_expr` has a trailing lambda argument, returns `"param|body_chain"`.
+    /// Returns `None` when no lambda is present or the body is too complex to encode.
+    fn extract_lambda_body_chain(call_expr: &Node, content: &str) -> Option<String> {
+        // call_suffix → annotated_lambda → lambda_literal
+        let mut cur = call_expr.walk();
+        let call_suffix = call_expr
+            .children(&mut cur)
+            .find(|n| n.kind() == "call_suffix")?;
+
+        let mut sc = call_suffix.walk();
+        let annotated_lambda = call_suffix
+            .children(&mut sc)
+            .find(|n| n.kind() == "annotated_lambda")?;
+
+        let mut ac = annotated_lambda.walk();
+        let lambda_literal = annotated_lambda
+            .children(&mut ac)
+            .find(|n| n.kind() == "lambda_literal")?;
+
+        let mut lc = lambda_literal.walk();
+        let lambda_children: Vec<_> = lambda_literal.children(&mut lc).collect();
+
+        // Lambda param name: from lambda_parameters if present, otherwise "it" (implicit).
+        let param_name = lambda_children
+            .iter()
+            .find(|n| n.kind() == "lambda_parameters")
+            .and_then(|lp| {
+                let mut pc = lp.walk();
+                lp.named_children(&mut pc)
+                    .find(|n| n.kind() == "variable_declaration")
+            })
+            .and_then(|vd| vd.child_by_field_name("name"))
+            .and_then(|n| n.utf8_text(content.as_bytes()).ok())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "it".to_string());
+
+        // Lambda body: the statements node, last named child.
+        let statements = lambda_children
+            .iter()
+            .find(|n| n.kind() == "statements")?;
+        let mut stc = statements.walk();
+        let last_stmt = statements.named_children(&mut stc).last()?;
+
+        let body_chain = Self::extract_invocation_chain(&last_stmt, content)?;
+        Some(format!("{}|{}", param_name, body_chain))
+    }
+
+    fn infer_type_from_value(&self, value_node: Node, content: &str) -> Option<String> {
+        match value_node.kind() {
+            "call_expression" => Self::extract_invocation_chain(&value_node, content),
+            "string_literal" => Some("String".to_string()),
+            "decimal_integer_literal" => Some("Int".to_string()),
+            "long_literal" => Some("Long".to_string()),
+            "real_literal" => {
+                if let Ok(text) = value_node.utf8_text(content.as_bytes()) {
+                    if text.to_lowercase().ends_with('f') {
+                        return Some("Float".to_string());
+                    }
+                }
+                Some("Double".to_string())
+            }
+            "boolean_literal" => Some("Boolean".to_string()),
+            "character_literal" => Some("Char".to_string()),
+            _ => None,
+        }
     }
 
     fn declares_variable(&self, node: Node, content: &str, var_name: &str) -> bool {
@@ -505,6 +620,123 @@ impl KotlinSupport {
                 }
             })
             .unwrap_or((param.to_string(), None, None))
+    }
+
+    /// When `var_name` is an untyped lambda parameter (e.g. the `item` in
+    /// `items.forEach { item -> ... }`), returns a `__cp__:…` marker.
+    fn find_lambda_param_declaration(
+        &self,
+        tree: &Tree,
+        content: &str,
+        var_name: &str,
+        position: &Position,
+    ) -> Option<(Option<String>, Position)> {
+        let mut node = get_node_at_position(tree, content, position)?;
+
+        loop {
+            if node.kind() == "lambda_literal" {
+                // Check if any lambda_parameter in lambda_parameters matches var_name.
+                let mut cursor = node.walk();
+                let mut has_explicit_params = false;
+                for child in node.children(&mut cursor) {
+                    if child.kind() != "lambda_parameters" {
+                        continue;
+                    }
+                    has_explicit_params = true;
+                    let mut lambda_param_index = 0usize;
+                    let mut pc = child.walk();
+                    for param in child.children(&mut pc) {
+                        if param.kind() != "variable_declaration" {
+                            continue;
+                        }
+                        let name_node = param.child_by_field_name("name")?;
+                        let name = name_node.utf8_text(content.as_bytes()).ok()?;
+                        if name == var_name {
+                            // Has explicit type annotation?
+                            let explicit_type = param
+                                .children(&mut param.walk())
+                                .find(|n| {
+                                    n.kind() == "user_type" || n.kind() == "nullable_type"
+                                })
+                                .and_then(|t| t.utf8_text(content.as_bytes()).ok())
+                                .map(|s| s.to_string());
+                            let decl_pos = Position {
+                                line: name_node.start_position().row as u32,
+                                character: name_node.start_position().column as u32,
+                            };
+                            if let Some(t) = explicit_type {
+                                return Some((Some(t), decl_pos));
+                            }
+                            let type_str = self.build_lambda_param_marker(
+                                &node,
+                                content,
+                                lambda_param_index,
+                            )?;
+                            return Some((Some(type_str), decl_pos));
+                        }
+                        lambda_param_index += 1;
+                    }
+                }
+
+                // Kotlin implicit `it`: a lambda with no declared parameters uses `it` as
+                // the implicit first parameter.
+                if !has_explicit_params && var_name == "it" {
+                    let type_str = self.build_lambda_param_marker(&node, content, 0)?;
+                    let decl_pos = Position {
+                        line: node.start_position().row as u32,
+                        character: node.start_position().column as u32,
+                    };
+                    return Some((Some(type_str), decl_pos));
+                }
+            }
+            node = node.parent()?;
+        }
+    }
+
+    /// Builds a `__cp__:receiver_chain:method_name:method_param_idx:lambda_param_idx`
+    /// marker for a lambda parameter at `lambda_param_index` inside `lambda_node`.
+    fn build_lambda_param_marker(
+        &self,
+        lambda_node: &Node,
+        content: &str,
+        lambda_param_index: usize,
+    ) -> Option<String> {
+        // Walk up: lambda_literal → annotated_lambda → call_suffix → call_expression
+        let annotated = lambda_node.parent()?;
+        let call_suffix = annotated.parent()?;
+        if call_suffix.kind() != "call_suffix" {
+            return None;
+        }
+        let call_expr = call_suffix.parent()?;
+        if call_expr.kind() != "call_expression" {
+            return None;
+        }
+
+        // call_expression = navigation_expression + call_suffix
+        let nav_expr = call_expr.child(0)?;
+        if nav_expr.kind() != "navigation_expression" {
+            return None;
+        }
+
+        // navigation_expression = receiver + navigation_suffix
+        let receiver = nav_expr.child(0)?;
+        let nav_suffix = nav_expr.child(1)?;
+        let method_name_node = nav_suffix.named_child(0)?;
+        let method_name = method_name_node.utf8_text(content.as_bytes()).ok()?;
+        let receiver_chain = Self::extract_invocation_chain(&receiver, content)?;
+
+        // The lambda is effectively the last argument (method_param_idx = number of
+        // value_arguments in the call_suffix before the lambda).
+        let value_args_count = call_suffix
+            .children(&mut call_suffix.walk())
+            .find(|n| n.kind() == "value_arguments")
+            .map(|va| va.named_child_count())
+            .unwrap_or(0);
+
+        Some(format!(
+            "__cp__:{}:{}:{}:{}",
+            receiver_chain, method_name, value_args_count, lambda_param_index
+        ))
     }
 }
 
@@ -953,7 +1185,7 @@ impl LanguageSupport for KotlinSupport {
             return None;
         }
 
-        let reference_byte = current_node.start_byte();
+        let reference_byte = ts_helper::position_to_byte_offset(content, position);
         loop {
             if let Some(result) =
                 self.find_in_current_scope(current_node, content, var_name, reference_byte)
@@ -966,7 +1198,10 @@ impl LanguageSupport for KotlinSupport {
                 break;
             }
         }
-        None
+
+        // var_name was not found as a regular local variable — check if it is an
+        // untyped lambda parameter inside an enclosing lambda_literal.
+        self.find_lambda_param_declaration(tree, content, var_name, position)
     }
 
     fn find_declarations_in_scope(
@@ -978,7 +1213,7 @@ impl LanguageSupport for KotlinSupport {
         let Some(mut current_node) = get_node_at_position(tree, content, position) else {
             return vec![];
         };
-        let reference_byte = current_node.start_byte();
+        let reference_byte = ts_helper::position_to_byte_offset(content, position);
         let mut results = Vec::new();
         loop {
             self.collect_declarations_in_scope(current_node, content, reference_byte, &mut results);

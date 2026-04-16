@@ -22,8 +22,10 @@ pub fn get_cfr_jar_path() -> PathBuf {
 }
 
 pub const MANIFEST_PATH_FRAGMENT: &str = ".lspintar/deps.manifest";
+pub const CLASSPATH_MANIFEST_PATH_FRAGMENT: &str = ".lspintar/classpath.manifest";
 pub const INDEX_PATH_FRAGMENT: &str = ".lspintar/index.version";
 pub const DB_PATH_FRAGMENT: &str = ".lspintar/index.db";
+pub const VCS_REVISION_PATH_FRAGMENT: &str = ".lspintar/vcs.revision";
 
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 

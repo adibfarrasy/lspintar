@@ -2,6 +2,7 @@ use classfile_parser::{
     ClassAccessFlags, class_parser, constant_info::ConstantInfo, field_info::FieldAccessFlags,
     method_info::MethodAccessFlags,
 };
+use crate::generic_resolution::{parse_class_type_params, parse_method_generic_params, parse_method_generic_return, parse_method_type_params, read_signature_attr};
 use futures::{StreamExt, stream};
 use java::JAVA_IMPLICIT_IMPORTS;
 use lsp_core::{language_support::LanguageSupport, node_kind::NodeKind, util::naive_resolve_fqn};
@@ -263,6 +264,10 @@ impl Indexer {
                         parameters: None,
                         documentation,
                         return_type: None,
+                        generic_return_type: None,
+                        type_params: None,
+                        generic_param_types: None,
+                        method_type_params: None,
                     };
 
                     match node_kind {
@@ -525,7 +530,11 @@ impl Indexer {
 
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
 
-        // Class symbol
+        // Class symbol — parse Signature attribute for type parameters
+        let class_type_params = read_signature_attr(&class.attributes, &class.const_pool)
+            .map(|sig| parse_class_type_params(&sig))
+            .filter(|v| !v.is_empty());
+
         symbols.push(ExternalSymbol {
             id: None,
             jar_path: jar_path.to_string_lossy().to_string(),
@@ -557,6 +566,10 @@ impl Indexer {
                 parameters: None,
                 documentation: None,
                 return_type: None,
+                generic_return_type: None,
+                type_params: class_type_params,
+                generic_param_types: None,
+                method_type_params: None,
             }),
             last_modified: now,
             file_type: "java".to_string(),
@@ -571,6 +584,22 @@ impl Indexer {
             let method_name = get_utf8(&class.const_pool, method.name_index)?;
             let descriptor = get_utf8(&class.const_pool, method.descriptor_index)?;
             let (params, return_type) = parse_method_descriptor(&descriptor);
+
+            // Parse Signature attribute to get the generic return type (e.g. "E", "List<E>")
+            // and generic parameter types (e.g. ["Consumer<T>"] for forEach).
+            let method_sig = read_signature_attr(&method.attributes, &class.const_pool);
+            let generic_return_type = method_sig
+                .as_deref()
+                .and_then(parse_method_generic_return)
+                .filter(|t| t != "void" && t != &return_type);
+            let generic_param_types = method_sig
+                .as_deref()
+                .map(parse_method_generic_params)
+                .filter(|ps| !ps.is_empty());
+            let method_type_params = method_sig
+                .as_deref()
+                .map(parse_method_type_params)
+                .filter(|ps| !ps.is_empty());
 
             symbols.push(ExternalSymbol {
                 id: None,
@@ -597,6 +626,10 @@ impl Indexer {
                     parameters: Some(params),
                     documentation: None,
                     return_type: Some(return_type),
+                    generic_return_type,
+                    type_params: None,
+                    generic_param_types,
+                    method_type_params,
                 }),
                 last_modified: now,
                 file_type: "java".to_string(),
@@ -638,6 +671,10 @@ impl Indexer {
                     parameters: None,
                     documentation: None,
                     return_type: Some(field_type),
+                    generic_return_type: None,
+                    type_params: None,
+                    generic_param_types: None,
+                    method_type_params: None,
                 }),
                 last_modified: now,
                 file_type: "java".to_string(),

@@ -16,7 +16,8 @@ fn test_detect_literal_type() {
                 def intLit = 123
                 def longLit = 123L
                 def floatLit = 1.5f
-                def doubleLit = 3.0
+                def bigDecLit = 3.0
+                def doubleLit = 3.0d
                 def hexLit = 0xFF
                 def binaryLit = 0b1010
                 def boolTrue = true
@@ -36,7 +37,8 @@ fn test_detect_literal_type() {
         ("123", Some("Integer".to_string())),
         ("123L", Some("Long".to_string())),
         ("1.5f", Some("Float".to_string())),
-        ("3.0", Some("Double".to_string())),
+        ("3.0", Some("BigDecimal".to_string())),
+        ("3.0d", Some("Double".to_string())),
         ("0xFF", Some("Integer".to_string())),
         ("0b1010", Some("Integer".to_string())),
         ("true", Some("Boolean".to_string())),

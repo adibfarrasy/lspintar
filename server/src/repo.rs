@@ -111,7 +111,7 @@ impl Repository {
     pub async fn find_symbols_by_prefix(&self, prefix: &str) -> Result<Vec<Symbol>, sqlx::Error> {
         tracing::info!("find_symbols_by_prefix");
         sqlx::query_as::<_, Symbol>(
-            "SELECT * FROM symbols WHERE fully_qualified_name LIKE ? OR short_name LIKE ?",
+            "SELECT * FROM symbols WHERE (fully_qualified_name LIKE ? OR short_name LIKE ?) AND fully_qualified_name NOT LIKE '%#%'",
         )
         .bind(format!("{}%", prefix))
         .bind(format!("{}%", prefix))
@@ -320,6 +320,24 @@ impl Repository {
             .await
     }
 
+    /// Like `find_external_symbols_by_parent_name` but restricted to symbols from the given JARs.
+    /// Falls back to the unfiltered query when `jar_paths` is empty.
+    #[tracing::instrument(skip(self, jar_paths))]
+    pub async fn find_external_symbols_by_parent_name_and_jars(
+        &self,
+        parent_fqn: &str,
+        jar_paths: &[String],
+    ) -> Result<Vec<ExternalSymbol>, sqlx::Error> {
+        let all = self.find_external_symbols_by_parent_name(parent_fqn).await?;
+        if jar_paths.is_empty() {
+            return Ok(all);
+        }
+        Ok(all
+            .into_iter()
+            .filter(|s| jar_paths.contains(&s.jar_path))
+            .collect())
+    }
+
     #[tracing::instrument(skip(self))]
     pub async fn find_external_symbols_by_prefix(
         &self,
@@ -327,12 +345,30 @@ impl Repository {
     ) -> Result<Vec<ExternalSymbol>, sqlx::Error> {
         tracing::info!("find_external_symbols_by_prefix");
         sqlx::query_as::<_, ExternalSymbol>(
-            "SELECT * FROM external_symbols WHERE fully_qualified_name LIKE ? OR short_name LIKE ? ORDER BY needs_decompilation ASC",
+            "SELECT * FROM external_symbols WHERE (fully_qualified_name LIKE ? OR short_name LIKE ?) AND fully_qualified_name NOT LIKE '%#%' ORDER BY needs_decompilation ASC",
         )
         .bind(format!("{}%", prefix))
         .bind(format!("{}%", prefix))
         .fetch_all(&self.pool)
         .await
+    }
+
+    /// Like `find_external_symbols_by_prefix` but restricted to symbols from the given JARs.
+    /// Falls back to the unfiltered query when `jar_paths` is empty.
+    #[tracing::instrument(skip(self, jar_paths))]
+    pub async fn find_external_symbols_by_prefix_and_jars(
+        &self,
+        prefix: &str,
+        jar_paths: &[String],
+    ) -> Result<Vec<ExternalSymbol>, sqlx::Error> {
+        let all = self.find_external_symbols_by_prefix(prefix).await?;
+        if jar_paths.is_empty() {
+            return Ok(all);
+        }
+        Ok(all
+            .into_iter()
+            .filter(|s| jar_paths.contains(&s.jar_path))
+            .collect())
     }
 
     pub async fn delete_symbols_for_file(&self, file_path: &str) -> Result<(), sqlx::Error> {
@@ -361,6 +397,16 @@ impl Repository {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    /// Returns the distinct file paths of all indexed project symbols.
+    /// Used by the references handler to know which source files to search.
+    pub async fn find_all_source_file_paths(&self) -> Result<Vec<String>, sqlx::Error> {
+        let rows: Vec<(String,)> =
+            sqlx::query_as("SELECT DISTINCT file_path FROM symbols ORDER BY file_path")
+                .fetch_all(&self.pool)
+                .await?;
+        Ok(rows.into_iter().map(|(p,)| p).collect())
     }
 
     pub async fn clear_all(&self) -> Result<(), sqlx::Error> {

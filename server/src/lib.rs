@@ -1,5 +1,6 @@
 pub mod constants;
 pub mod enums;
+pub mod generic_resolution;
 pub mod indexer;
 pub mod lsp_convert;
 pub mod models;

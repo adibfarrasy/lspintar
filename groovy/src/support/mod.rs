@@ -256,18 +256,24 @@ impl GroovySupport {
         let mut result = None;
         let mut process_node = |child: Node, content: &str| -> bool {
             if self.declares_variable(child, content, var_name) {
-                if let Some(type_node) = child.child_by_field_name("type") {
-                    let var_type = type_node
+                let var_type = if let Some(type_node) = child.child_by_field_name("type") {
+                    let type_text = type_node
                         .utf8_text(content.as_bytes())
                         .ok()
                         .map(|s| s.to_string());
-
-                    if let Some((_, var_position)) =
-                        ts_helper::get_one_with_position(&child, content, &DECLARES_VARIABLE_QUERY)
-                    {
-                        result = Some((var_type, var_position));
-                        return false;
+                    match type_text.as_deref() {
+                        Some("def") => self.infer_type_from_declarator(&child, content),
+                        _ => type_text,
                     }
+                } else {
+                    self.infer_type_from_declarator(&child, content)
+                };
+
+                if let Some((_, var_position)) =
+                    ts_helper::get_one_with_position(&child, content, &DECLARES_VARIABLE_QUERY)
+                {
+                    result = Some((var_type, var_position));
+                    return false;
                 }
             }
             true
@@ -286,9 +292,16 @@ impl GroovySupport {
     ) {
         let mut process_node = |child: Node, content: &str| -> bool {
             let names = ts_helper::get_many(&child, content, &DECLARES_VARIABLE_QUERY, Some(1));
-            let var_type = child
-                .child_by_field_name("type")
-                .map(|t| content[t.start_byte()..t.end_byte()].to_string());
+            let var_type = if let Some(type_node) = child.child_by_field_name("type") {
+                let type_text = content[type_node.start_byte()..type_node.end_byte()].to_string();
+                if type_text == "def" {
+                    self.infer_type_from_declarator(&child, content)
+                } else {
+                    Some(type_text)
+                }
+            } else {
+                self.infer_type_from_declarator(&child, content)
+            };
 
             for name in names {
                 results.push((name, var_type.clone()));
@@ -303,6 +316,144 @@ impl GroovySupport {
     fn declares_variable(&self, node: Node, content: &str, var_name: &str) -> bool {
         let names = ts_helper::get_many(&node, content, &DECLARES_VARIABLE_QUERY, Some(1));
         names.iter().any(|name| name == var_name)
+    }
+
+    /// Infer a type from the initializer value of a `variable_declarator` child.
+    /// Used for `def` variables that have no explicit type annotation.
+    fn infer_type_from_declarator(&self, var_decl_node: &Node, content: &str) -> Option<String> {
+        let declarator = var_decl_node.child_by_field_name("declarator")?;
+        let value = declarator.child_by_field_name("value")?;
+        Self::infer_type_from_value_node(&value, content)
+    }
+
+    /// Extracts a `#`-separated chain qualifier from a `method_invocation` or `field_access`
+    /// expression. Returns `None` if the expression is not a supported chain pattern.
+    /// Examples:
+    ///   `Bar.create()`  → `Some("Bar#create")`
+    ///   `foo.bar().baz()` → `Some("foo#bar#baz")`
+    ///   `it.name`       → `Some("it#name")`
+    fn extract_invocation_chain(node: &Node, content: &str) -> Option<String> {
+        match node.kind() {
+            "identifier" => node
+                .utf8_text(content.as_bytes())
+                .ok()
+                .map(|s| s.to_string()),
+            "method_invocation" => {
+                let obj = node.child_by_field_name("object")?;
+                let name_node = node.child_by_field_name("name")?;
+                let obj_chain_raw = Self::extract_invocation_chain(&obj, content)?;
+                // Strip lambda body info from receiver chain to avoid propagation.
+                let obj_chain = if let Some(idx) = obj_chain_raw.find("__lb__") {
+                    obj_chain_raw[..idx].to_string()
+                } else {
+                    obj_chain_raw
+                };
+                let method_name = name_node.utf8_text(content.as_bytes()).ok()?;
+                let chain = format!("{}#{}", obj_chain, method_name);
+                if let Some(body_info) = Self::extract_closure_body_chain(node, content) {
+                    Some(format!("{}__lb__{}", chain, body_info))
+                } else {
+                    Some(chain)
+                }
+            }
+            "field_access" => {
+                let obj = node.child_by_field_name("object")?;
+                let field_node = node.child_by_field_name("field")?;
+                let obj_chain = Self::extract_invocation_chain(&obj, content)?;
+                let field_name = field_node.utf8_text(content.as_bytes()).ok()?;
+                Some(format!("{}#{}", obj_chain, field_name))
+            }
+            _ => None,
+        }
+    }
+
+    /// If `method_invoc` has a closure argument, returns `"param|body_chain"`.
+    fn extract_closure_body_chain(method_invoc: &Node, content: &str) -> Option<String> {
+        // Closure may be the `closure:` field or inside the `arguments:` argument_list.
+        let closure = method_invoc
+            .child_by_field_name("closure")
+            .or_else(|| {
+                let args = method_invoc.child_by_field_name("arguments")?;
+                let mut ac = args.walk();
+                args.named_children(&mut ac)
+                    .find(|n| n.kind() == "closure")
+            })?;
+
+        let mut cc = closure.walk();
+        let closure_children: Vec<_> = closure.children(&mut cc).collect();
+
+        // Param name: last identifier in the first closure_parameter, or "it" for
+        // closures with no declared parameters (Groovy implicit parameter).
+        let param_name = closure_children
+            .iter()
+            .find(|n| n.kind() == "closure_parameter")
+            .and_then(|cp| {
+                let mut pc = cp.walk();
+                let children: Vec<_> = cp.children(&mut pc).collect();
+                children
+                    .iter()
+                    .rev()
+                    .find(|n| n.kind() == "identifier")
+                    .and_then(|n| n.utf8_text(content.as_bytes()).ok())
+                    .map(|s| s.to_string())
+            })
+            .unwrap_or_else(|| "it".to_string());
+
+        // Body: last named non-closure_parameter child.
+        let last_body = closure_children
+            .iter()
+            .filter(|n| n.is_named() && n.kind() != "closure_parameter")
+            .last()?;
+
+        // Unwrap expression_statement.
+        let expr = if last_body.kind() == "expression_statement" {
+            last_body.named_child(0)?
+        } else {
+            *last_body
+        };
+
+        let body_chain = Self::extract_invocation_chain(&expr, content)?;
+        Some(format!("{}|{}", param_name, body_chain))
+    }
+
+    fn infer_type_from_value_node(value_node: &Node, content: &str) -> Option<String> {
+        match value_node.kind() {
+            "object_creation_expression" => {
+                let type_node = value_node.child_by_field_name("type")?;
+                type_node
+                    .utf8_text(content.as_bytes())
+                    .ok()
+                    .map(|s| s.to_string())
+            }
+            "method_invocation" => Self::extract_invocation_chain(value_node, content),
+            "string_literal" | "gstring" | "text_block" => Some("String".to_string()),
+            "decimal_integer_literal"
+            | "hex_integer_literal"
+            | "octal_integer_literal"
+            | "binary_integer_literal" => {
+                let text = value_node.utf8_text(content.as_bytes()).ok()?;
+                if text.ends_with('l') || text.ends_with('L') {
+                    Some("Long".to_string())
+                } else {
+                    Some("Integer".to_string())
+                }
+            }
+            "decimal_floating_point_literal" | "hex_floating_point_literal" => {
+                let text = value_node.utf8_text(content.as_bytes()).ok()?;
+                let lower = text.to_lowercase();
+                if lower.ends_with('f') {
+                    Some("Float".to_string())
+                } else if lower.ends_with('d') {
+                    Some("Double".to_string())
+                } else {
+                    Some("BigDecimal".to_string())
+                }
+            }
+            "true" | "false" => Some("Boolean".to_string()),
+            "array_literal" => Some("List".to_string()),
+            "map_literal" => Some("Map".to_string()),
+            _ => None,
+        }
     }
 
     fn parse_argument_list(&self, arg_list_node: &Node, content: &str) -> Vec<(String, Position)> {
@@ -347,6 +498,115 @@ impl GroovySupport {
             }
         }
         params
+    }
+
+    /// When `var_name` is an untyped closure parameter, returns a `__cp__:…` marker.
+    fn find_closure_param_declaration(
+        &self,
+        tree: &Tree,
+        content: &str,
+        var_name: &str,
+        position: &Position,
+    ) -> Option<(Option<String>, Position)> {
+        let mut node = get_node_at_position(tree, content, position)?;
+
+        loop {
+            if node.kind() == "closure" {
+                let mut cursor = node.walk();
+                let mut closure_param_index = 0usize;
+                let mut has_explicit_params = false;
+                for child in node.children(&mut cursor) {
+                    if child.kind() != "closure_parameter" {
+                        continue;
+                    }
+                    has_explicit_params = true;
+                    // The last identifier child is the parameter name; a preceding
+                    // type_identifier child (if present) is the explicit type.
+                    let mut pc = child.walk();
+                    let children: Vec<_> = child.children(&mut pc).collect();
+                    let name_node = children.iter().rev().find(|n| n.kind() == "identifier")?;
+                    let name = name_node.utf8_text(content.as_bytes()).ok()?;
+                    if name == var_name {
+                        let explicit_type = children
+                            .iter()
+                            .find(|n| n.kind() == "type_identifier")
+                            .and_then(|t| t.utf8_text(content.as_bytes()).ok())
+                            .map(|s| s.to_string());
+                        let decl_pos = Position {
+                            line: name_node.start_position().row as u32,
+                            character: name_node.start_position().column as u32,
+                        };
+                        if let Some(t) = explicit_type {
+                            return Some((Some(t), decl_pos));
+                        }
+                        let type_str =
+                            self.build_closure_param_marker(&node, content, closure_param_index)?;
+                        return Some((Some(type_str), decl_pos));
+                    }
+                    closure_param_index += 1;
+                }
+
+                // Groovy implicit `it`: a closure with no declared parameters uses `it` as
+                // the implicit first parameter.
+                if !has_explicit_params && var_name == "it" {
+                    let type_str = self.build_closure_param_marker(&node, content, 0)?;
+                    let decl_pos = Position {
+                        line: node.start_position().row as u32,
+                        character: node.start_position().column as u32,
+                    };
+                    return Some((Some(type_str), decl_pos));
+                }
+            }
+            node = node.parent()?;
+        }
+    }
+
+    /// Builds a `__cp__:receiver_chain:method_name:method_param_idx:closure_param_idx`
+    /// marker for a closure parameter at `closure_param_index` inside `closure_node`.
+    fn build_closure_param_marker(
+        &self,
+        closure_node: &Node,
+        content: &str,
+        closure_param_index: usize,
+    ) -> Option<String> {
+        let parent = closure_node.parent()?;
+        let (method_invoc, method_param_idx) = if parent.kind() == "method_invocation" {
+            // Trailing closure: items.each { ... }
+            // Count regular arguments in the argument_list field (if any).
+            let arg_count = parent
+                .child_by_field_name("arguments")
+                .map(|al| al.named_child_count())
+                .unwrap_or(0);
+            (parent, arg_count)
+        } else if parent.kind() == "argument_list" {
+            // Closure inside argument list: items.each({ ... })
+            let grandparent = parent.parent()?;
+            if grandparent.kind() != "method_invocation" {
+                return None;
+            }
+            // Find the index of the closure in the argument list.
+            let mut idx = 0usize;
+            let mut pc = parent.walk();
+            for arg in parent.named_children(&mut pc) {
+                if arg.id() == closure_node.id() {
+                    break;
+                }
+                idx += 1;
+            }
+            (grandparent, idx)
+        } else {
+            return None;
+        };
+
+        let receiver = method_invoc.child_by_field_name("object")?;
+        let name_node = method_invoc.child_by_field_name("name")?;
+        let method_name = name_node.utf8_text(content.as_bytes()).ok()?;
+        let receiver_chain = Self::extract_invocation_chain(&receiver, content)?;
+
+        Some(format!(
+            "__cp__:{}:{}:{}:{}",
+            receiver_chain, method_name, method_param_idx, closure_param_index
+        ))
     }
 }
 
@@ -627,9 +887,11 @@ impl LanguageSupport for GroovySupport {
                         let lower = text.to_lowercase();
                         if lower.ends_with('f') {
                             return Some("Float".to_string());
+                        } else if lower.ends_with('d') {
+                            return Some("Double".to_string());
                         }
                     }
-                    return Some("Double".to_string());
+                    return Some("BigDecimal".to_string());
                 }
 
                 "true" | "false" => return Some("Boolean".to_string()),
@@ -732,7 +994,7 @@ impl LanguageSupport for GroovySupport {
             return None;
         }
 
-        let reference_byte = current_node.start_byte();
+        let reference_byte = ts_helper::position_to_byte_offset(content, position);
         loop {
             if let Some(result) =
                 self.find_in_current_scope(current_node, content, var_name, reference_byte)
@@ -745,7 +1007,10 @@ impl LanguageSupport for GroovySupport {
                 break;
             }
         }
-        None
+
+        // var_name was not found as a regular local variable — check if it is a
+        // closure parameter inside an enclosing closure.
+        self.find_closure_param_declaration(tree, content, var_name, position)
     }
 
     fn find_declarations_in_scope(
@@ -757,7 +1022,7 @@ impl LanguageSupport for GroovySupport {
         let Some(mut current_node) = get_node_at_position(tree, content, position) else {
             return vec![];
         };
-        let reference_byte = current_node.start_byte();
+        let reference_byte = ts_helper::position_to_byte_offset(content, position);
         let mut results = Vec::new();
         loop {
             self.collect_declarations_in_scope(current_node, content, reference_byte, &mut results);

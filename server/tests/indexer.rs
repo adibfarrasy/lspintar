@@ -65,7 +65,11 @@ async fn index_groovy_class() {
                 parameters: None,
                 return_type: None,
                 documentation: None,
-                annotations: Some(vec!["CompileStatic".to_string()])
+                annotations: Some(vec!["CompileStatic".to_string()]),
+                generic_return_type: None,
+                type_params: None,
+                generic_param_types: None,
+                method_type_params: None,
             }),
             last_modified: 0,
         }
@@ -120,7 +124,11 @@ async fn index_groovy_gradle_single_workspace() {
                 parameters: None,
                 return_type: None,
                 documentation: None,
-                annotations: Some(vec![])
+                annotations: Some(vec![]),
+                generic_return_type: None,
+                type_params: None,
+                generic_param_types: None,
+                method_type_params: None,
             }),
             last_modified: 0,
         }
@@ -162,7 +170,11 @@ async fn index_groovy_gradle_single_workspace() {
                 parameters: None,
                 return_type: None,
                 documentation: Some("/**\n* lorem ipsum\n* dolor sit amet\n*/".to_string()),
-                annotations: Some(vec![])
+                annotations: Some(vec![]),
+                generic_return_type: None,
+                type_params: None,
+                generic_param_types: None,
+                method_type_params: None,
             }),
             last_modified: 0,
         }
@@ -204,7 +216,11 @@ async fn index_groovy_gradle_single_workspace() {
                 parameters: Some(vec![]),
                 return_type: Some("String".to_string()),
                 documentation: None,
-                annotations: Some(vec![])
+                annotations: Some(vec![]),
+                generic_return_type: None,
+                type_params: None,
+                generic_param_types: None,
+                method_type_params: None,
             }),
             last_modified: 0,
         }
@@ -246,7 +262,11 @@ async fn index_groovy_gradle_single_workspace() {
                 parameters: None,
                 return_type: Some("String".to_string()),
                 documentation: None,
-                annotations: Some(vec![])
+                annotations: Some(vec![]),
+                generic_return_type: None,
+                type_params: None,
+                generic_param_types: None,
+                method_type_params: None,
             }),
             last_modified: 0,
         }
@@ -301,7 +321,11 @@ async fn index_groovy_class_multi_project() {
                 parameters: None,
                 return_type: None,
                 documentation: None,
-                annotations: Some(vec![])
+                annotations: Some(vec![]),
+                generic_return_type: None,
+                type_params: None,
+                generic_param_types: None,
+                method_type_params: None,
             }),
             last_modified: 0,
         }
@@ -356,7 +380,11 @@ async fn index_groovy_method() {
                 parameters: Some(vec![]),
                 return_type: None,
                 documentation: Some("/**\n    * lorem ipsum\n    * dolor sit amet\n    */".to_string()),
-                annotations: Some(vec!["Override".to_string()])
+                annotations: Some(vec!["Override".to_string()]),
+                generic_return_type: None,
+                type_params: None,
+                generic_param_types: None,
+                method_type_params: None,
             }),
             last_modified: 0,
         }
@@ -411,7 +439,11 @@ async fn index_groovy_nested_class() {
                 parameters: None,
                 return_type: None,
                 documentation: None,
-                annotations: Some(vec![])
+                annotations: Some(vec![]),
+                generic_return_type: None,
+                type_params: None,
+                generic_param_types: None,
+                method_type_params: None,
             }),
             last_modified: 0,
         }
@@ -466,7 +498,11 @@ async fn index_groovy_field() {
                 parameters: None,
                 return_type: Some("int".to_string()),
                 documentation: None,
-                annotations: Some(vec![])
+                annotations: Some(vec![]),
+                generic_return_type: None,
+                type_params: None,
+                generic_param_types: None,
+                method_type_params: None,
             }),
             last_modified: 0,
         }
@@ -526,7 +562,11 @@ async fn index_groovy_inheritance() {
                 parameters: None,
                 return_type: None,
                 documentation: None,
-                annotations: Some(vec![])
+                annotations: Some(vec![]),
+                generic_return_type: None,
+                type_params: None,
+                generic_param_types: None,
+                method_type_params: None,
             }),
             last_modified: 0,
         }
@@ -557,7 +597,11 @@ async fn index_groovy_inheritance() {
                 parameters: None,
                 return_type: None,
                 documentation: None,
-                annotations: Some(vec![])
+                annotations: Some(vec![]),
+                generic_return_type: None,
+                type_params: None,
+                generic_param_types: None,
+                method_type_params: None,
             }),
             last_modified: 0,
         }
@@ -634,7 +678,11 @@ async fn index_kotlin_data_class() {
                 ],),
                 return_type: None,
                 documentation: None,
-                annotations: Some(vec![])
+                annotations: Some(vec![]),
+                generic_return_type: None,
+                type_params: None,
+                generic_param_types: None,
+                method_type_params: None,
             }),
             last_modified: 0,
         }
@@ -675,7 +723,11 @@ async fn index_kotlin_data_class() {
                 parameters: None,
                 return_type: Some("String".to_string()),
                 documentation: None,
-                annotations: Some(vec![])
+                annotations: Some(vec![]),
+                generic_return_type: None,
+                type_params: None,
+                generic_param_types: None,
+                method_type_params: None,
             }),
             last_modified: 0,
         }
@@ -758,6 +810,10 @@ async fn index_external_dep_source_jar() {
                 return_type: None,
                 documentation: Some(doc_string.to_string()),
                 annotations: Some(vec![]),
+                generic_return_type: None,
+                type_params: None,
+                generic_param_types: None,
+                method_type_params: None,
             },),
             last_modified: 0,
             file_type: "java".to_string(),
@@ -837,6 +893,10 @@ async fn index_external_dep_jar() {
                 return_type: None,
                 documentation: None,
                 annotations: Some(vec![]),
+                generic_return_type: None,
+                type_params: None,
+                generic_param_types: None,
+                method_type_params: None,
             },),
             last_modified: 0,
             file_type: "java".to_string(),
@@ -907,6 +967,10 @@ async fn index_jdk_dep_source_jar() {
                 return_type: None,
                 documentation: None,
                 annotations: Some(vec![]),
+                generic_return_type: None,
+                type_params: None,
+                generic_param_types: None,
+                method_type_params: None,
             },),
             last_modified: 0,
             file_type: "java".to_string(),
@@ -994,6 +1058,10 @@ async fn index_external_annotation_dep_jar() {
                     "Documented".to_string(),
                     "Component".to_string()
                 ],),
+                generic_return_type: None,
+                type_params: None,
+                generic_param_types: None,
+                method_type_params: None,
             },),
             last_modified: 0,
             file_type: "java".to_string(),

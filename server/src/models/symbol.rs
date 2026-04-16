@@ -53,11 +53,36 @@ pub struct SymbolMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub return_type: Option<String>,
 
+    /// Generic return type with type variables preserved, e.g. "E" or "List<E>".
+    /// Derived from the JVM Signature attribute; absent when the method is not generic.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub generic_return_type: Option<String>,
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub documentation: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub annotations: Option<Vec<String>>,
+
+    /// Ordered list of type parameter names declared on this class/interface,
+    /// e.g. ["E"] for List<E>, ["K", "V"] for Map<K,V>.
+    /// Derived from the JVM Signature attribute; absent for non-generic types.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub type_params: Option<Vec<String>>,
+
+    /// Generic parameter types for this method with type variables preserved,
+    /// e.g. ["Consumer<T>"] for forEach or ["Function1<T, Unit>"] for Kotlin forEach.
+    /// Derived from the JVM Signature attribute; absent when the method is not generic
+    /// or has no parameters.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub generic_param_types: Option<Vec<String>>,
+
+    /// Ordered list of method-level type parameter names declared on this method,
+    /// e.g. ["R"] for `<R> R map(Function<T, R>)`.
+    /// Derived from the JVM Signature attribute; absent for non-generic methods.
+    /// Used to build call-site bindings when explicit type args appear at the call site.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub method_type_params: Option<Vec<String>>,
 }
 
 impl AsLspLocation for Symbol {

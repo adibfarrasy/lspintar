@@ -3,6 +3,7 @@ use tower_lsp::{LspService, Server};
 
 mod constants;
 mod enums;
+mod generic_resolution;
 mod indexer;
 mod lsp_convert;
 mod models;

@@ -5,7 +5,7 @@ use groovy::GroovySupport;
 use java::JavaSupport;
 use kotlin::KotlinSupport;
 use lsp_core::{
-    build_tools::{BuildToolHandler, get_build_tool},
+    build_tools::{BuildToolHandler, SubprojectClasspath, get_build_tool},
     language_support::LanguageSupport,
     lsp_error, lsp_info, lsp_logging, lsp_progress, lsp_progress_begin, lsp_progress_end,
     util::{capitalize, extract_prefix, extract_receiver, get_import_text_edit},
@@ -29,10 +29,11 @@ use tree_sitter::Tree;
 use crate::{
     Indexer, Repository,
     constants::{
-        APP_VERSION, DB_PATH_FRAGMENT, FILE_CACHE_TTL_SECS, INDEX_PATH_FRAGMENT,
-        MANIFEST_PATH_FRAGMENT,
+        APP_VERSION, CLASSPATH_MANIFEST_PATH_FRAGMENT, DB_PATH_FRAGMENT, FILE_CACHE_TTL_SECS,
+        INDEX_PATH_FRAGMENT, MANIFEST_PATH_FRAGMENT, VCS_REVISION_PATH_FRAGMENT,
     },
     enums::ResolvedSymbol,
+    generic_resolution::{build_type_bindings, parse_type_ref, substitute_type_vars},
     lsp_convert::{AsLspHover, AsLspLocation},
     models::symbol::Symbol,
 };
@@ -56,6 +57,30 @@ pub struct Backend {
     pub documents: DashMap<String, (String, Instant)>,
     /// Debounces `didChangeWatchedFiles` to avoid redundant reindexing.
     debounce_tx: tokio::sync::mpsc::Sender<PathBuf>,
+
+    /// Per-sub-project source-root → classpath JAR mapping.
+    /// Empty when the workspace is a single-project build.
+    subproject_classpath: Arc<RwLock<Vec<SubprojectClasspath>>>,
+}
+
+/// Returns a sort key for completion suggestions.
+/// Lower values appear first:
+///   0 – local variables / method parameters (most relevant)
+///   1 – project symbols in the same package as the current file
+///   2 – project symbols in a different package
+///   3 – external (JAR) symbols
+fn completion_rank(symbol: &ResolvedSymbol, current_package: Option<&str>) -> u8 {
+    match symbol {
+        ResolvedSymbol::Local { .. } => 0,
+        ResolvedSymbol::Project(s) => {
+            if current_package.is_some_and(|pkg| pkg == s.package_name) {
+                1
+            } else {
+                2
+            }
+        }
+        ResolvedSymbol::External(_) => 3,
+    }
 }
 
 impl Backend {
@@ -79,6 +104,7 @@ impl Backend {
             build_tool: Arc::new(RwLock::new(None)),
             documents: DashMap::new(),
             debounce_tx,
+            subproject_classpath: Arc::new(RwLock::new(vec![])),
         };
 
         backend.spawn_debounce_task(debounce_rx);
@@ -475,56 +501,388 @@ impl Backend {
         position: &Position,
         package_name: Option<String>,
     ) -> Option<String> {
-        let parts: Vec<&str> = qualifier.split('#').collect();
+        Box::pin(self.walk_member_chain_inner(
+            qualifier,
+            lang,
+            tree,
+            content,
+            imports,
+            position,
+            package_name,
+            &HashMap::new(),
+        ))
+        .await
+    }
+
+    /// Internal chain walker that supports an explicit scope override map.
+    /// Variables named in `scope_overrides` are resolved to their overridden type
+    /// instead of querying the AST — used to pass lambda parameter types when
+    /// resolving lambda body chains for InferLambdaReturnType.
+    #[allow(clippy::too_many_arguments)]
+    async fn walk_member_chain_inner(
+        &self,
+        qualifier: &str,
+        lang: &Arc<dyn LanguageSupport + Send + Sync>,
+        tree: &Tree,
+        content: &str,
+        imports: Vec<String>,
+        position: &Position,
+        package_name: Option<String>,
+        scope_overrides: &HashMap<String, String>,
+    ) -> Option<String> {
+        // Split off lambda body info: "items#map__lb__param|body_chain"
+        let (chain_part, lambda_body_info) = if let Some(idx) = qualifier.find("__lb__") {
+            (&qualifier[..idx], Some(&qualifier[idx + 6..]))
+        } else {
+            (qualifier, None)
+        };
+
+        let parts: Vec<&str> = chain_part.split('#').collect();
         if parts.is_empty() {
             return None;
         }
-        let base_type =
-            if let Some(var_type) = lang.find_variable_type(tree, content, parts[0], position) {
-                var_type
+
+        // Resolve the base variable's type (may carry generic args like "List<String>").
+        // find_variable_type may return two kinds of special strings:
+        //   "Foo#bar"           — chain expression; resolve recursively.
+        //   "__cp__:..."        — closure/lambda param; resolve from method signature.
+        let base_type_str = {
+            let raw = if let Some(overridden) = scope_overrides.get(parts[0]) {
+                overridden.clone()
             } else {
-                parts[0].to_string()
+                let vtype = lang.find_variable_type(tree, content, parts[0], position);
+                tracing::debug!("[LSPINTAR_COMPLETION] find_variable_type({:?}) = {:?}", parts[0], vtype);
+                vtype.unwrap_or_else(|| parts[0].to_string())
             };
-        let mut current_type_fqn = match self
-            .resolve_fqn(&base_type, imports.clone(), package_name.clone())
-            .await
-        {
-            Some(fqn) => fqn,
-            None => return None,
+            if raw.starts_with("__cp__:") {
+                Box::pin(self.resolve_closure_param_type(
+                    &raw,
+                    lang,
+                    tree,
+                    content,
+                    imports.clone(),
+                    position,
+                    package_name.clone(),
+                ))
+                .await
+                .unwrap_or_else(|| "java.lang.Object".to_string())
+            } else if raw.contains('#') {
+                Box::pin(self.walk_member_chain_inner(
+                    &raw,
+                    lang,
+                    tree,
+                    content,
+                    imports.clone(),
+                    position,
+                    package_name.clone(),
+                    scope_overrides,
+                ))
+                .await
+                .unwrap_or(raw)
+            } else {
+                raw
+            }
         };
-        if parts.len() > 1 {
-            for part in &parts[1..] {
-                let symbols = self
-                    .try_type_member(&current_type_fqn, part, &imports, None)
-                    .await;
-                let resolved = match symbols.into_iter().next() {
-                    Some(s) => s,
-                    None => return None,
+
+        // Split into name + receiver type args: "List<String>" → ("List", ["String"])
+        let (base_name, mut current_type_args) = parse_type_ref(&base_type_str);
+
+        let mut current_type_fqn = self
+            .resolve_fqn(&base_name, imports.clone(), package_name.clone())
+            .await?;
+
+        let parts_len = parts.len();
+        for (step_idx, part) in parts[1..].iter().enumerate() {
+            let is_last_step = step_idx == parts_len - 2;
+
+            // Parse optional call-site type args encoded in the step.
+            // Format: "method__ca__TypeArg1,TypeArg2" encodes explicit call-site type arguments
+            // (e.g. from list.<String>map(...) in Java/Groovy or list.map<String>(...) in Kotlin).
+            let (method_name, call_site_type_args): (&str, Vec<String>) =
+                if let Some(idx) = part.find("__ca__") {
+                    let args = part[idx + 6..]
+                        .split(',')
+                        .filter(|s| !s.is_empty())
+                        .map(|s| s.to_string())
+                        .collect();
+                    (&part[..idx], args)
+                } else {
+                    (part, vec![])
                 };
 
-                current_type_fqn = if let Some(return_type) =
-                    resolved.metadata().and_then(|m| m.return_type.as_ref())
-                {
-                    // For methods/fields, resolve their return/field type
-                    let parent_package = resolved.package_name().unwrap_or_default().to_string();
-                    match self
-                        .resolve_fqn(return_type, imports.clone(), Some(parent_package))
+            // Build type bindings from receiver: look up the class's type params, bind to args.
+            let type_params = self.get_class_type_params(&current_type_fqn).await;
+            let receiver_bindings = build_type_bindings(&type_params, &current_type_args);
+
+            let symbols = self
+                .try_type_member(&current_type_fqn, method_name, &imports, None)
+                .await;
+            let resolved = match symbols.into_iter().next() {
+                Some(s) => s,
+                None => return Some("java.lang.Object".to_string()),
+            };
+
+            let meta = resolved.metadata();
+
+            // Build call-site bindings from explicit type args at the call site.
+            // TypeBindingPrecedence: receiver > call-site > functional parameter.
+            // Receiver bindings are inserted first; call-site entries only fill unbound params.
+            let bindings = {
+                let call_site_type_params = meta
+                    .and_then(|m| m.method_type_params.as_ref())
+                    .cloned()
+                    .unwrap_or_default();
+                let call_site_bindings =
+                    build_type_bindings(&call_site_type_params, &call_site_type_args);
+                let mut merged = receiver_bindings.clone();
+                for (param, bound) in call_site_bindings {
+                    merged.entry(param).or_insert(bound);
+                }
+                merged
+            };
+
+            // Prefer generic_return_type (e.g. "E", "Stream<E>") over erased return_type
+            let return_type_raw = meta
+                .and_then(|m| m.generic_return_type.as_ref().or(m.return_type.as_ref()))
+                .cloned();
+
+            current_type_fqn = if let Some(raw) = return_type_raw {
+                // Substitute type variables: "E" + {E→"String"} → "String"
+                let mut substituted = substitute_type_vars(&raw, &bindings);
+
+                // InferLambdaReturnType: for the last chain step that carries lambda body
+                // info, try to bind any remaining type variables from the lambda body.
+                // `bindings` already carries receiver + call-site; apply_lambda_return_binding
+                // will not override any variable already present (functional param is lowest
+                // priority, enforcing receiver > call-site > functional).
+                if is_last_step {
+                    if let Some(body_info) = lambda_body_info {
+                        if let Some(improved) = Box::pin(self.apply_lambda_return_binding(
+                            &substituted,
+                            &bindings,
+                            meta,
+                            body_info,
+                            lang,
+                            tree,
+                            content,
+                            imports.clone(),
+                            position,
+                            package_name.clone(),
+                            scope_overrides,
+                        ))
                         .await
-                    {
-                        Some(fqn) => fqn,
-                        None => return None,
+                        {
+                            substituted = improved;
+                        }
                     }
-                } else {
-                    // For types (Class/Interface/Enum), use their FQN directly
-                    resolved.package_name().unwrap_or_default().to_string()
-                };
-            }
+                }
+
+                // Split the substituted type into name + new args for next iteration
+                let (ret_name, ret_args) = parse_type_ref(&substituted);
+                current_type_args = ret_args;
+
+                // Resolve the name to FQN
+                let parent_package = resolved.package_name().unwrap_or_default().to_string();
+                self.resolve_fqn(&ret_name, imports.clone(), Some(parent_package))
+                    .await
+                    .unwrap_or(ret_name.to_string())
+            } else {
+                // Type symbol (class/interface) — use FQN directly, no type args
+                current_type_args = vec![];
+                resolved.fully_qualified_name().to_string()
+            };
         }
 
         Some(current_type_fqn)
     }
 
+    /// Applies InferLambdaReturnType: given a partially-substituted return type that
+    /// may still have unbound type variables, tries to bind the output type variable
+    /// of the functional parameter using the lambda body's return type.
+    ///
+    /// `body_info` has the form `"param_name|body_chain"`.
+    /// Returns the improved return type string on success, `None` otherwise.
     #[allow(clippy::too_many_arguments)]
+    async fn apply_lambda_return_binding(
+        &self,
+        substituted_return: &str,
+        existing_bindings: &HashMap<String, String>,
+        meta: Option<&crate::models::symbol::SymbolMetadata>,
+        body_info: &str,
+        lang: &Arc<dyn LanguageSupport + Send + Sync>,
+        tree: &Tree,
+        content: &str,
+        imports: Vec<String>,
+        position: &Position,
+        package_name: Option<String>,
+        scope_overrides: &HashMap<String, String>,
+    ) -> Option<String> {
+        let (param_name, body_chain) = body_info.split_once('|')?;
+
+        // Find a functional parameter type (one with ≥2 type args after substitution).
+        let generic_param_types = meta.and_then(|m| m.generic_param_types.as_ref())?;
+        let functional_param = generic_param_types
+            .iter()
+            .map(|pt| substitute_type_vars(pt, existing_bindings))
+            .find(|pt| parse_type_ref(pt).1.len() >= 2)?;
+
+        let (_, func_args) = parse_type_ref(&functional_param);
+
+        // Input type = first type arg; output type variable = last type arg.
+        let lambda_input_type = func_args.first()?.clone();
+        let lambda_output_var = func_args.last()?.clone();
+
+        // Only proceed when the output variable is still unbound (single word, no '<').
+        if lambda_output_var.contains('<') || existing_bindings.contains_key(&lambda_output_var) {
+            return None;
+        }
+
+        // Resolve the lambda input type to an FQN for the scope override.
+        let (input_base, _) = parse_type_ref(&lambda_input_type);
+        let input_fqn = self
+            .resolve_fqn(&input_base, imports.clone(), package_name.clone())
+            .await
+            .unwrap_or(input_base);
+
+        // Walk the lambda body chain with the parameter type in scope.
+        let mut body_scope = scope_overrides.clone();
+        body_scope.insert(param_name.to_string(), input_fqn);
+
+        let body_return = Box::pin(self.walk_member_chain_inner(
+            body_chain,
+            lang,
+            tree,
+            content,
+            imports,
+            position,
+            package_name,
+            &body_scope,
+        ))
+        .await?;
+
+        // Bind the output type variable to the body return type and re-substitute.
+        let mut new_bindings = existing_bindings.clone();
+        new_bindings.insert(lambda_output_var, body_return);
+        Some(substitute_type_vars(substituted_return, &new_bindings))
+    }
+
+    /// Resolves a `__cp__:receiver_chain:method_name:method_param_idx:lambda_param_idx`
+    /// marker to the concrete type of the lambda parameter.
+    ///
+    /// Strategy:
+    ///   1. Walk the receiver chain to get the receiver's FQN and generic args.
+    ///   2. Look up the method on that type.
+    ///   3. From `generic_param_types[method_param_idx]` get the functional param
+    ///      type (e.g. `"Function1<T, Unit>"` or `"Consumer<T>"`).
+    ///   4. The `lambda_param_idx`-th generic arg of that type is the raw input type.
+    ///   5. Substitute receiver generic bindings to get the concrete type.
+    #[allow(clippy::too_many_arguments)]
+    async fn resolve_closure_param_type(
+        &self,
+        marker: &str,
+        lang: &Arc<dyn LanguageSupport + Send + Sync>,
+        tree: &Tree,
+        content: &str,
+        imports: Vec<String>,
+        position: &Position,
+        package_name: Option<String>,
+    ) -> Option<String> {
+        // marker format: "__cp__:receiver_chain:method_name:method_param_idx:lambda_param_idx"
+        let rest = marker.strip_prefix("__cp__:")?;
+        // Split into at most 4 parts from the right (method_param_idx and lambda_param_idx
+        // are always single tokens; receiver_chain may contain '#' but not ':').
+        let parts: Vec<&str> = rest.splitn(4, ':').collect();
+        if parts.len() != 4 {
+            return None;
+        }
+        let receiver_chain = parts[0];
+        let method_name = parts[1];
+        let method_param_idx: usize = parts[2].parse().ok()?;
+        let lambda_param_idx: usize = parts[3].parse().ok()?;
+
+        // Resolve the receiver to its FQN + generic args.
+        let receiver_fqn_str = Box::pin(self.walk_member_chain(
+            receiver_chain,
+            lang,
+            tree,
+            content,
+            imports.clone(),
+            position,
+            package_name.clone(),
+        ))
+        .await?;
+
+        let (receiver_base, receiver_type_args) = parse_type_ref(&receiver_fqn_str);
+
+        // Look up the method on the receiver type.
+        let method_symbols = self
+            .try_type_member(&receiver_base, method_name, &imports, None)
+            .await;
+        let method_sym = method_symbols.into_iter().next()?;
+
+        // Get the generic_param_types from the method's metadata.
+        let generic_param_types = method_sym
+            .metadata()
+            .and_then(|m| m.generic_param_types.as_ref())?;
+
+        let functional_param_type = generic_param_types.get(method_param_idx)?;
+
+        // Extract the lambda_param_idx-th type argument as the raw input type.
+        let (_, type_args) = parse_type_ref(functional_param_type);
+        let raw_input = type_args.get(lambda_param_idx)?.clone();
+
+        // Bind receiver generic params and substitute.
+        let receiver_type_params = self.get_class_type_params(&receiver_base).await;
+        let bindings = build_type_bindings(&receiver_type_params, &receiver_type_args);
+        let concrete = substitute_type_vars(&raw_input, &bindings);
+
+        // Resolve the concrete type name to its FQN.
+        let (concrete_base, _) = parse_type_ref(&concrete);
+        let method_package = method_sym.package_name().unwrap_or_default().to_string();
+        Some(
+            self.resolve_fqn(&concrete_base, imports, Some(method_package))
+                .await
+                .unwrap_or(concrete_base),
+        )
+    }
+
+    /// Returns the ordered type parameter names for `type_fqn` from the index.
+    /// E.g. "java.util.List" → ["E"], "java.util.Map" → ["K", "V"].
+    async fn get_class_type_params(&self, type_fqn: &str) -> Vec<String> {
+        let Some(repo) = self.repo.get() else {
+            return vec![];
+        };
+        if let Ok(Some(sym)) = repo.find_symbol_by_fqn(type_fqn).await {
+            if let Some(params) = sym.metadata.0.type_params {
+                return params;
+            }
+        }
+        if let Ok(Some(sym)) = repo.find_external_symbol_by_fqn(type_fqn).await {
+            if let Some(params) = sym.metadata.0.type_params {
+                return params;
+            }
+        }
+        vec![]
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    /// Returns the JAR paths that are on the classpath of the sub-project owning `file`.
+    /// Returns an empty vec for single-project workspaces or when the file cannot be matched.
+    async fn jar_paths_for_file(&self, file: &Path) -> Vec<String> {
+        let classpath = self.subproject_classpath.read().await;
+        classpath
+            .iter()
+            .find(|entry| entry.contains_file(file))
+            .map(|entry| {
+                entry
+                    .jar_paths
+                    .iter()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     async fn complete_type_member_chain(
         &self,
         qualifier: &str,
@@ -534,6 +892,7 @@ impl Backend {
         imports: Vec<String>,
         position: &Position,
         package_name: Option<String>,
+        jar_paths: &[String],
     ) -> Vec<ResolvedSymbol> {
         let Some(fqn) = self
             .walk_member_chain(
@@ -547,19 +906,26 @@ impl Backend {
             )
             .await
         else {
+            tracing::debug!("[LSPINTAR_COMPLETION] walk_member_chain returned None for qualifier={qualifier:?}");
             return vec![];
         };
+
+        tracing::debug!("[LSPINTAR_COMPLETION] resolved fqn={fqn:?} for qualifier={qualifier:?}");
 
         if let Some(repo) = self.repo.get() {
             if let Ok(symbols) = repo.find_symbols_by_parent_name(&fqn).await
                 && !symbols.is_empty()
             {
+                tracing::debug!("[LSPINTAR_COMPLETION] found {} project symbols for fqn={fqn:?}", symbols.len());
                 return symbols.into_iter().map(ResolvedSymbol::Project).collect();
             }
 
-            repo.find_external_symbols_by_parent_name(&fqn)
+            let ext_symbols = repo
+                .find_external_symbols_by_parent_name_and_jars(&fqn, jar_paths)
                 .await
-                .unwrap_or_default()
+                .unwrap_or_default();
+            tracing::debug!("[LSPINTAR_COMPLETION] found {} external symbols for fqn={fqn:?}", ext_symbols.len());
+            ext_symbols
                 .into_iter()
                 .map(ResolvedSymbol::External)
                 .collect()
@@ -568,22 +934,25 @@ impl Backend {
         }
     }
 
-    async fn complete_by_prefix(&self, prefix: &str) -> Vec<ResolvedSymbol> {
+    async fn complete_by_prefix(&self, prefix: &str, jar_paths: &[String]) -> Vec<ResolvedSymbol> {
         let Some(repo) = self.repo.get() else {
             return vec![];
         };
 
-        if let Ok(symbols) = repo.find_symbols_by_prefix(prefix).await
-            && !symbols.is_empty()
-        {
-            return symbols.into_iter().map(ResolvedSymbol::Project).collect();
+        let mut symbols: Vec<ResolvedSymbol> = vec![];
+
+        if let Ok(project_syms) = repo.find_symbols_by_prefix(prefix).await {
+            symbols.extend(project_syms.into_iter().map(ResolvedSymbol::Project));
         }
-        repo.find_external_symbols_by_prefix(prefix)
+
+        if let Ok(ext_syms) = repo
+            .find_external_symbols_by_prefix_and_jars(prefix, jar_paths)
             .await
-            .unwrap_or_default()
-            .into_iter()
-            .map(ResolvedSymbol::External)
-            .collect()
+        {
+            symbols.extend(ext_syms.into_iter().map(ResolvedSymbol::External));
+        }
+
+        symbols
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -715,7 +1084,12 @@ impl Backend {
             .parse(&path)
             .ok_or_else(|| tower_lsp::jsonrpc::Error::invalid_params("Failed to parse file"))?;
 
-        let imports = lang.get_imports(&tree, &content);
+        let mut imports = lang.get_imports(&tree, &content);
+        for imp in lang.get_implicit_imports() {
+            if !imports.contains(&imp) {
+                imports.push(imp);
+            }
+        }
         let package_name = lang.get_package_name(&tree, &content);
         let position = params.position;
 
@@ -924,6 +1298,49 @@ impl Backend {
                 lsp_error!("Failed to update manifest file: {e}");
             }
         }
+
+        let build_tool_guard = self.build_tool.read().await;
+        if let Some(bt) = build_tool_guard.as_ref().cloned() {
+            drop(build_tool_guard);
+            self.write_classpath_manifest(root, &bt).await;
+        }
+    }
+
+    async fn write_classpath_manifest(
+        &self,
+        root: &Path,
+        build_tool: &Arc<dyn BuildToolHandler + Send + Sync>,
+    ) {
+        let root_clone = root.to_path_buf();
+        let build_tool_clone = Arc::clone(build_tool);
+        let entries = tokio::task::spawn_blocking(move || {
+            build_tool_clone.get_subproject_classpath(&root_clone)
+        })
+        .await;
+
+        let entries = match entries {
+            Ok(Ok(e)) => e,
+            Ok(Err(e)) => {
+                lsp_error!("Failed to get subproject classpath: {e}");
+                return;
+            }
+            Err(e) => {
+                lsp_error!("Task error getting subproject classpath: {e}");
+                return;
+            }
+        };
+
+        *self.subproject_classpath.write().await = entries.clone();
+
+        let classpath_path = root.join(CLASSPATH_MANIFEST_PATH_FRAGMENT);
+        match serde_json::to_string(&entries) {
+            Ok(json) => {
+                if let Err(e) = tokio::fs::write(&classpath_path, json).await {
+                    lsp_error!("Failed to write classpath manifest: {e}");
+                }
+            }
+            Err(e) => lsp_error!("Failed to serialize classpath manifest: {e}"),
+        }
     }
 
     #[allow(unused)]
@@ -938,8 +1355,9 @@ impl Backend {
             let version_path = root.join(INDEX_PATH_FRAGMENT);
             let db_path = root.join(DB_PATH_FRAGMENT);
             let manifest_path = root.join(MANIFEST_PATH_FRAGMENT);
+            let classpath_manifest_path = root.join(CLASSPATH_MANIFEST_PATH_FRAGMENT);
 
-            if !manifest_path.exists() || !db_path.exists() {
+            if !manifest_path.exists() || !db_path.exists() || !classpath_manifest_path.exists() {
                 return true;
             }
 
@@ -1265,10 +1683,82 @@ impl LanguageServer for Backend {
                     Err(e) => lsp_error!("Failed to serialize manifest file: {e}"),
                 }
 
+                self.write_classpath_manifest(&root, &build_tool).await;
+
                 lsp_info!(
                     "Indexing finished in {:.2}s",
                     indexing_start.elapsed().as_secs_f64()
                 );
+
+                // Record the current VCS revision so the next IncrementalOpen knows
+                // which files changed since this full reindex.
+                if let Ok(rev) = vcs.get_current_revision() {
+                    if let Err(e) =
+                        tokio::fs::write(root.join(VCS_REVISION_PATH_FRAGMENT), &rev).await
+                    {
+                        lsp_error!("Failed to write {VCS_REVISION_PATH_FRAGMENT}: {e}");
+                    }
+                }
+            } else {
+                // IncrementalOpen: load the persisted classpath manifest into memory.
+                let classpath_path = root.join(CLASSPATH_MANIFEST_PATH_FRAGMENT);
+                if let Ok(bytes) = tokio::fs::read(&classpath_path).await {
+                    if let Ok(entries) = serde_json::from_slice(&bytes) {
+                        *self.subproject_classpath.write().await = entries;
+                    }
+                }
+
+                // Re-index only source files that changed since the last stored VCS revision.
+                let stored_rev = tokio::fs::read_to_string(root.join(VCS_REVISION_PATH_FRAGMENT))
+                    .await
+                    .ok()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty());
+
+                if let Some(stored) = stored_rev {
+                    if let Ok(current) = vcs.get_current_revision() {
+                        if stored != current {
+                            match vcs.get_changed_files(&stored, &current, &root) {
+                                Ok(changed) => {
+                                    let supported_exts: std::collections::HashSet<&str> =
+                                        languages.iter().map(|(k, _)| k.as_str()).collect();
+                                    let source_changes: Vec<PathBuf> = changed
+                                        .into_iter()
+                                        .filter(|p| {
+                                            p.extension()
+                                                .and_then(|e| e.to_str())
+                                                .map(|e| supported_exts.contains(e))
+                                                .unwrap_or(false)
+                                        })
+                                        .collect();
+
+                                    if !source_changes.is_empty() {
+                                        lsp_info!(
+                                            "IncrementalOpen: re-indexing {} changed file(s) since {}",
+                                            source_changes.len(),
+                                            &stored[..stored.len().min(8)]
+                                        );
+                                        for path in source_changes {
+                                            let _ = self.debounce_tx.send(path).await;
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    lsp_error!("Failed to get changed files for incremental open: {e}");
+                                }
+                            }
+
+                            if let Err(e) = tokio::fs::write(
+                                root.join(VCS_REVISION_PATH_FRAGMENT),
+                                &current,
+                            )
+                            .await
+                            {
+                                lsp_error!("Failed to update {VCS_REVISION_PATH_FRAGMENT}: {e}");
+                            }
+                        }
+                    }
+                }
             }
 
             *indexer_lock.write().await = Some(indexer);
@@ -1346,7 +1836,12 @@ impl LanguageServer for Backend {
                 tower_lsp::jsonrpc::Error::invalid_params("Failed to parse file".to_string())
             })?;
 
-            let imports = lang.get_imports(&tree, &content);
+            let mut imports = lang.get_imports(&tree, &content);
+            for imp in lang.get_implicit_imports() {
+                if !imports.contains(&imp) {
+                    imports.push(imp);
+                }
+            }
             let package_name = lang.get_package_name(&tree, &content);
 
             let position = params.text_document_position_params.position;
@@ -1541,11 +2036,25 @@ impl LanguageServer for Backend {
             .languages
             .get(ext)
             .ok_or_else(|| tower_lsp::jsonrpc::Error::invalid_params("Unsupported language"))?;
-        let (tree, content) = lang
-            .parse(&path)
-            .ok_or_else(|| tower_lsp::jsonrpc::Error::invalid_params("Failed to parse file"))?;
-        let imports = lang.get_imports(&tree, &content);
+        let cached_content = self
+            .documents
+            .get(&pos.text_document.uri.to_string())
+            .map(|e| e.0.clone());
+        let (tree, content) = if let Some(ref text) = cached_content {
+            lang.parse_str(text)
+        } else {
+            lang.parse(&path)
+        }
+        .ok_or_else(|| tower_lsp::jsonrpc::Error::invalid_params("Failed to parse file"))?;
+        let mut imports = lang.get_imports(&tree, &content);
+        for imp in lang.get_implicit_imports() {
+            if !imports.contains(&imp) {
+                imports.push(imp);
+            }
+        }
         let package_name = lang.get_package_name(&tree, &content);
+
+        let jar_paths = self.jar_paths_for_file(&path).await;
 
         let line_prefix = if line.is_empty() || char_pos == 0 {
             ""
@@ -1555,7 +2064,7 @@ impl LanguageServer for Backend {
                 .map(|(i, _)| &line[..i])
                 .unwrap_or(&line)
         };
-        let symbols = if line_prefix.contains('.') {
+        let mut symbols = if line_prefix.contains('.') {
             let receiver = extract_receiver(&line, char_pos).unwrap_or("");
             self.complete_type_member_chain(
                 receiver,
@@ -1565,25 +2074,29 @@ impl LanguageServer for Backend {
                 imports.clone(),
                 &pos.position,
                 package_name.clone(),
+                &jar_paths,
             )
             .await
         } else {
             let prefix = extract_prefix(&line, char_pos);
-            let mut symbols = self.complete_by_prefix(prefix).await;
 
             let scope_decls = lang.find_declarations_in_scope(&tree, &content, &pos.position);
-            for (name, var_type) in scope_decls {
-                if name.starts_with(prefix) {
-                    symbols.push(ResolvedSymbol::Local {
-                        uri: params.text_document_position.text_document.uri.clone(),
-                        position: pos.position,
-                        name,
-                        var_type,
-                    });
-                }
-            }
+            let mut symbols: Vec<ResolvedSymbol> = scope_decls
+                .into_iter()
+                .filter(|(name, _)| name.starts_with(prefix))
+                .map(|(name, var_type)| ResolvedSymbol::Local {
+                    uri: params.text_document_position.text_document.uri.clone(),
+                    position: pos.position,
+                    name,
+                    var_type,
+                })
+                .collect();
+
+            symbols.extend(self.complete_by_prefix(prefix, &jar_paths).await);
             symbols
         };
+
+        symbols.sort_by_key(|s| completion_rank(s, package_name.as_deref()));
 
         let items: Vec<CompletionItem> =
             symbols
@@ -1664,7 +2177,115 @@ impl LanguageServer for Backend {
         }
     }
 
-    async fn did_change(&self, _params: DidChangeTextDocumentParams) {}
+    async fn references(
+        &self,
+        params: ReferenceParams,
+    ) -> Result<Option<Vec<Location>>> {
+        let text_doc_pos = params.text_document_position;
+        let path = PathBuf::from_str(text_doc_pos.text_document.uri.path()).unwrap();
+        let position = text_doc_pos.position;
+
+        let ext = match path.extension().and_then(|e| e.to_str()) {
+            Some(e) => e.to_string(),
+            None => return Ok(None),
+        };
+        let Some(lang) = self.languages.get(&ext) else {
+            return Ok(None);
+        };
+        let Some((tree, content)) = lang.parse(&path) else {
+            return Ok(None);
+        };
+
+        // Identify the symbol name at the cursor.
+        let Some((ident, _)) = lang.find_ident_at_position(&tree, &content, &position) else {
+            return Ok(None);
+        };
+
+        let Some(repo) = self.repo.get() else {
+            return Ok(None);
+        };
+        let file_paths = repo.find_all_source_file_paths().await.unwrap_or_default();
+
+        let mut locations: Vec<Location> = Vec::new();
+
+        for file_path in file_paths {
+            let fp = PathBuf::from(&file_path);
+            let file_ext = match fp.extension().and_then(|e| e.to_str()) {
+                Some(e) => e.to_string(),
+                None => continue,
+            };
+            let Some(_file_lang) = self.languages.get(&file_ext) else {
+                continue;
+            };
+            let file_content = match std::fs::read_to_string(&fp) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            let Ok(uri) = Url::from_file_path(&fp) else {
+                continue;
+            };
+
+            for (line_idx, line) in file_content.lines().enumerate() {
+                let mut search_start = 0;
+                while let Some(match_pos) = line[search_start..].find(&ident) {
+                    let abs = search_start + match_pos;
+
+                    // Word-boundary check: the character before and after must
+                    // not be an identifier character (letter, digit, or '_').
+                    let is_ident_char = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+                    let before_ok = abs == 0
+                        || !is_ident_char(line.as_bytes()[abs - 1]);
+                    let after_idx = abs + ident.len();
+                    let after_ok = after_idx >= line.len()
+                        || !is_ident_char(line.as_bytes()[after_idx]);
+
+                    if before_ok && after_ok {
+                        let start = Position {
+                            line: line_idx as u32,
+                            character: abs as u32,
+                        };
+                        let end = Position {
+                            line: line_idx as u32,
+                            character: (abs + ident.len()) as u32,
+                        };
+
+                        // Honour include_declaration: skip occurrences in the
+                        // same file at the same position as the request.
+                        let is_request_site = fp == path
+                            && line_idx as u32 == position.line
+                            && abs as u32 <= position.character
+                            && position.character < end.character;
+
+                        if params.context.include_declaration || !is_request_site {
+                            locations.push(Location {
+                                uri: uri.clone(),
+                                range: Range { start, end },
+                            });
+                        }
+                    }
+
+                    search_start = abs + 1;
+                    if search_start >= line.len() {
+                        break;
+                    }
+                }
+            }
+        }
+
+        if locations.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(locations))
+        }
+    }
+
+    async fn did_change(&self, params: DidChangeTextDocumentParams) {
+        let uri = params.text_document.uri.to_string();
+        if let Some(change) = params.content_changes.into_iter().last() {
+            self.documents.insert(uri, (change.text, Instant::now()));
+        }
+    }
 
     async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
         let Some(root) = self.workspace_root.read().await.clone() else {

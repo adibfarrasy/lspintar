@@ -76,6 +76,91 @@ fn test_find_field_type() {
 }
 
 #[test]
+fn test_var_infer_constructor() {
+    let support = JavaSupport::new();
+    let content = r#"
+        class Foo {
+            void test() {
+                var x = new Bar();
+                x.doSomething();
+            }
+        }
+        "#;
+    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let pos = find_position(content, "x.doSomething");
+    let var_type = support.find_variable_type(&parsed.0, &parsed.1, "x", &pos);
+    assert_eq!(var_type, Some("Bar".to_string()));
+}
+
+#[test]
+fn test_var_infer_generic_constructor() {
+    let support = JavaSupport::new();
+    let content = r#"
+        class Foo {
+            void test() {
+                var items = new ArrayList<String>();
+                items.add("test");
+            }
+        }
+        "#;
+    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let pos = find_position(content, "items.add");
+    let var_type = support.find_variable_type(&parsed.0, &parsed.1, "items", &pos);
+    assert_eq!(var_type, Some("ArrayList<String>".to_string()));
+}
+
+#[test]
+fn test_var_infer_string_literal() {
+    let support = JavaSupport::new();
+    let content = r#"
+        class Foo {
+            void test() {
+                var s = "hello";
+                s.toUpperCase();
+            }
+        }
+        "#;
+    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let pos = find_position(content, "s.toUpperCase");
+    let var_type = support.find_variable_type(&parsed.0, &parsed.1, "s", &pos);
+    assert_eq!(var_type, Some("String".to_string()));
+}
+
+#[test]
+fn test_var_infer_integer_literal() {
+    let support = JavaSupport::new();
+    let content = r#"
+        class Foo {
+            void test() {
+                var n = 42;
+                n.toString();
+            }
+        }
+        "#;
+    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let pos = find_position(content, "n.toString");
+    let var_type = support.find_variable_type(&parsed.0, &parsed.1, "n", &pos);
+    assert_eq!(var_type, Some("Integer".to_string()));
+}
+
+#[test]
+fn test_var_infer_boolean_literal() {
+    let support = JavaSupport::new();
+    let content = r#"
+        class Foo {
+            void test() {
+                var b = true;
+                b.toString();
+            }
+        }
+        "#;
+    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let pos = find_position(content, "b.toString");
+    let var_type = support.find_variable_type(&parsed.0, &parsed.1, "b", &pos);
+    assert_eq!(var_type, Some("Boolean".to_string()));
+}
+
+#[test]
 fn test_find_this_type_nested_class() {
     let support = JavaSupport::new();
     let content = r#"

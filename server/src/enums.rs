@@ -48,6 +48,14 @@ impl ResolvedSymbol {
         }
     }
 
+    pub fn fully_qualified_name(&self) -> &str {
+        match self {
+            ResolvedSymbol::Project(s) => &s.fully_qualified_name,
+            ResolvedSymbol::External(s) => &s.fully_qualified_name,
+            ResolvedSymbol::Local { name, .. } => name,
+        }
+    }
+
     pub fn node_kind(&self) -> NodeKind {
         match self {
             ResolvedSymbol::Project(s) => {

@@ -256,18 +256,24 @@ impl JavaSupport {
         let mut result = None;
         let mut process_node = |child: Node, content: &str| -> bool {
             if self.declares_variable(child, content, var_name) {
-                if let Some(type_node) = child.child_by_field_name("type") {
-                    let var_type = type_node
+                let var_type = if let Some(type_node) = child.child_by_field_name("type") {
+                    let type_text = type_node
                         .utf8_text(content.as_bytes())
                         .ok()
                         .map(|s| s.to_string());
-
-                    if let Some((_, var_position)) =
-                        ts_helper::get_one_with_position(&child, content, &DECLARES_VARIABLE_QUERY)
-                    {
-                        result = Some((var_type, var_position));
-                        return false;
+                    match type_text.as_deref() {
+                        Some("var") => self.infer_type_from_declarator(&child, content),
+                        _ => type_text,
                     }
+                } else {
+                    None
+                };
+
+                if let Some((_, var_position)) =
+                    ts_helper::get_one_with_position(&child, content, &DECLARES_VARIABLE_QUERY)
+                {
+                    result = Some((var_type, var_position));
+                    return false;
                 }
             }
             true
@@ -286,9 +292,16 @@ impl JavaSupport {
     ) {
         let mut process_node = |child: Node, content: &str| -> bool {
             let names = ts_helper::get_many(&child, content, &DECLARES_VARIABLE_QUERY, Some(1));
-            let var_type = child
-                .child_by_field_name("type")
-                .map(|t| content[t.start_byte()..t.end_byte()].to_string());
+            let var_type = if let Some(type_node) = child.child_by_field_name("type") {
+                let type_text = content[type_node.start_byte()..type_node.end_byte()].to_string();
+                if type_text == "var" {
+                    self.infer_type_from_declarator(&child, content)
+                } else {
+                    Some(type_text)
+                }
+            } else {
+                None
+            };
 
             for name in names {
                 results.push((name, var_type.clone()));
@@ -303,6 +316,71 @@ impl JavaSupport {
     fn declares_variable(&self, node: Node, content: &str, var_name: &str) -> bool {
         let names = ts_helper::get_many(&node, content, &DECLARES_VARIABLE_QUERY, Some(1));
         names.iter().any(|name| name == var_name)
+    }
+
+    /// Infer a type from the initializer value of a `variable_declarator` child.
+    /// Used for `var` declarations where the type must be derived from the expression.
+    fn infer_type_from_declarator(&self, var_decl_node: &Node, content: &str) -> Option<String> {
+        let declarator = var_decl_node.child_by_field_name("declarator")?;
+        let value = declarator.child_by_field_name("value")?;
+        Self::infer_type_from_value_node(&value, content)
+    }
+
+    /// Extracts a `#`-separated chain qualifier from a `method_invocation` expression.
+    /// Returns `None` if the expression is not a supported chain pattern.
+    /// Examples:
+    ///   `Bar.create()`  → `Some("Bar#create")`
+    ///   `foo.bar().baz()` → `Some("foo#bar#baz")`
+    fn extract_invocation_chain(node: &Node, content: &str) -> Option<String> {
+        match node.kind() {
+            "identifier" => node
+                .utf8_text(content.as_bytes())
+                .ok()
+                .map(|s| s.to_string()),
+            "method_invocation" => {
+                let obj = node.child_by_field_name("object")?;
+                let name_node = node.child_by_field_name("name")?;
+                let obj_chain = Self::extract_invocation_chain(&obj, content)?;
+                let method_name = name_node.utf8_text(content.as_bytes()).ok()?;
+                Some(format!("{}#{}", obj_chain, method_name))
+            }
+            _ => None,
+        }
+    }
+
+    fn infer_type_from_value_node(value_node: &Node, content: &str) -> Option<String> {
+        match value_node.kind() {
+            "object_creation_expression" => {
+                let type_node = value_node.child_by_field_name("type")?;
+                type_node
+                    .utf8_text(content.as_bytes())
+                    .ok()
+                    .map(|s| s.to_string())
+            }
+            "method_invocation" => Self::extract_invocation_chain(value_node, content),
+            "string_literal" | "text_block" => Some("String".to_string()),
+            "decimal_integer_literal"
+            | "hex_integer_literal"
+            | "octal_integer_literal"
+            | "binary_integer_literal" => {
+                let text = value_node.utf8_text(content.as_bytes()).ok()?;
+                if text.ends_with('l') || text.ends_with('L') {
+                    Some("Long".to_string())
+                } else {
+                    Some("Integer".to_string())
+                }
+            }
+            "decimal_floating_point_literal" | "hex_floating_point_literal" => {
+                let text = value_node.utf8_text(content.as_bytes()).ok()?;
+                if text.to_lowercase().ends_with('f') {
+                    Some("Float".to_string())
+                } else {
+                    Some("Double".to_string())
+                }
+            }
+            "true" | "false" => Some("Boolean".to_string()),
+            _ => None,
+        }
     }
 
     fn parse_argument_list(&self, arg_list_node: &Node, content: &str) -> Vec<(String, Position)> {
@@ -741,7 +819,7 @@ impl LanguageSupport for JavaSupport {
             return None;
         }
 
-        let reference_byte = current_node.start_byte();
+        let reference_byte = ts_helper::position_to_byte_offset(content, position);
         loop {
             if let Some(result) =
                 self.find_in_current_scope(current_node, content, var_name, reference_byte)
@@ -766,7 +844,7 @@ impl LanguageSupport for JavaSupport {
         let Some(mut current_node) = get_node_at_position(tree, content, position) else {
             return vec![];
         };
-        let reference_byte = current_node.start_byte();
+        let reference_byte = ts_helper::position_to_byte_offset(content, position);
         let mut results = Vec::new();
         loop {
             self.collect_declarations_in_scope(current_node, content, reference_byte, &mut results);

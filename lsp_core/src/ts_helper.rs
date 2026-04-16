@@ -92,6 +92,25 @@ pub fn node_contains_position(node: &Node, position: &Position) -> bool {
         && (line < end.row || (line == end.row && char <= end.column))
 }
 
+pub fn position_to_byte_offset(content: &str, position: &Position) -> usize {
+    let mut line = 0usize;
+    let mut col = 0usize;
+    let mut byte = 0usize;
+    for ch in content.chars() {
+        if line == position.line as usize && col == position.character as usize {
+            break;
+        }
+        if ch == '\n' {
+            line += 1;
+            col = 0;
+        } else {
+            col += 1;
+        }
+        byte += ch.len_utf8();
+    }
+    byte
+}
+
 pub fn get_node_at_position<'a>(
     tree: &'a Tree,
     content: &str,

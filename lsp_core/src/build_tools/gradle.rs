@@ -5,7 +5,7 @@ use std::{
     process::Command,
 };
 
-use crate::build_tools::BuildToolHandler;
+use crate::build_tools::{BuildToolHandler, SubprojectClasspath};
 
 pub struct GradleHandler;
 
@@ -187,5 +187,78 @@ impl BuildToolHandler for GradleHandler {
             path.file_name().and_then(|n| n.to_str()),
             Some("build.gradle" | "build.gradle.kts" | "settings.gradle" | "settings.gradle.kts")
         )
+    }
+
+    fn get_subproject_classpath(&self, root: &Path) -> Result<Vec<SubprojectClasspath>> {
+        let init_script = r#"
+        allprojects {
+            afterEvaluate {
+                if (['java', 'groovy', 'kotlin', 'org.jetbrains.kotlin.jvm']
+                    .any { plugins.hasPlugin(it) }) {
+                    task lspSubprojectClasspath {
+                        doLast {
+                            def sourceDirs = sourceSets.findAll { it.name == 'main' }
+                                .collect { it.allSource.srcDirs }
+                                .flatten()
+                                .findAll { it.exists() }
+                                *.absolutePath
+                            def jars = (configurations.compileClasspath.files
+                                + configurations.runtimeClasspath.files)
+                                .unique()
+                                *.absolutePath
+                            println groovy.json.JsonOutput.toJson([sourceDirs: sourceDirs, jarPaths: jars])
+                        }
+                    }
+                }
+            }
+        }
+        "#;
+
+        let temp_init = std::env::temp_dir().join("lsp-gradle-subproject-init.gradle");
+        std::fs::write(&temp_init, init_script)?;
+
+        let gradle_cmd = if root.join("gradlew").exists() {
+            "./gradlew"
+        } else {
+            "gradle"
+        };
+
+        let output = Command::new(gradle_cmd)
+            .current_dir(root)
+            .args([
+                "-I",
+                temp_init.to_str().unwrap(),
+                "lspSubprojectClasspath",
+                "-q",
+            ])
+            .output()
+            .context("Failed to execute gradle")?;
+
+        if !output.status.success() {
+            anyhow::bail!("Gradle failed: {}", String::from_utf8_lossy(&output.stderr));
+        }
+
+        let entries = String::from_utf8(output.stdout)?
+            .lines()
+            .filter_map(|line| {
+                let line = line.trim();
+                if line.is_empty() {
+                    return None;
+                }
+                #[derive(serde::Deserialize)]
+                struct Raw {
+                    #[serde(rename = "sourceDirs")]
+                    source_dirs: Vec<String>,
+                    #[serde(rename = "jarPaths")]
+                    jar_paths: Vec<String>,
+                }
+                serde_json::from_str::<Raw>(line).ok().map(|r| SubprojectClasspath {
+                    source_dirs: r.source_dirs.into_iter().map(PathBuf::from).collect(),
+                    jar_paths: r.jar_paths.into_iter().map(PathBuf::from).collect(),
+                })
+            })
+            .collect();
+
+        Ok(entries)
     }
 }
