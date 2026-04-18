@@ -1026,7 +1026,6 @@ impl LanguageSupport for JavaSupport {
                     }
                 }
 
-                // TODO: handle closures and object method invocation
                 return Some(vec![]);
             }
 

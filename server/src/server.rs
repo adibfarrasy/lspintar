@@ -121,6 +121,24 @@ fn is_type_ref_skippable(name: &str, local_types: &[String]) -> bool {
         || (name.len() == 1 && name.chars().next().is_some_and(|c| c.is_uppercase()))
 }
 
+/// Returns true if `(line, col)` is inside a comment node in the parse tree.
+/// Works for any language because all tree-sitter comment node kinds contain "comment".
+fn position_in_comment(tree: &tree_sitter::Tree, line: usize, col: usize) -> bool {
+    let point = tree_sitter::Point::new(line, col);
+    let Some(mut node) = tree.root_node().descendant_for_point_range(point, point) else {
+        return false;
+    };
+    loop {
+        if node.kind().contains("comment") {
+            return true;
+        }
+        match node.parent() {
+            Some(p) => node = p,
+            None => return false,
+        }
+    }
+}
+
 /// Maps a literal AST node kind (+ its text) to a base type name for argument-type comparison.
 /// Returns `None` when the argument is not a simple literal (complex expressions are skipped).
 fn arg_literal_base_type<'a>(node_kind: &'a str, text: &str) -> Option<&'a str> {
@@ -1504,11 +1522,11 @@ impl Backend {
             Ok(Ok(e)) => e,
             Ok(Err(e)) => {
                 lsp_error!("Failed to get subproject classpath: {e}");
-                return;
+                vec![]
             }
             Err(e) => {
                 lsp_error!("Task error getting subproject classpath: {e}");
-                return;
+                vec![]
             }
         };
 
@@ -1563,7 +1581,7 @@ impl Backend {
             .await
             .ok()
             .flatten()
-            .map(|s| s.symbol_type == "interface")
+            .map(|s| s.symbol_type == "Interface")
             .or_else(|| {
                 None // external lookup requires async, handled below
             })
@@ -1576,14 +1594,14 @@ impl Backend {
                 .await
                 .ok()
                 .flatten()
-                .map(|s| s.symbol_type == "interface")
+                .map(|s| s.symbol_type == "Interface")
                 .unwrap_or(false)
         } else {
             true
         };
 
         fn is_required(symbol_type: &str, modifiers: &[String], is_interface: bool) -> bool {
-            if symbol_type != "function" {
+            if symbol_type != "Function" {
                 return false;
             }
             let has_abstract = modifiers.iter().any(|m| m == "abstract");
@@ -1700,7 +1718,7 @@ impl Backend {
                 continue;
             }
             for sym in repo.find_symbols_by_parent_name(&fqn).await.unwrap_or_default() {
-                if sym.short_name == method_name && sym.symbol_type == "function" {
+                if sym.short_name == method_name && sym.symbol_type == "Function" {
                     return sym
                         .metadata
                         .0
@@ -1714,7 +1732,7 @@ impl Backend {
                 .await
                 .unwrap_or_default()
             {
-                if sym.short_name == method_name && sym.symbol_type == "function" {
+                if sym.short_name == method_name && sym.symbol_type == "Function" {
                     return sym
                         .metadata
                         .0
@@ -1730,22 +1748,25 @@ impl Backend {
         None
     }
 
-    async fn publish_diagnostics(&self, uri: Url) {
+    pub async fn compute_diagnostics(&self, uri: &Url) -> Option<Vec<Diagnostic>> {
         let path = PathBuf::from_str(uri.path()).unwrap();
-        let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
-            return;
-        };
-        let Some(lang) = self.languages.get(ext) else {
-            return;
-        };
+        let ext = path.extension().and_then(|e| e.to_str())?;
+        let lang = self.languages.get(ext)?;
         let parse_result = if let Some(entry) = self.documents.get(&uri.to_string()) {
             lang.parse_str(&entry.0)
         } else {
             lang.parse(&path)
         };
-        let Some((tree, content)) = parse_result else {
-            return;
-        };
+        let (tree, content) = parse_result?;
+        Some(self.compute_diagnostics_from_tree(&tree, &content, lang.as_ref()).await)
+    }
+
+    async fn compute_diagnostics_from_tree(
+        &self,
+        tree: &Tree,
+        content: &str,
+        lang: &dyn lsp_core::language_support::LanguageSupport,
+    ) -> Vec<Diagnostic> {
 
         let mut diagnostics = lang.collect_diagnostics(&tree, &content);
 
@@ -2280,9 +2301,15 @@ impl Backend {
             }
         }
 
-        self.client
-            .publish_diagnostics(uri, diagnostics, None)
-            .await;
+        diagnostics
+    }
+
+    async fn publish_diagnostics(&self, uri: Url) {
+        if let Some(diagnostics) = self.compute_diagnostics(&uri).await {
+            self.client
+                .publish_diagnostics(uri, diagnostics, None)
+                .await;
+        }
     }
 }
 
@@ -3134,7 +3161,7 @@ impl LanguageServer for Backend {
                 Some(e) => e.to_string(),
                 None => continue,
             };
-            let Some(_file_lang) = self.languages.get(&file_ext) else {
+            let Some(file_lang) = self.languages.get(&file_ext) else {
                 continue;
             };
             let file_content = match std::fs::read_to_string(&fp) {
@@ -3145,6 +3172,8 @@ impl LanguageServer for Backend {
             let Ok(uri) = Url::from_file_path(&fp) else {
                 continue;
             };
+
+            let parsed_tree = file_lang.parse_str(&file_content);
 
             for (line_idx, line) in file_content.lines().enumerate() {
                 let mut search_start = 0;
@@ -3161,6 +3190,14 @@ impl LanguageServer for Backend {
                         || !is_ident_char(line.as_bytes()[after_idx]);
 
                     if before_ok && after_ok {
+                        // Skip matches inside comments.
+                        if let Some((ref tree, _)) = parsed_tree {
+                            if position_in_comment(tree, line_idx, abs) {
+                                search_start = abs + 1;
+                                if search_start >= line.len() { break; }
+                                continue;
+                            }
+                        }
                         let start = Position {
                             line: line_idx as u32,
                             character: abs as u32,

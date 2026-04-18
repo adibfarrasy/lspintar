@@ -1107,7 +1107,20 @@ impl LanguageSupport for GroovySupport {
                     }
                 }
 
-                // TODO: handle closures and object method invocation
+                // obj.method { closure } has no argument_list; treat the closure as the argument
+                let mut cursor = current.walk();
+                for child in current.children(&mut cursor) {
+                    if child.kind() == "closure" {
+                        if let Ok(closure_text) = child.utf8_text(content.as_bytes()) {
+                            let position = Position {
+                                line: child.start_position().row as u32,
+                                character: child.start_position().column as u32,
+                            };
+                            return Some(vec![(closure_text.to_string(), position)]);
+                        }
+                    }
+                }
+
                 return Some(vec![]);
             }
 

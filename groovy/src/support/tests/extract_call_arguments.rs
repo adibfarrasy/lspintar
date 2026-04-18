@@ -63,3 +63,18 @@ fn test_extract_call_arguments_all_expression_types() {
     assert_eq!(args[13].0, "123");
     assert_eq!(args[14].0, "new ArrayList<>()");
 }
+
+#[test]
+fn test_extract_call_arguments_closure_method_invocation() {
+    let support = GroovySupport::new();
+    let content = r#"obj.method { it.toString() }"#;
+
+    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let pos = find_position(content, "{ it");
+    let args = support.extract_call_arguments(&parsed.0, &parsed.1, &pos);
+
+    assert!(args.is_some());
+    let args = args.unwrap();
+    assert_eq!(args.len(), 1);
+    assert!(args[0].0.contains("it.toString()"));
+}
