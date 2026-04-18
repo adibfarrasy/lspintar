@@ -1,5 +1,5 @@
 use lsp_core::{
-    language_support::{IdentResult, LanguageSupport, ParameterResult, ParseResult},
+    language_support::{CallArgData, ClassDeclarationData, GenericTypeUsage, IdentResult, LanguageSupport, MemberAccessData, MethodCallSiteData, OverrideMethodData, ParameterResult, ParseResult},
     languages::Language,
     node_kind::NodeKind,
     ts_helper::{self, collect_syntax_errors, get_node_at_position, node_contains_position},
@@ -12,10 +12,13 @@ use tree_sitter::{Node, Parser, Point, Query, QueryCursor, QueryMatch, Streaming
 use crate::{
     constants::KOTLIN_IMPLICIT_IMPORTS,
     support::queries::{
-        DECLARES_VARIABLE_QUERY, GET_ANNOTATIONS_QUERY, GET_EXTENDS_QUERY, GET_FIELD_RETURN_QUERY,
-        GET_FIELD_SHORT_NAME_QUERY, GET_FUNCTION_RETURN_QUERY, GET_IMPLEMENTS_QUERY,
-        GET_IMPORTS_QUERY, GET_KDOC_QUERY, GET_MODIFIERS_QUERY, GET_PACKAGE_NAME_QUERY,
-        GET_PARAMETERS_QUERY, GET_SHORT_NAME_QUERY, GET_TYPE_QUERY, IDENT_QUERY,
+        CLASS_METHOD_NAMES_QUERY, DECLARED_TYPES_QUERY, DECLARES_VARIABLE_QUERY,
+        FUNCTION_WITH_RETURN_QUERY, GET_ANNOTATIONS_QUERY, GET_EXTENDS_QUERY,
+        GET_FIELD_RETURN_QUERY, GET_FIELD_SHORT_NAME_QUERY, GET_FUNCTION_RETURN_QUERY,
+        GET_GENERIC_TYPE_USAGES_QUERY, GET_IMPLEMENTS_QUERY, GET_IMPORTS_QUERY, GET_KDOC_QUERY,
+        GET_MEMBER_ACCESSES_QUERY, GET_METHOD_CALL_SITES_QUERY, GET_MODIFIERS_QUERY, GET_OVERRIDE_METHODS_QUERY,
+        GET_PACKAGE_NAME_QUERY, GET_PARAMETERS_QUERY, GET_SHORT_NAME_QUERY, GET_TYPE_QUERY,
+        GET_TYPE_REFS_QUERY, IDENT_QUERY,
     },
 };
 
@@ -740,6 +743,362 @@ impl KotlinSupport {
     }
 }
 
+/// Returns true if `node` contains a return or throw `jump_expression` without
+/// crossing into inner class or lambda boundaries.
+fn has_return_in_block(node: tree_sitter::Node, bytes: &[u8]) -> bool {
+    if node.kind() == "jump_expression" {
+        let text = node.utf8_text(bytes).unwrap_or("");
+        return text.starts_with("return") || text.starts_with("throw");
+    }
+    if matches!(
+        node.kind(),
+        "class_declaration" | "object_declaration" | "lambda_literal"
+    ) {
+        return false;
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if has_return_in_block(child, bytes) {
+            return true;
+        }
+    }
+    false
+}
+
+fn collect_missing_returns(
+    tree: &Tree,
+    source: &str,
+    diagnostics: &mut Vec<tower_lsp::lsp_types::Diagnostic>,
+) {
+    let bytes = source.as_bytes();
+    let mut cursor = QueryCursor::new();
+    let ret_type_idx = FUNCTION_WITH_RETURN_QUERY.capture_index_for_name("ret_type");
+    let name_idx = FUNCTION_WITH_RETURN_QUERY.capture_index_for_name("name");
+
+    cursor
+        .matches(&FUNCTION_WITH_RETURN_QUERY, tree.root_node(), bytes)
+        .for_each(|m| {
+            let Some(ret_cap) = m.captures.iter().find(|c| Some(c.index) == ret_type_idx) else {
+                return;
+            };
+            let Some(name_cap) = m.captures.iter().find(|c| Some(c.index) == name_idx) else {
+                return;
+            };
+
+            // skip Unit and Nothing (always throws)
+            let ret_text = ret_cap.node.utf8_text(bytes).unwrap_or("").trim();
+            if ret_text == "Unit" || ret_text == "Nothing" {
+                return;
+            }
+
+            // parent of the name node is the function_declaration
+            let Some(func_node) = name_cap.node.parent() else {
+                return;
+            };
+
+            // find function_body; then check if it is a block body (has statements child)
+            // vs expression body (direct expression) — expression body always returns
+            let mut func_body_opt = None;
+            let mut c = func_node.walk();
+            for child in func_node.children(&mut c) {
+                if child.kind() == "function_body" {
+                    func_body_opt = Some(child);
+                    break;
+                }
+            }
+            let Some(func_body) = func_body_opt else {
+                return; // abstract or interface function — no body
+            };
+
+            // Determine block body vs expression body by checking for a statements child
+            let is_block_body = {
+                let mut c2 = func_body.walk();
+                func_body
+                    .children(&mut c2)
+                    .any(|ch| ch.kind() == "statements")
+            };
+            if !is_block_body {
+                return; // expression body always implicitly returns
+            }
+
+            if !has_return_in_block(func_body, bytes) {
+                let range = node_to_range(&name_cap.node);
+                let name = name_cap.node.utf8_text(bytes).unwrap_or("?");
+                diagnostics.push(tower_lsp::lsp_types::Diagnostic {
+                    range,
+                    severity: Some(tower_lsp::lsp_types::DiagnosticSeverity::ERROR),
+                    code: Some(tower_lsp::lsp_types::NumberOrString::String(
+                        "missing_return_statement".to_string(),
+                    )),
+                    source: Some("lspintar".to_string()),
+                    message: format!("Missing return statement in function '{name}'"),
+                    ..Default::default()
+                });
+            }
+        });
+}
+
+fn node_to_range(node: &tree_sitter::Node) -> Range {
+    Range {
+        start: tower_lsp::lsp_types::Position {
+            line: node.start_position().row as u32,
+            character: node.start_position().column as u32,
+        },
+        end: tower_lsp::lsp_types::Position {
+            line: node.end_position().row as u32,
+            character: node.end_position().column as u32,
+        },
+    }
+}
+
+fn collect_duplicate_imports(
+    tree: &Tree,
+    source: &str,
+    diagnostics: &mut Vec<tower_lsp::lsp_types::Diagnostic>,
+) {
+    let mut cursor = QueryCursor::new();
+    let bytes = source.as_bytes();
+    let mut seen: std::collections::HashMap<String, Range> = std::collections::HashMap::new();
+
+    cursor
+        .matches(&GET_IMPORTS_QUERY, tree.root_node(), bytes)
+        .for_each(|m| {
+            let Some(cap) = m.captures.first() else {
+                return;
+            };
+            let node = cap.node;
+            let Ok(text) = node.utf8_text(bytes) else {
+                return;
+            };
+            // Kotlin: "import foo.bar.Baz" or "import foo.bar.Baz as Alias" (no semicolon)
+            let fqn = text
+                .trim_start_matches("import ")
+                .trim()
+                .to_string();
+            let range = node_to_range(&node);
+            if seen.contains_key(&fqn) {
+                diagnostics.push(tower_lsp::lsp_types::Diagnostic {
+                    range,
+                    severity: Some(tower_lsp::lsp_types::DiagnosticSeverity::WARNING),
+                    code: Some(tower_lsp::lsp_types::NumberOrString::String(
+                        "duplicate_import".to_string(),
+                    )),
+                    source: Some("lspintar".to_string()),
+                    message: format!("Duplicate import: {fqn}"),
+                    ..Default::default()
+                });
+            } else {
+                seen.insert(fqn, range);
+            }
+        });
+}
+
+fn collect_unused_imports(
+    tree: &Tree,
+    source: &str,
+    diagnostics: &mut Vec<tower_lsp::lsp_types::Diagnostic>,
+) {
+    let mut cursor = QueryCursor::new();
+    let bytes = source.as_bytes();
+    let mut imports: Vec<(String, String, Range)> = Vec::new();
+
+    cursor
+        .matches(&GET_IMPORTS_QUERY, tree.root_node(), bytes)
+        .for_each(|m| {
+            let Some(cap) = m.captures.first() else {
+                return;
+            };
+            let node = cap.node;
+            let Ok(text) = node.utf8_text(bytes) else {
+                return;
+            };
+            let raw = text.trim_start_matches("import ").trim();
+            if raw.ends_with(".*") {
+                return;
+            }
+            // Handle "import X as Y" — the alias is what appears in the body.
+            let (fqn, simple) = if let Some((base, alias)) = raw.split_once(" as ") {
+                (base.trim().to_string(), alias.trim().to_string())
+            } else {
+                let s = raw.split('.').next_back().unwrap_or(raw).to_string();
+                (raw.to_string(), s)
+            };
+            imports.push((fqn, simple, node_to_range(&node)));
+        });
+
+    if imports.is_empty() {
+        return;
+    }
+
+    let import_section_end = imports
+        .iter()
+        .map(|(_, _, r)| {
+            let line = r.end.line as usize;
+            source
+                .lines()
+                .take(line + 1)
+                .map(|l| l.len() + 1)
+                .sum::<usize>()
+        })
+        .max()
+        .unwrap_or(0);
+    let body = if import_section_end < source.len() {
+        &source[import_section_end..]
+    } else {
+        ""
+    };
+
+    for (fqn, simple, range) in imports {
+        if !body_uses_name(body, &simple) {
+            diagnostics.push(tower_lsp::lsp_types::Diagnostic {
+                range,
+                severity: Some(tower_lsp::lsp_types::DiagnosticSeverity::WARNING),
+                code: Some(tower_lsp::lsp_types::NumberOrString::String(
+                    "unused_import".to_string(),
+                )),
+                source: Some("lspintar".to_string()),
+                message: format!("Unused import: {fqn}"),
+                ..Default::default()
+            });
+        }
+    }
+}
+
+/// Returns true if `name` appears as a word-boundary token in `body`.
+fn body_uses_name(body: &str, name: &str) -> bool {
+    let is_id = |c: char| c.is_alphanumeric() || c == '_';
+    let mut start = 0;
+    while let Some(pos) = body[start..].find(name) {
+        let abs = start + pos;
+        let before_ok = abs == 0 || !is_id(body[..abs].chars().next_back().unwrap());
+        let after_ok = abs + name.len() >= body.len()
+            || !is_id(body[abs + name.len()..].chars().next().unwrap());
+        if before_ok && after_ok {
+            return true;
+        }
+        start = abs + 1;
+    }
+    false
+}
+
+fn collect_unchecked_casts(
+    tree: &Tree,
+    source: &str,
+    diagnostics: &mut Vec<tower_lsp::lsp_types::Diagnostic>,
+) {
+    let bytes = source.as_bytes();
+    let mut stack = vec![tree.root_node()];
+    while let Some(node) = stack.pop() {
+        if node.kind() == "as_expression" {
+            // Find the user_type child (the cast target)
+            let mut type_node_opt = None;
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if child.kind() == "user_type" {
+                    type_node_opt = Some(child);
+                }
+            }
+            if let Some(type_node) = type_node_opt {
+                let has_type_args = {
+                    let mut c = type_node.walk();
+                    type_node.children(&mut c).any(|ch| ch.kind() == "type_arguments")
+                };
+                if has_type_args {
+                    let type_text = type_node.utf8_text(bytes).unwrap_or("?");
+                    diagnostics.push(tower_lsp::lsp_types::Diagnostic {
+                        range: node_to_range(&type_node),
+                        severity: Some(tower_lsp::lsp_types::DiagnosticSeverity::WARNING),
+                        code: Some(tower_lsp::lsp_types::NumberOrString::String(
+                            "unchecked_cast".to_string(),
+                        )),
+                        source: Some("lspintar".to_string()),
+                        message: format!(
+                            "Unchecked cast to '{type_text}'; type arguments cannot be verified at runtime due to type erasure"
+                        ),
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+}
+
+fn extract_param_types(func_node: tree_sitter::Node, bytes: &[u8]) -> Vec<String> {
+    let mut cursor = func_node.walk();
+    for child in func_node.children(&mut cursor) {
+        if child.kind() == "parameters" {
+            let mut param_types = Vec::new();
+            let mut pc = child.walk();
+            for param in child.children(&mut pc) {
+                if param.kind() == "parameter" {
+                    if let Some(type_node) = param.child_by_field_name("type") {
+                        if let Ok(t) = type_node.utf8_text(bytes) {
+                            param_types.push(t.to_string());
+                        }
+                    }
+                }
+            }
+            return param_types;
+        }
+    }
+    Vec::new()
+}
+
+fn check_body_for_dup_sigs(
+    body_node: tree_sitter::Node,
+    bytes: &[u8],
+    diagnostics: &mut Vec<tower_lsp::lsp_types::Diagnostic>,
+) {
+    let mut seen: std::collections::HashMap<String, ()> = std::collections::HashMap::new();
+    let mut cursor = body_node.walk();
+    for child in body_node.children(&mut cursor) {
+        if child.kind() != "function_declaration" {
+            continue;
+        }
+        let Some(name_node) = child.child_by_field_name("name") else { continue; };
+        let Ok(name) = name_node.utf8_text(bytes) else { continue; };
+        let param_types = extract_param_types(child, bytes);
+        let sig = format!("{}({})", name, param_types.join(","));
+        if seen.contains_key(&sig) {
+            diagnostics.push(tower_lsp::lsp_types::Diagnostic {
+                range: node_to_range(&name_node),
+                severity: Some(tower_lsp::lsp_types::DiagnosticSeverity::ERROR),
+                code: Some(tower_lsp::lsp_types::NumberOrString::String(
+                    "duplicate_method_signature".to_string(),
+                )),
+                source: Some("lspintar".to_string()),
+                message: format!("Duplicate method signature: '{sig}'"),
+                ..Default::default()
+            });
+        } else {
+            seen.insert(sig, ());
+        }
+    }
+}
+
+fn collect_duplicate_method_signatures(
+    tree: &Tree,
+    source: &str,
+    diagnostics: &mut Vec<tower_lsp::lsp_types::Diagnostic>,
+) {
+    let bytes = source.as_bytes();
+    let mut stack = vec![tree.root_node()];
+    while let Some(node) = stack.pop() {
+        let kind = node.kind();
+        if kind == "class_body" || kind == "enum_class_body" {
+            check_body_for_dup_sigs(node, bytes, diagnostics);
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+}
+
 impl LanguageSupport for KotlinSupport {
     fn get_language(&self) -> Language {
         Language::Kotlin
@@ -1233,7 +1592,777 @@ impl LanguageSupport for KotlinSupport {
     ) -> Vec<tower_lsp::lsp_types::Diagnostic> {
         let mut diagnostics = Vec::new();
         collect_syntax_errors(tree.root_node(), source, &mut diagnostics);
+        collect_duplicate_imports(tree, source, &mut diagnostics);
+        collect_unused_imports(tree, source, &mut diagnostics);
+        collect_missing_returns(tree, source, &mut diagnostics);
+        collect_duplicate_method_signatures(tree, source, &mut diagnostics);
+        collect_unchecked_casts(tree, source, &mut diagnostics);
+        collect_variable_used_before_assignment(tree.root_node(), source.as_bytes(), &mut diagnostics);
+        collect_literal_type_mismatches(tree.root_node(), source.as_bytes(), &mut diagnostics);
+        collect_null_safety_violations(tree.root_node(), source.as_bytes(), &mut diagnostics);
         diagnostics
+    }
+
+    fn get_type_references(&self, tree: &Tree, source: &str) -> Vec<(String, Range)> {
+        let mut cursor = QueryCursor::new();
+        let bytes = source.as_bytes();
+        let mut refs = Vec::new();
+
+        cursor
+            .matches(&GET_TYPE_REFS_QUERY, tree.root_node(), bytes)
+            .for_each(|m| {
+                for cap in m.captures {
+                    let node = cap.node;
+                    let Ok(text) = node.utf8_text(bytes) else {
+                        return;
+                    };
+                    refs.push((text.to_string(), node_to_range(&node)));
+                }
+            });
+
+        refs
+    }
+
+    fn get_declared_type_names(&self, tree: &Tree, source: &str) -> Vec<String> {
+        let mut cursor = QueryCursor::new();
+        let bytes = source.as_bytes();
+        let mut names = Vec::new();
+
+        cursor
+            .matches(&DECLARED_TYPES_QUERY, tree.root_node(), bytes)
+            .for_each(|m| {
+                if let Some(cap) = m.captures.first() {
+                    if let Ok(text) = cap.node.utf8_text(bytes) {
+                        names.push(text.to_string());
+                    }
+                }
+            });
+
+        names
+    }
+
+    fn get_class_declarations(&self, tree: &Tree, source: &str) -> Vec<ClassDeclarationData> {
+        let bytes = source.as_bytes();
+        let mut results = Vec::new();
+        let mut cursor = QueryCursor::new();
+
+        cursor
+            .matches(&DECLARED_TYPES_QUERY, tree.root_node(), bytes)
+            .for_each(|m| {
+                let Some(name_cap) = m.captures.first() else { return; };
+                let name_node = name_cap.node;
+                let Some(type_node) = name_node.parent() else { return; };
+
+                // Only class and object declarations can have unimplemented methods.
+                // interface_declaration is excluded (same as Java).
+                let kind = type_node.kind();
+                if kind != "class_declaration" && kind != "object_declaration" {
+                    return;
+                }
+
+                let Ok(name) = name_node.utf8_text(bytes) else { return; };
+                let ident_range = node_to_range(&name_node);
+                let modifiers = self.get_modifiers(&type_node, source);
+                let is_abstract = modifiers.iter().any(|m| m == "abstract");
+
+                let extends: Vec<String> = self.get_extends(&type_node, source).into_iter().collect();
+                let implements = self.get_implements(&type_node, source);
+                let mut parents = extends;
+                parents.extend(implements);
+
+                let mut defined_method_names = std::collections::HashSet::new();
+                for i in 0..type_node.child_count() {
+                    let Some(child) = type_node.child(i) else { continue };
+                    if child.kind() == "class_body" || child.kind() == "enum_class_body" {
+                        let mut method_cursor = QueryCursor::new();
+                        method_cursor.set_max_start_depth(Some(1));
+                        method_cursor
+                            .matches(&CLASS_METHOD_NAMES_QUERY, child, bytes)
+                            .for_each(|mm| {
+                                if let Some(cap) = mm.captures.first() {
+                                    if let Ok(method_name) = cap.node.utf8_text(bytes) {
+                                        defined_method_names.insert(method_name.to_string());
+                                    }
+                                }
+                            });
+                        break;
+                    }
+                }
+
+                results.push(ClassDeclarationData {
+                    name: name.to_string(),
+                    ident_range,
+                    is_abstract,
+                    parents,
+                    defined_method_names,
+                });
+            });
+
+        results
+    }
+
+    fn get_member_accesses(&self, tree: &Tree, source: &str) -> Vec<MemberAccessData> {
+        let bytes = source.as_bytes();
+        let mut cursor = QueryCursor::new();
+        let mut results = Vec::new();
+        let recv_idx = GET_MEMBER_ACCESSES_QUERY.capture_index_for_name("receiver");
+        let meth_idx = GET_MEMBER_ACCESSES_QUERY.capture_index_for_name("method");
+
+        cursor
+            .matches(&GET_MEMBER_ACCESSES_QUERY, tree.root_node(), bytes)
+            .for_each(|m| {
+                let Some(recv_cap) = m.captures.iter().find(|c| Some(c.index) == recv_idx) else {
+                    return;
+                };
+                let Some(meth_cap) = m.captures.iter().find(|c| Some(c.index) == meth_idx) else {
+                    return;
+                };
+                let Ok(receiver_name) = recv_cap.node.utf8_text(bytes) else { return; };
+                let Ok(member_name) = meth_cap.node.utf8_text(bytes) else { return; };
+                results.push(MemberAccessData {
+                    receiver_name: receiver_name.to_string(),
+                    member_name: member_name.to_string(),
+                    member_range: node_to_range(&meth_cap.node),
+                    receiver_range: node_to_range(&recv_cap.node),
+                });
+            });
+
+        results
+    }
+
+    fn get_generic_type_usages(&self, tree: &Tree, source: &str) -> Vec<GenericTypeUsage> {
+        let bytes = source.as_bytes();
+        let mut cursor = QueryCursor::new();
+        let mut results = Vec::new();
+        let base_idx = GET_GENERIC_TYPE_USAGES_QUERY.capture_index_for_name("base");
+        let args_idx = GET_GENERIC_TYPE_USAGES_QUERY.capture_index_for_name("args");
+
+        cursor
+            .matches(&GET_GENERIC_TYPE_USAGES_QUERY, tree.root_node(), bytes)
+            .for_each(|m| {
+                let Some(base_cap) = m.captures.iter().find(|c| Some(c.index) == base_idx) else {
+                    return;
+                };
+                let Some(args_cap) = m.captures.iter().find(|c| Some(c.index) == args_idx) else {
+                    return;
+                };
+                let Ok(type_name) = base_cap.node.utf8_text(bytes) else { return; };
+                // In Kotlin, type_arguments contains type_projection nodes (and commas).
+                let arg_count = args_cap
+                    .node
+                    .named_children(&mut args_cap.node.walk())
+                    .filter(|n| n.kind() == "type_projection")
+                    .count();
+                let Some(user_type_node) = base_cap.node.parent() else { return; };
+                results.push(GenericTypeUsage {
+                    type_name: type_name.to_string(),
+                    arg_count,
+                    range: node_to_range(&user_type_node),
+                });
+            });
+
+        results
+    }
+
+    fn get_override_methods(&self, tree: &Tree, source: &str) -> Vec<OverrideMethodData> {
+        let bytes = source.as_bytes();
+        let mut cursor = QueryCursor::new();
+        let mut results = Vec::new();
+        let mod_idx = GET_OVERRIDE_METHODS_QUERY.capture_index_for_name("mod");
+        let name_idx = GET_OVERRIDE_METHODS_QUERY.capture_index_for_name("name");
+
+        cursor
+            .matches(&GET_OVERRIDE_METHODS_QUERY, tree.root_node(), bytes)
+            .for_each(|m| {
+                let Some(mod_cap) = m.captures.iter().find(|c| Some(c.index) == mod_idx) else {
+                    return;
+                };
+                let Ok(mod_text) = mod_cap.node.utf8_text(bytes) else { return };
+                if mod_text != "override" {
+                    return;
+                }
+                let Some(name_cap) = m.captures.iter().find(|c| Some(c.index) == name_idx) else {
+                    return;
+                };
+                let Ok(method_name) = name_cap.node.utf8_text(bytes) else { return };
+                // Return type is an optional field on function_declaration — walk up to get it.
+                let return_type = name_cap
+                    .node
+                    .parent()
+                    .and_then(|func| func.child_by_field_name("return_type"))
+                    .and_then(|rt| rt.utf8_text(bytes).ok())
+                    .filter(|s| *s != "Unit")
+                    .map(|s| s.to_string());
+                let Some(containing_class) = find_containing_class(name_cap.node, bytes) else {
+                    return;
+                };
+                results.push(OverrideMethodData {
+                    containing_class,
+                    method_name: method_name.to_string(),
+                    return_type,
+                    range: node_to_range(&name_cap.node),
+                });
+            });
+
+        results
+    }
+
+    fn get_method_call_sites(&self, tree: &Tree, source: &str) -> Vec<MethodCallSiteData> {
+        let bytes = source.as_bytes();
+        let mut cursor = QueryCursor::new();
+        let mut results = Vec::new();
+        let recv_idx = GET_METHOD_CALL_SITES_QUERY.capture_index_for_name("receiver");
+        let meth_idx = GET_METHOD_CALL_SITES_QUERY.capture_index_for_name("method");
+        let args_idx = GET_METHOD_CALL_SITES_QUERY.capture_index_for_name("args");
+
+        cursor
+            .matches(&GET_METHOD_CALL_SITES_QUERY, tree.root_node(), bytes)
+            .for_each(|m| {
+                let Some(recv_cap) = m.captures.iter().find(|c| Some(c.index) == recv_idx) else {
+                    return;
+                };
+                let Some(meth_cap) = m.captures.iter().find(|c| Some(c.index) == meth_idx) else {
+                    return;
+                };
+                let Some(args_cap) = m.captures.iter().find(|c| Some(c.index) == args_idx) else {
+                    return;
+                };
+                let Ok(receiver_name) = recv_cap.node.utf8_text(bytes) else { return };
+                let Ok(method_name) = meth_cap.node.utf8_text(bytes) else { return };
+
+                // In Kotlin, value_arguments contains value_argument children, each wrapping
+                // the actual expression.
+                let mut args = Vec::new();
+                let mut arg_cursor = args_cap.node.walk();
+                for va in args_cap.node.children(&mut arg_cursor) {
+                    if va.kind() != "value_argument" {
+                        continue;
+                    }
+                    // The actual expression is the first named child of value_argument
+                    // (skipping optional named-argument label).
+                    let mut va_cursor = va.walk();
+                    let expr = va.children(&mut va_cursor).find(|n| n.is_named());
+                    let Some(expr) = expr else { continue };
+                    let node_kind = expr.kind().to_string();
+                    let text = expr.utf8_text(bytes).unwrap_or("").to_string();
+                    args.push(CallArgData {
+                        node_kind,
+                        text,
+                        range: node_to_range(&expr),
+                    });
+                }
+
+                results.push(MethodCallSiteData {
+                    receiver_name: receiver_name.to_string(),
+                    receiver_range: node_to_range(&recv_cap.node),
+                    method_name: method_name.to_string(),
+                    method_range: node_to_range(&meth_cap.node),
+                    args,
+                });
+            });
+
+        results
+    }
+}
+
+fn find_containing_class(mut node: Node, bytes: &[u8]) -> Option<String> {
+    while let Some(parent) = node.parent() {
+        if parent.kind() == "class_declaration" {
+            let mut walker = parent.walk();
+            for child in parent.children(&mut walker) {
+                if child.kind() == "identifier" || child.kind() == "type_identifier" {
+                    return child.utf8_text(bytes).ok().map(|s| s.to_string());
+                }
+            }
+        }
+        node = parent;
+    }
+    None
+}
+
+/// Walks the AST looking for `statements` nodes (Kotlin function/lambda bodies) and, within
+/// each, linearly tracks variables declared without an initializer (`val x: T` / `var x: T`),
+/// flagging any read that occurs before the first plain assignment to that variable.
+fn collect_variable_used_before_assignment(
+    node: Node,
+    bytes: &[u8],
+    diagnostics: &mut Vec<tower_lsp::lsp_types::Diagnostic>,
+) {
+    if node.kind() == "statements" {
+        let mut uninit: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut cursor = node.walk();
+        for stmt in node.children(&mut cursor) {
+            kotlin_process_statements_stmt(stmt, bytes, &mut uninit, diagnostics);
+        }
+        return;
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_variable_used_before_assignment(child, bytes, diagnostics);
+    }
+}
+
+fn kotlin_process_statements_stmt(
+    stmt: Node,
+    bytes: &[u8],
+    uninit: &mut std::collections::HashSet<String>,
+    diagnostics: &mut Vec<tower_lsp::lsp_types::Diagnostic>,
+) {
+    match stmt.kind() {
+        "property_declaration" => {
+            let has_value = stmt.child_by_field_name("value").is_some();
+            // Name lives at: property_declaration → variable_declaration → name: identifier
+            let mut var_name: Option<String> = None;
+            {
+                let mut c = stmt.walk();
+                for child in stmt.children(&mut c) {
+                    if child.kind() == "variable_declaration" {
+                        if let Some(name_node) = child.child_by_field_name("name") {
+                            if let Ok(name) = name_node.utf8_text(bytes) {
+                                var_name = Some(name.to_string());
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+            if let Some(name) = var_name {
+                if has_value {
+                    if let Some(val) = stmt.child_by_field_name("value") {
+                        kotlin_scan_reads(val, bytes, uninit, diagnostics);
+                    }
+                    uninit.remove(&name);
+                } else {
+                    uninit.insert(name);
+                }
+            }
+        }
+        "assignment" => {
+            // child(0) = directly_assignable_expression, child(1) = operator, child(2) = RHS
+            let is_pure = stmt
+                .child(1)
+                .and_then(|op| op.utf8_text(bytes).ok())
+                .map(|op| op == "=")
+                .unwrap_or(false);
+            if is_pure {
+                let lhs_name = stmt
+                    .child(0)
+                    .filter(|n| n.kind() == "directly_assignable_expression")
+                    .and_then(|dae| dae.named_child(0))
+                    .filter(|n| n.kind() == "identifier")
+                    .and_then(|n| n.utf8_text(bytes).ok())
+                    .map(|s| s.to_string());
+                if let Some(name) = lhs_name {
+                    if uninit.contains(&name) {
+                        if let Some(rhs) = stmt.child(2) {
+                            kotlin_scan_reads(rhs, bytes, uninit, diagnostics);
+                        }
+                        uninit.remove(&name);
+                        return;
+                    }
+                }
+            }
+            kotlin_scan_reads(stmt, bytes, uninit, diagnostics);
+        }
+        _ => {
+            collect_variable_used_before_assignment(stmt, bytes, diagnostics);
+        }
+    }
+}
+
+fn kotlin_scan_reads(
+    node: Node,
+    bytes: &[u8],
+    uninit: &std::collections::HashSet<String>,
+    diagnostics: &mut Vec<tower_lsp::lsp_types::Diagnostic>,
+) {
+    if uninit.is_empty() {
+        return;
+    }
+    match node.kind() {
+        "assignment" => {
+            let is_pure = node
+                .child(1)
+                .and_then(|op| op.utf8_text(bytes).ok())
+                .map(|op| op == "=")
+                .unwrap_or(false);
+            if !is_pure {
+                if let Some(lhs) = node.child(0) {
+                    kotlin_scan_reads(lhs, bytes, uninit, diagnostics);
+                }
+            }
+            if let Some(rhs) = node.child(2) {
+                kotlin_scan_reads(rhs, bytes, uninit, diagnostics);
+            }
+        }
+        "identifier" => {
+            if let Ok(name) = node.utf8_text(bytes) {
+                if uninit.contains(name) {
+                    diagnostics.push(tower_lsp::lsp_types::Diagnostic {
+                        range: node_to_range(&node),
+                        severity: Some(tower_lsp::lsp_types::DiagnosticSeverity::ERROR),
+                        code: Some(tower_lsp::lsp_types::NumberOrString::String(
+                            "variable_used_before_assignment".to_string(),
+                        )),
+                        source: Some("lspintar".to_string()),
+                        message: format!("Variable '{}' may not have been initialized", name),
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+        _ => {
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                kotlin_scan_reads(child, bytes, uninit, diagnostics);
+            }
+        }
+    }
+}
+
+/// Walks `source_file` and `statements` blocks sequentially, tracking which variables
+/// are declared with nullable types.  Flags:
+///   - null literal assigned to a non-nullable declared type
+///   - null literal returned from a function with a non-nullable return type
+///   - nullable identifier assigned bare to a non-nullable declared type (no `!!`, `?:`, etc.)
+fn collect_null_safety_violations(
+    node: Node,
+    bytes: &[u8],
+    diagnostics: &mut Vec<tower_lsp::lsp_types::Diagnostic>,
+) {
+    if matches!(node.kind(), "source_file" | "statements") {
+        let mut nullable: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut cursor = node.walk();
+        for stmt in node.children(&mut cursor) {
+            kotlin_null_stmt(stmt, bytes, &mut nullable, diagnostics);
+        }
+        return;
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_null_safety_violations(child, bytes, diagnostics);
+    }
+}
+
+fn kotlin_null_stmt(
+    stmt: Node,
+    bytes: &[u8],
+    nullable: &mut std::collections::HashSet<String>,
+    diagnostics: &mut Vec<tower_lsp::lsp_types::Diagnostic>,
+) {
+    match stmt.kind() {
+        "property_declaration" => {
+            let mut cursor = stmt.walk();
+            let var_decl = stmt
+                .children(&mut cursor)
+                .find(|n| n.kind() == "variable_declaration");
+            let Some(var_decl) = var_decl else { return };
+
+            let type_node = var_decl.child_by_field_name("type");
+            let value = stmt.child_by_field_name("value");
+
+            let is_nullable_decl = type_node
+                .map(|n| n.kind() == "nullable_type")
+                .unwrap_or(false);
+
+            if is_nullable_decl {
+                if let Some(name_node) = var_decl.child_by_field_name("name") {
+                    if let Ok(name) = name_node.utf8_text(bytes) {
+                        nullable.insert(name.to_string());
+                    }
+                }
+            } else if let Some(type_n) = type_node {
+                if let Ok(type_text) = type_n.utf8_text(bytes) {
+                    if let Some(val) = value {
+                        let val_kind = val.kind();
+                        if val_kind == "null_literal" {
+                            diagnostics.push(make_null_safety_diag(&val, type_text));
+                        } else if val_kind == "identifier" {
+                            let val_name = val.utf8_text(bytes).unwrap_or("");
+                            if nullable.contains(val_name) {
+                                diagnostics.push(make_null_safety_diag(&val, type_text));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        "function_declaration" => {
+            // Check null returns inside this function
+            kotlin_check_null_returns(stmt, bytes, diagnostics);
+            // Recurse into the body with a fresh nullable scope
+            if let Some(body) = stmt.child_by_field_name("body") {
+                collect_null_safety_violations(body, bytes, diagnostics);
+            }
+        }
+        "jump_expression" => {
+            kotlin_check_null_jump_expr(stmt, bytes, diagnostics);
+        }
+        _ => {
+            collect_null_safety_violations(stmt, bytes, diagnostics);
+        }
+    }
+}
+
+fn kotlin_check_null_jump_expr(
+    node: Node,
+    bytes: &[u8],
+    diagnostics: &mut Vec<tower_lsp::lsp_types::Diagnostic>,
+) {
+    let first = node.child(0);
+    if first.and_then(|n| n.utf8_text(bytes).ok()).as_deref() != Some("return") {
+        return;
+    }
+    let mut cursor = node.walk();
+    let value = node.children(&mut cursor).find(|n| n.is_named());
+    let Some(value) = value else { return };
+    if value.kind() != "null_literal" {
+        return;
+    }
+    let mut parent = node.parent();
+    while let Some(p) = parent {
+        match p.kind() {
+            "lambda_literal" | "anonymous_initializer" => return,
+            "function_declaration" => {
+                let Some(ret_node) = p.child_by_field_name("return_type") else { return };
+                if ret_node.kind() == "nullable_type" {
+                    return;
+                }
+                let Ok(ret_text) = ret_node.utf8_text(bytes) else { return };
+                if ret_text == "Unit" {
+                    return;
+                }
+                diagnostics.push(tower_lsp::lsp_types::Diagnostic {
+                    range: node_to_range(&value),
+                    severity: Some(tower_lsp::lsp_types::DiagnosticSeverity::ERROR),
+                    code: Some(tower_lsp::lsp_types::NumberOrString::String(
+                        "null_safety_violation".to_string(),
+                    )),
+                    source: Some("lspintar".to_string()),
+                    message: format!(
+                        "Null cannot be a value of a non-null type '{ret_text}'"
+                    ),
+                    ..Default::default()
+                });
+                return;
+            }
+            _ => {}
+        }
+        parent = p.parent();
+    }
+}
+
+/// Walk a function's body looking for `jump_expression` returns with null, used when
+/// the function body is not yet entered via the sequential scan (e.g. nested functions).
+fn kotlin_check_null_returns(
+    func_node: Node,
+    bytes: &[u8],
+    diagnostics: &mut Vec<tower_lsp::lsp_types::Diagnostic>,
+) {
+    let Some(ret_node) = func_node.child_by_field_name("return_type") else { return };
+    if ret_node.kind() == "nullable_type" {
+        return;
+    }
+    let Ok(ret_text) = ret_node.utf8_text(bytes) else { return };
+    if ret_text == "Unit" {
+        return;
+    }
+    // Walk the body looking for jump_expressions with null (don't cross lambda boundaries)
+    kotlin_find_null_returns(func_node, bytes, ret_text, diagnostics);
+}
+
+fn kotlin_find_null_returns<'a>(
+    node: Node<'a>,
+    bytes: &[u8],
+    ret_text: &str,
+    diagnostics: &mut Vec<tower_lsp::lsp_types::Diagnostic>,
+) {
+    if matches!(node.kind(), "lambda_literal" | "anonymous_initializer") {
+        return;
+    }
+    if node.kind() == "jump_expression" {
+        let first = node.child(0);
+        if first.and_then(|n| n.utf8_text(bytes).ok()).as_deref() == Some("return") {
+            let mut cursor = node.walk();
+            if let Some(val) = node.children(&mut cursor).find(|n| n.is_named()) {
+                if val.kind() == "null_literal" {
+                    diagnostics.push(tower_lsp::lsp_types::Diagnostic {
+                        range: node_to_range(&val),
+                        severity: Some(tower_lsp::lsp_types::DiagnosticSeverity::ERROR),
+                        code: Some(tower_lsp::lsp_types::NumberOrString::String(
+                            "null_safety_violation".to_string(),
+                        )),
+                        source: Some("lspintar".to_string()),
+                        message: format!(
+                            "Null cannot be a value of a non-null type '{ret_text}'"
+                        ),
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+        return;
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        kotlin_find_null_returns(child, bytes, ret_text, diagnostics);
+    }
+}
+
+fn make_null_safety_diag(
+    node: &Node,
+    expected_type: &str,
+) -> tower_lsp::lsp_types::Diagnostic {
+    tower_lsp::lsp_types::Diagnostic {
+        range: node_to_range(node),
+        severity: Some(tower_lsp::lsp_types::DiagnosticSeverity::ERROR),
+        code: Some(tower_lsp::lsp_types::NumberOrString::String(
+            "null_safety_violation".to_string(),
+        )),
+        source: Some("lspintar".to_string()),
+        message: format!("Null cannot be a value of a non-null type '{expected_type}'"),
+        ..Default::default()
+    }
+}
+
+fn kotlin_is_literal_type_mismatch(type_text: &str, value_kind: &str) -> bool {
+    let is_int_lit = matches!(value_kind, "decimal_integer_literal" | "hex_literal" | "bin_literal");
+    let is_float_lit = value_kind == "real_literal";
+    let is_bool_lit = value_kind == "boolean_literal";
+    let is_string_lit = matches!(value_kind, "string_literal" | "multiline_string_literal");
+    let is_char_lit = value_kind == "character_literal";
+
+    match type_text {
+        "Int" | "Long" | "Short" | "Byte" => is_bool_lit || is_string_lit || is_float_lit,
+        "Float" | "Double" => is_bool_lit || is_string_lit,
+        "Boolean" => is_int_lit || is_float_lit || is_string_lit || is_char_lit,
+        "String" => is_int_lit || is_float_lit || is_bool_lit || is_char_lit,
+        "Char" => is_bool_lit || is_string_lit || is_float_lit,
+        _ => false,
+    }
+}
+
+fn kotlin_literal_type_name(value_kind: &str, value_text: &str) -> &'static str {
+    match value_kind {
+        "decimal_integer_literal" | "hex_literal" | "bin_literal" => {
+            if value_text.ends_with('L') { "Long" } else { "Int" }
+        }
+        "real_literal" => {
+            if value_text.ends_with('f') || value_text.ends_with('F') { "Float" } else { "Double" }
+        }
+        "boolean_literal" => "Boolean",
+        "string_literal" | "multiline_string_literal" => "String",
+        "character_literal" => "Char",
+        _ => "unknown",
+    }
+}
+
+fn collect_literal_type_mismatches(
+    node: Node,
+    bytes: &[u8],
+    diagnostics: &mut Vec<tower_lsp::lsp_types::Diagnostic>,
+) {
+    match node.kind() {
+        "property_declaration" => {
+            check_kotlin_property_literal(node, bytes, diagnostics);
+        }
+        "jump_expression" => {
+            check_kotlin_return_literal(node, bytes, diagnostics);
+        }
+        _ => {}
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_literal_type_mismatches(child, bytes, diagnostics);
+    }
+}
+
+fn check_kotlin_property_literal(
+    node: Node,
+    bytes: &[u8],
+    diagnostics: &mut Vec<tower_lsp::lsp_types::Diagnostic>,
+) {
+    let Some(value) = node.child_by_field_name("value") else { return };
+    let value_kind = value.kind();
+    let value_text = value.utf8_text(bytes).unwrap_or("");
+
+    let mut cursor = node.walk();
+    let var_decl = node.children(&mut cursor).find(|n| n.kind() == "variable_declaration");
+    let Some(var_decl) = var_decl else { return };
+    let Some(type_node) = var_decl.child_by_field_name("type") else { return };
+
+    // nullable types (Int?) — assignment of null is valid; skip
+    if type_node.kind() == "nullable_type" {
+        return;
+    }
+    let Ok(type_text) = type_node.utf8_text(bytes) else { return };
+
+    if kotlin_is_literal_type_mismatch(type_text, value_kind) {
+        let inferred = kotlin_literal_type_name(value_kind, value_text);
+        diagnostics.push(tower_lsp::lsp_types::Diagnostic {
+            range: node_to_range(&value),
+            severity: Some(tower_lsp::lsp_types::DiagnosticSeverity::ERROR),
+            code: Some(tower_lsp::lsp_types::NumberOrString::String(
+                "type_mismatch_assignment".to_string(),
+            )),
+            source: Some("lspintar".to_string()),
+            message: format!("Type mismatch: cannot convert from '{inferred}' to '{type_text}'"),
+            ..Default::default()
+        });
+    }
+}
+
+fn check_kotlin_return_literal(
+    node: Node,
+    bytes: &[u8],
+    diagnostics: &mut Vec<tower_lsp::lsp_types::Diagnostic>,
+) {
+    // "return" is an unnamed first child; skip break/continue
+    let first = node.child(0);
+    if first.and_then(|n| n.utf8_text(bytes).ok()).as_deref() != Some("return") {
+        return;
+    }
+
+    // The return value is the first named child after "return"
+    let mut cursor = node.walk();
+    let value = node.children(&mut cursor).find(|n| n.is_named());
+    let Some(value) = value else { return };
+    let value_kind = value.kind();
+    let value_text = value.utf8_text(bytes).unwrap_or("");
+
+    let mut parent = node.parent();
+    while let Some(p) = parent {
+        match p.kind() {
+            "lambda_literal" | "anonymous_initializer" => return,
+            "function_declaration" => {
+                let Some(ret_node) = p.child_by_field_name("return_type") else { return };
+                if ret_node.kind() == "nullable_type" {
+                    return;
+                }
+                let Ok(ret_text) = ret_node.utf8_text(bytes) else { return };
+                if ret_text == "Unit" {
+                    return;
+                }
+                if kotlin_is_literal_type_mismatch(ret_text, value_kind) {
+                    let inferred = kotlin_literal_type_name(value_kind, value_text);
+                    diagnostics.push(tower_lsp::lsp_types::Diagnostic {
+                        range: node_to_range(&value),
+                        severity: Some(tower_lsp::lsp_types::DiagnosticSeverity::ERROR),
+                        code: Some(tower_lsp::lsp_types::NumberOrString::String(
+                            "incompatible_return_type".to_string(),
+                        )),
+                        source: Some("lspintar".to_string()),
+                        message: format!(
+                            "Return type mismatch: cannot convert from '{inferred}' to '{ret_text}'"
+                        ),
+                        ..Default::default()
+                    });
+                }
+                return;
+            }
+            _ => {}
+        }
+        parent = p.parent();
     }
 }
 
@@ -1242,6 +2371,7 @@ mod tests {
     use tower_lsp::lsp_types::Position;
     use tree_sitter::Node;
 
+    mod collect_diagnostics;
     mod extract_call_arguments;
     mod find_declarations_in_scope;
     mod find_ident_at_position;

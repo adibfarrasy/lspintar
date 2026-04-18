@@ -160,6 +160,123 @@ pub static IDENT_QUERY: LazyLock<Query> = LazyLock::new(|| {
     .unwrap()
 });
 
+/// Captures the names of all type declarations in the file (class, interface, enum, annotation).
+pub static DECLARED_TYPES_QUERY: LazyLock<Query> = LazyLock::new(|| {
+    Query::new(
+        &GROOVY_TS_LANGUAGE,
+        r#"
+        [
+          (class_declaration name: (identifier) @name)
+          (interface_declaration name: (identifier) @name)
+          (enum_declaration name: (identifier) @name)
+          (annotation_type_declaration name: (identifier) @name)
+        ]
+        "#,
+    )
+    .unwrap()
+});
+
+/// Captures type identifier usage sites (not declarations).
+pub static GET_TYPE_REFS_QUERY: LazyLock<Query> = LazyLock::new(|| {
+    Query::new(
+        &GROOVY_TS_LANGUAGE,
+        r#"
+        [
+          (field_declaration type: (type_identifier) @ref)
+          (variable_declaration type: (type_identifier) @ref)
+          (parameter type: (type_identifier) @ref)
+          (array_type (type_identifier) @ref)
+          (generic_type (type_identifier) @ref)
+          (generic_type (type_arguments (type_identifier) @ref))
+          (object_creation_expression type: (type_identifier) @ref)
+          (cast_expression type: (type_identifier) @ref)
+          (superclass (type_identifier) @ref)
+          (super_interfaces (type_list (type_identifier) @ref))
+          (function_declaration type: (type_identifier) @ref)
+        ]
+        "#,
+    )
+    .unwrap()
+});
+
+/// Captures method names directly defined in a class body.
+pub static CLASS_METHOD_NAMES_QUERY: LazyLock<Query> = LazyLock::new(|| {
+    Query::new(
+        &GROOVY_TS_LANGUAGE,
+        r#"(function_declaration name: (identifier) @method_name)"#,
+    )
+    .unwrap()
+});
+
+/// Captures `new T(...)` expressions.
+pub static GET_OBJECT_CREATIONS_QUERY: LazyLock<Query> = LazyLock::new(|| {
+    Query::new(
+        &GROOVY_TS_LANGUAGE,
+        r#"[
+          (object_creation_expression type: (type_identifier) @type_name)
+          (object_creation_expression type: (generic_type (type_identifier) @type_name))
+        ]"#,
+    )
+    .unwrap()
+});
+
+/// Captures qualified member-access call sites `receiver.method(...)`.
+pub static GET_MEMBER_ACCESSES_QUERY: LazyLock<Query> = LazyLock::new(|| {
+    Query::new(
+        &GROOVY_TS_LANGUAGE,
+        r#"(method_invocation
+          object: (identifier) @receiver
+          name: (identifier) @method)"#,
+    )
+    .unwrap()
+});
+
+/// Captures parameterised type usages for wrong_type_argument_count detection.
+pub static GET_GENERIC_TYPE_USAGES_QUERY: LazyLock<Query> = LazyLock::new(|| {
+    Query::new(
+        &GROOVY_TS_LANGUAGE,
+        r#"(generic_type (type_identifier) @base (type_arguments) @args)"#,
+    )
+    .unwrap()
+});
+
+/// Captures @Override-annotated methods: annotation name, method name, return type.
+pub static GET_OVERRIDE_METHODS_QUERY: LazyLock<Query> = LazyLock::new(|| {
+    Query::new(
+        &GROOVY_TS_LANGUAGE,
+        r#"(function_declaration
+          (modifiers (marker_annotation name: (identifier) @ann))
+          type: (_) @ret
+          name: (identifier) @name)"#,
+    )
+    .unwrap()
+});
+
+/// Captures local variable declarations where a numeric primitive is assigned from an identifier.
+pub static GET_NARROWING_CANDIDATES_QUERY: LazyLock<Query> = LazyLock::new(|| {
+    Query::new(
+        &GROOVY_TS_LANGUAGE,
+        r#"(variable_declaration
+          type: (_) @decl_type
+          declarator: (variable_declarator
+            name: (identifier) @decl_name
+            value: (identifier) @rhs_name))"#,
+    )
+    .unwrap()
+});
+
+/// Captures method call sites where the receiver is a simple identifier.
+pub static GET_METHOD_CALL_SITES_QUERY: LazyLock<Query> = LazyLock::new(|| {
+    Query::new(
+        &GROOVY_TS_LANGUAGE,
+        r#"(method_invocation
+          object: (identifier) @receiver
+          name: (identifier) @method
+          arguments: (argument_list) @args)"#,
+    )
+    .unwrap()
+});
+
 pub static GET_TYPE_QUERY: LazyLock<Query> = LazyLock::new(|| {
     Query::new(
         &GROOVY_TS_LANGUAGE,

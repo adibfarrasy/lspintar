@@ -7,6 +7,7 @@ use kotlin::KotlinSupport;
 use lsp_core::{
     build_tools::{BuildToolHandler, SubprojectClasspath, get_build_tool},
     language_support::LanguageSupport,
+    languages::Language,
     lsp_error, lsp_info, lsp_logging, lsp_progress, lsp_progress_begin, lsp_progress_end,
     util::{capitalize, extract_prefix, extract_receiver, get_import_text_edit},
     vcs::{VcsHandler, get_vcs_handler},
@@ -57,10 +58,122 @@ pub struct Backend {
     pub documents: DashMap<String, (String, Instant)>,
     /// Debounces `didChangeWatchedFiles` to avoid redundant reindexing.
     debounce_tx: tokio::sync::mpsc::Sender<PathBuf>,
+    /// Debounces `textDocument/didChange` to trigger diagnostics after 300 ms of idle.
+    diag_debounce_tx: tokio::sync::mpsc::Sender<Url>,
 
     /// Per-sub-project source-root → classpath JAR mapping.
     /// Empty when the workspace is a single-project build.
     subproject_classpath: Arc<RwLock<Vec<SubprojectClasspath>>>,
+}
+
+/// Java primitive types and keywords that are never unresolved.
+const TYPE_REF_SKIP_LIST: &[&str] = &[
+    "boolean", "byte", "char", "double", "float", "int", "long", "short", "void", "var",
+];
+
+/// Methods universally available on every Java/Kotlin/Groovy object (java.lang.Object).
+/// Included in the reachable-method set to avoid false-positive method_not_found diagnostics.
+const JAVA_OBJECT_METHODS: &[&str] = &[
+    "equals", "hashCode", "toString", "getClass", "clone", "finalize",
+    "notify", "notifyAll", "wait",
+];
+
+/// Numeric primitive width used for narrowing_conversion detection.
+/// Returns `None` for non-numeric or non-primitive types.
+fn numeric_width(t: &str) -> Option<u8> {
+    match t {
+        "byte" => Some(1),
+        "short" => Some(2),
+        "int" => Some(3),
+        "long" => Some(4),
+        "float" => Some(5),
+        "double" => Some(6),
+        _ => None,
+    }
+}
+
+/// Returns true when assigning `rhs_type` to a variable of `lhs_type` is a narrowing conversion.
+fn is_narrowing_conversion(lhs_type: &str, rhs_type: &str) -> bool {
+    match (numeric_width(lhs_type), numeric_width(rhs_type)) {
+        (Some(lw), Some(rw)) => rw > lw,
+        _ => false,
+    }
+}
+
+/// Strips generic type arguments and Kotlin nullable markers from a type name, returning
+/// the bare base name for comparison purposes.  E.g. `"List<String>"` → `"List"`, `"Int?"` → `"Int"`.
+fn strip_type_args(t: &str) -> &str {
+    t.split('<').next().unwrap_or(t).trim_end_matches('?').trim()
+}
+
+/// Returns true when a return-type base name is too broad to make a meaningful comparison.
+fn is_unconstrained_return_type(t: &str) -> bool {
+    matches!(t, "void" | "Unit" | "Object" | "Any" | "V" | "T" | "R" | "E")
+}
+
+/// Returns true when a type reference should be skipped during unresolved-symbol checking:
+///   - Java primitive / keyword types
+///   - Types declared in the same file
+///   - Single-character names (likely generic type parameters such as T, E, K, V)
+fn is_type_ref_skippable(name: &str, local_types: &[String]) -> bool {
+    TYPE_REF_SKIP_LIST.contains(&name)
+        || local_types.iter().any(|t| t == name)
+        || (name.len() == 1 && name.chars().next().is_some_and(|c| c.is_uppercase()))
+}
+
+/// Maps a literal AST node kind (+ its text) to a base type name for argument-type comparison.
+/// Returns `None` when the argument is not a simple literal (complex expressions are skipped).
+fn arg_literal_base_type<'a>(node_kind: &'a str, text: &str) -> Option<&'a str> {
+    match node_kind {
+        // Java/Groovy/Kotlin integer literals
+        "decimal_integer_literal"
+        | "hex_integer_literal"
+        | "octal_integer_literal"
+        | "binary_integer_literal"
+        | "hex_literal"
+        | "bin_literal" => {
+            if text.ends_with('l') || text.ends_with('L') {
+                Some("long")
+            } else {
+                Some("int")
+            }
+        }
+        // Java/Groovy float literals
+        "decimal_floating_point_literal" | "hex_floating_point_literal" => {
+            if text.to_lowercase().ends_with('f') { Some("float") } else { Some("double") }
+        }
+        // Kotlin float literal
+        "real_literal" => {
+            if text.ends_with('f') || text.ends_with('F') { Some("float") } else { Some("double") }
+        }
+        "true" | "false" | "boolean_literal" => Some("boolean"),
+        "string_literal" | "text_block" | "multiline_string_literal" => Some("String"),
+        "character_literal" => Some("char"),
+        "null_literal" | "null" => Some("null"),
+        _ => None,
+    }
+}
+
+/// Returns true when a literal of type `arg_base` is compatible with a declared parameter type.
+/// Conservative: returns `true` (compatible) when unsure.
+fn is_arg_compatible_with_param(arg_base: &str, param_type: &str) -> bool {
+    if arg_base == "null" {
+        // null is compatible with any reference type (not with non-null primitives)
+        return !matches!(param_type, "int" | "long" | "short" | "byte" | "char" | "float" | "double" | "boolean");
+    }
+    // Strip package prefix and generics for comparison
+    let p = param_type.split('.').next_back().unwrap_or(param_type);
+    let p = p.split('<').next().unwrap_or(p).trim_end_matches('?').trim();
+    match arg_base {
+        "String" => matches!(p, "String" | "CharSequence" | "Object" | "Any" | "Serializable" | "Comparable"),
+        "int" => matches!(p, "int" | "Integer" | "long" | "Long" | "float" | "Float" | "double" | "Double" | "short" | "Short" | "byte" | "Byte" | "Number" | "Object" | "Any" | "Comparable"),
+        "long" => matches!(p, "long" | "Long" | "float" | "Float" | "double" | "Double" | "Number" | "Object" | "Any"),
+        "float" => matches!(p, "float" | "Float" | "double" | "Double" | "Number" | "Object" | "Any"),
+        "double" => matches!(p, "double" | "Double" | "Number" | "Object" | "Any"),
+        "boolean" => matches!(p, "boolean" | "Boolean" | "Object" | "Any"),
+        "char" => matches!(p, "char" | "Character" | "int" | "Integer" | "long" | "Long" | "Object" | "Any"),
+        _ => true, // unknown arg type — don't flag
+    }
 }
 
 /// Returns a sort key for completion suggestions.
@@ -93,6 +206,7 @@ impl Backend {
         languages.insert("kt".to_string(), Arc::new(KotlinSupport::new()));
 
         let (debounce_tx, debounce_rx) = tokio::sync::mpsc::channel::<PathBuf>(64);
+        let (diag_debounce_tx, diag_debounce_rx) = tokio::sync::mpsc::channel::<Url>(64);
         let backend = Self {
             client,
             indexer: Arc::new(RwLock::new(None)),
@@ -104,18 +218,19 @@ impl Backend {
             build_tool: Arc::new(RwLock::new(None)),
             documents: DashMap::new(),
             debounce_tx,
+            diag_debounce_tx,
             subproject_classpath: Arc::new(RwLock::new(vec![])),
         };
 
         backend.spawn_debounce_task(debounce_rx);
+        backend.spawn_diag_debounce_task(diag_debounce_rx);
         backend
     }
 
     fn spawn_debounce_task(&self, mut debounce_rx: tokio::sync::mpsc::Receiver<PathBuf>) {
         let indexer = Arc::clone(&self.indexer);
         let repo = self.repo.clone();
-        let languages = self.languages.clone();
-        let client = self.client.clone();
+        let backend = self.clone();
 
         tokio::spawn(async move {
             let mut pending: Vec<PathBuf> = Vec::new();
@@ -138,7 +253,6 @@ impl Backend {
                             let path_clone = path.clone();
                             let result = tokio::task::spawn_blocking(move || indexer.index_file(&path_clone)).await;
 
-                            // TODO: similar logic to did_save. maybe extract common logic?
                             match result {
                                 Ok(Ok(Some((symbols, supers)))) => {
                                     for chunk in symbols.chunks(1000) {
@@ -158,20 +272,34 @@ impl Backend {
                                     debug!("Re-indexed: {}", path.display());
 
                                     if let Ok(uri) = Url::from_file_path(&path) {
-                                        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                                            if let Some(lang) = languages.get(ext) {
-                                                if let Some((tree, content)) = lang.parse(&path) {
-                                                    let diagnostics = lang.collect_diagnostics(&tree, &content);
-                                                    client.publish_diagnostics(uri, diagnostics, None).await;
-                                                }
-                                            }
-                                        }
+                                        backend.publish_diagnostics(uri).await;
                                     }
                                 }
                                 Ok(Ok(None)) => warn!("Unsupported file type: {}", path.display()),
                                 Ok(Err(e)) => warn!("Parse error, skipping: {e}"),
                                 Err(e) => warn!("Failed to spawn index task: {e}"),
                             }
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    fn spawn_diag_debounce_task(&self, mut rx: tokio::sync::mpsc::Receiver<Url>) {
+        let backend = self.clone();
+        tokio::spawn(async move {
+            let mut pending: Vec<Url> = Vec::new();
+            loop {
+                tokio::select! {
+                    Some(uri) = rx.recv() => {
+                        if !pending.contains(&uri) {
+                            pending.push(uri);
+                        }
+                    }
+                    _ = tokio::time::sleep(Duration::from_millis(300)), if !pending.is_empty() => {
+                        for uri in std::mem::take(&mut pending) {
+                            backend.publish_diagnostics(uri).await;
                         }
                     }
                 }
@@ -248,6 +376,60 @@ impl Backend {
         }
 
         Some(fallback_fqn)
+    }
+
+    /// Like `resolve_fqn` but returns `None` when the FQN is only a guess.
+    ///
+    /// Used exclusively for `unresolved_symbol` diagnostics where a false positive
+    /// (flagging a valid type as unresolved) is worse than a false negative.
+    ///
+    /// Rules:
+    /// - Already-qualified name (`foo.Bar`) → `Some` always (we trust it).
+    /// - Direct explicit import (`import foo.Bar`) → `Some` always (we trust it).
+    /// - Wildcard import (`import foo.*`) → `Some(foo.Bar)` only when verified in DB.
+    /// - Same-package fallback → `Some(pkg.Bar)` only when verified in project DB.
+    /// - Everything else → `None` (no emit, rather than false positive).
+    async fn resolve_fqn_strict(
+        &self,
+        name: &str,
+        imports: &[String],
+        package_name: Option<String>,
+    ) -> Option<String> {
+        if name.contains('.') {
+            return Some(name.to_string());
+        }
+
+        // Direct non-wildcard import — trust it; outer check will emit if absent from DB.
+        if let Some(import) = imports
+            .iter()
+            .find(|i| !i.ends_with(".*") && i.split('.').next_back() == Some(name))
+        {
+            return Some(import.clone());
+        }
+
+        let repo = self.repo.get()?;
+
+        // Wildcard import match — only return when DB-verified.
+        for import in imports.iter().filter(|i| i.ends_with(".*")) {
+            let tmp_fqn = import.replace("*", name);
+            if repo.find_symbol_by_fqn(&tmp_fqn).await.ok().flatten().is_some() {
+                return Some(tmp_fqn);
+            }
+            if let Ok(Some(_)) = repo.find_external_symbol_by_fqn(&tmp_fqn).await {
+                return Some(tmp_fqn);
+            }
+        }
+
+        // Same-package fallback — only return when found in project DB.
+        if let Some(pkg) = package_name {
+            let fallback = format!("{}.{}", pkg, name);
+            if repo.find_symbol_by_fqn(&fallback).await.ok().flatten().is_some() {
+                return Some(fallback);
+            }
+        }
+
+        // Could not verify — suppress to avoid false positives.
+        None
     }
 
     #[tracing::instrument(skip_all)]
@@ -1368,6 +1550,186 @@ impl Backend {
         }
     }
 
+    /// Returns the short names of methods that are abstract (or implicitly abstract because they
+    /// belong to an interface) in the type identified by `parent_fqn`.
+    async fn abstract_method_names(&self, parent_fqn: &str) -> Vec<String> {
+        let Some(repo) = self.repo.get() else {
+            return vec![];
+        };
+
+        // Determine whether the parent is an interface (project or external).
+        let is_interface = repo
+            .find_symbol_by_fqn(parent_fqn)
+            .await
+            .ok()
+            .flatten()
+            .map(|s| s.symbol_type == "interface")
+            .or_else(|| {
+                None // external lookup requires async, handled below
+            })
+            .unwrap_or_else(|| {
+                false // default: not an interface unless confirmed
+            });
+
+        let is_interface = if !is_interface {
+            repo.find_external_symbol_by_fqn(parent_fqn)
+                .await
+                .ok()
+                .flatten()
+                .map(|s| s.symbol_type == "interface")
+                .unwrap_or(false)
+        } else {
+            true
+        };
+
+        fn is_required(symbol_type: &str, modifiers: &[String], is_interface: bool) -> bool {
+            if symbol_type != "function" {
+                return false;
+            }
+            let has_abstract = modifiers.iter().any(|m| m == "abstract");
+            let has_default = modifiers.iter().any(|m| m == "default");
+            let has_static = modifiers.iter().any(|m| m == "static");
+            has_abstract || (is_interface && !has_default && !has_static)
+        }
+
+        let mut names = Vec::new();
+
+        for sym in repo
+            .find_symbols_by_parent_name(parent_fqn)
+            .await
+            .unwrap_or_default()
+        {
+            if is_required(&sym.symbol_type, &sym.modifiers.0, is_interface) {
+                names.push(sym.short_name.clone());
+            }
+        }
+
+        for sym in repo
+            .find_external_symbols_by_parent_name(parent_fqn)
+            .await
+            .unwrap_or_default()
+        {
+            if is_required(&sym.symbol_type, &sym.modifiers.0, is_interface) {
+                names.push(sym.short_name.clone());
+            }
+        }
+
+        names
+    }
+
+    /// Returns the modifiers of a type (class/interface/enum) identified by its FQN.
+    /// Checks project symbols first, then external symbols.
+    async fn type_modifiers(&self, fqn: &str) -> Vec<String> {
+        let Some(repo) = self.repo.get() else {
+            return vec![];
+        };
+        if let Some(sym) = repo.find_symbol_by_fqn(fqn).await.ok().flatten() {
+            return sym.modifiers.0.clone();
+        }
+        if let Some(sym) = repo.find_external_symbol_by_fqn(fqn).await.ok().flatten() {
+            return sym.modifiers.0.clone();
+        }
+        vec![]
+    }
+
+    /// Returns the set of all method names reachable on a type (direct + inherited via supers).
+    /// Follows the project super-mapping chain one level; also includes direct external methods.
+    async fn reachable_method_names(&self, type_fqn: &str) -> HashSet<String> {
+        let Some(repo) = self.repo.get() else {
+            return HashSet::new();
+        };
+        let mut visited: HashSet<String> = HashSet::new();
+        let mut queue = vec![type_fqn.to_string()];
+        let mut names: HashSet<String> = JAVA_OBJECT_METHODS.iter().map(|s| s.to_string()).collect();
+
+        while let Some(fqn) = queue.pop() {
+            if !visited.insert(fqn.clone()) {
+                continue;
+            }
+            for sym in repo.find_symbols_by_parent_name(&fqn).await.unwrap_or_default() {
+                names.insert(sym.short_name);
+            }
+            for sym in repo.find_external_symbols_by_parent_name(&fqn).await.unwrap_or_default() {
+                names.insert(sym.short_name);
+            }
+            // Follow project supers one step
+            for s in repo.find_supers_by_symbol_fqn(&fqn).await.unwrap_or_default() {
+                queue.push(s.fully_qualified_name);
+            }
+        }
+        names
+    }
+
+    /// Returns the list of (modifiers, declaring_type_fqn) for all members named `member_name`
+    /// that are directly declared on `type_fqn` (no inheritance).
+    async fn direct_member_symbols(
+        &self,
+        type_fqn: &str,
+        member_name: &str,
+    ) -> Vec<Vec<String>> {
+        let Some(repo) = self.repo.get() else {
+            return vec![];
+        };
+        let mut results = Vec::new();
+        for sym in repo.find_symbols_by_parent_name(type_fqn).await.unwrap_or_default() {
+            if sym.short_name == member_name {
+                results.push(sym.modifiers.0.clone());
+            }
+        }
+        for sym in repo.find_external_symbols_by_parent_name(type_fqn).await.unwrap_or_default() {
+            if sym.short_name == member_name {
+                results.push(sym.modifiers.0.clone());
+            }
+        }
+        results
+    }
+
+    /// Walks the supertype chain of `class_fqn` and returns the return type of the first method
+    /// named `method_name` found in any direct or inherited supertype.
+    async fn parent_method_return_type(
+        &self,
+        class_fqn: &str,
+        method_name: &str,
+    ) -> Option<String> {
+        let repo = self.repo.get()?;
+        let mut visited: HashSet<String> = HashSet::new();
+        let mut queue = vec![class_fqn.to_string()];
+
+        while let Some(fqn) = queue.pop() {
+            if !visited.insert(fqn.clone()) {
+                continue;
+            }
+            for sym in repo.find_symbols_by_parent_name(&fqn).await.unwrap_or_default() {
+                if sym.short_name == method_name && sym.symbol_type == "function" {
+                    return sym
+                        .metadata
+                        .0
+                        .generic_return_type
+                        .clone()
+                        .or_else(|| sym.metadata.0.return_type.clone());
+                }
+            }
+            for sym in repo
+                .find_external_symbols_by_parent_name(&fqn)
+                .await
+                .unwrap_or_default()
+            {
+                if sym.short_name == method_name && sym.symbol_type == "function" {
+                    return sym
+                        .metadata
+                        .0
+                        .generic_return_type
+                        .clone()
+                        .or_else(|| sym.metadata.0.return_type.clone());
+                }
+            }
+            for s in repo.find_supers_by_symbol_fqn(&fqn).await.unwrap_or_default() {
+                queue.push(s.fully_qualified_name);
+            }
+        }
+        None
+    }
+
     async fn publish_diagnostics(&self, uri: Url) {
         let path = PathBuf::from_str(uri.path()).unwrap();
         let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
@@ -1376,10 +1738,548 @@ impl Backend {
         let Some(lang) = self.languages.get(ext) else {
             return;
         };
-        let Some((tree, content)) = lang.parse(&path) else {
+        let parse_result = if let Some(entry) = self.documents.get(&uri.to_string()) {
+            lang.parse_str(&entry.0)
+        } else {
+            lang.parse(&path)
+        };
+        let Some((tree, content)) = parse_result else {
             return;
         };
-        let diagnostics = lang.collect_diagnostics(&tree, &content);
+
+        let mut diagnostics = lang.collect_diagnostics(&tree, &content);
+
+        // Semantic check: unresolved symbols
+        let type_refs = lang.get_type_references(&tree, &content);
+        if !type_refs.is_empty() {
+            if let Some(repo) = self.repo.get() {
+                let imports = lang.get_imports(&tree, &content);
+                let package = lang.get_package_name(&tree, &content);
+                let local_types = lang.get_declared_type_names(&tree, &content);
+
+                for (name, range) in type_refs {
+                    if is_type_ref_skippable(&name, &local_types) {
+                        continue;
+                    }
+                    let resolved = self
+                        .resolve_fqn_strict(&name, &imports, package.clone())
+                        .await;
+                    let Some(fqn) = resolved else {
+                        continue;
+                    };
+                    let in_project = repo
+                        .find_symbol_by_fqn(&fqn)
+                        .await
+                        .ok()
+                        .flatten()
+                        .is_some();
+                    let in_external = !in_project
+                        && repo
+                            .find_external_symbol_by_fqn(&fqn)
+                            .await
+                            .ok()
+                            .flatten()
+                            .is_some();
+                    if !in_project && !in_external {
+                        diagnostics.push(Diagnostic {
+                            range,
+                            severity: Some(DiagnosticSeverity::ERROR),
+                            code: Some(NumberOrString::String(
+                                "unresolved_symbol".to_string(),
+                            )),
+                            source: Some("lspintar".to_string()),
+                            message: format!("Cannot resolve symbol '{name}'"),
+                            ..Default::default()
+                        });
+                    }
+                }
+            }
+        }
+
+        // Semantic check: unimplemented abstract methods
+        let class_decls = lang.get_class_declarations(&tree, &content);
+        if !class_decls.is_empty() {
+            let imports = lang.get_imports(&tree, &content);
+            let package = lang.get_package_name(&tree, &content);
+
+            for class_data in class_decls {
+                if class_data.is_abstract {
+                    continue;
+                }
+                for parent_name in &class_data.parents {
+                    let Some(parent_fqn) = self
+                        .resolve_fqn(parent_name, imports.clone(), package.clone())
+                        .await
+                    else {
+                        continue;
+                    };
+                    // final_class_extended: check whether the parent is declared final.
+                    let parent_mods = self.type_modifiers(&parent_fqn).await;
+                    if parent_mods.iter().any(|m| m == "final") {
+                        diagnostics.push(Diagnostic {
+                            range: class_data.ident_range,
+                            severity: Some(DiagnosticSeverity::ERROR),
+                            code: Some(NumberOrString::String(
+                                "final_class_extended".to_string(),
+                            )),
+                            source: Some("lspintar".to_string()),
+                            message: format!(
+                                "'{}' cannot extend final class '{}'",
+                                class_data.name, parent_name
+                            ),
+                            ..Default::default()
+                        });
+                    }
+
+                    let required = self.abstract_method_names(&parent_fqn).await;
+                    for method_name in required {
+                        if !class_data.defined_method_names.contains(&method_name) {
+                            diagnostics.push(Diagnostic {
+                                range: class_data.ident_range,
+                                severity: Some(DiagnosticSeverity::ERROR),
+                                code: Some(NumberOrString::String(
+                                    "unimplemented_abstract_methods".to_string(),
+                                )),
+                                source: Some("lspintar".to_string()),
+                                message: format!(
+                                    "'{}' must implement '{}'",
+                                    class_data.name, method_name
+                                ),
+                                ..Default::default()
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        // Semantic check: abstract_class_instantiated
+        let object_creations = lang.get_object_creations(&tree, &content);
+        if !object_creations.is_empty() {
+            if self.repo.get().is_some() {
+                let imports = lang.get_imports(&tree, &content);
+                let package = lang.get_package_name(&tree, &content);
+
+                for creation in object_creations {
+                    let Some(fqn) = self
+                        .resolve_fqn(&creation.type_name, imports.clone(), package.clone())
+                        .await
+                    else {
+                        continue;
+                    };
+                    let mods = self.type_modifiers(&fqn).await;
+                    if mods.iter().any(|m| m == "abstract") {
+                        diagnostics.push(Diagnostic {
+                            range: creation.range,
+                            severity: Some(DiagnosticSeverity::ERROR),
+                            code: Some(NumberOrString::String(
+                                "abstract_class_instantiated".to_string(),
+                            )),
+                            source: Some("lspintar".to_string()),
+                            message: format!(
+                                "Cannot instantiate abstract class '{}'",
+                                creation.type_name
+                            ),
+                            ..Default::default()
+                        });
+                    }
+                }
+            }
+        }
+
+        // Semantic checks: method_not_found, inaccessible_member, static_member_via_instance
+        let member_accesses = lang.get_member_accesses(&tree, &content);
+        if !member_accesses.is_empty() {
+            if let Some(_repo) = self.repo.get() {
+                let imports = lang.get_imports(&tree, &content);
+                let package = lang.get_package_name(&tree, &content);
+
+                for access in member_accesses {
+                    let receiver_pos = access.receiver_range.start;
+                    let Some(raw_type) =
+                        lang.find_variable_type(&tree, &content, &access.receiver_name, &receiver_pos)
+                    else {
+                        continue;
+                    };
+                    // Strip generic arguments from the type name (e.g. "List<String>" → "List")
+                    let base_type = raw_type
+                        .split('<')
+                        .next()
+                        .unwrap_or(&raw_type)
+                        .trim()
+                        .to_string();
+                    if is_type_ref_skippable(&base_type, &[]) {
+                        continue;
+                    }
+                    let Some(type_fqn) = self
+                        .resolve_fqn(&base_type, imports.clone(), package.clone())
+                        .await
+                    else {
+                        continue;
+                    };
+
+                    let reachable = self.reachable_method_names(&type_fqn).await;
+
+                    if !reachable.contains(&access.member_name) {
+                        // Only emit method_not_found for Java (extension methods in Groovy/Kotlin
+                        // cause excessive false positives).
+                        if lang.get_language() == Language::Java {
+                            diagnostics.push(Diagnostic {
+                                range: access.member_range,
+                                severity: Some(DiagnosticSeverity::ERROR),
+                                code: Some(NumberOrString::String(
+                                    "method_not_found".to_string(),
+                                )),
+                                source: Some("lspintar".to_string()),
+                                message: format!(
+                                    "Method '{}' not found on type '{}'",
+                                    access.member_name, base_type
+                                ),
+                                ..Default::default()
+                            });
+                        }
+                        // Skip modifier checks when method isn't found
+                        continue;
+                    }
+
+                    // Check direct-member modifiers (first overload that exists)
+                    let direct = self
+                        .direct_member_symbols(&type_fqn, &access.member_name)
+                        .await;
+                    if direct.is_empty() {
+                        // Method exists only on a super — skip modifier checks
+                        continue;
+                    }
+
+                    // inaccessible_member: all overloads are private
+                    let all_private =
+                        direct.iter().all(|mods| mods.iter().any(|m| m == "private"));
+                    if all_private {
+                        diagnostics.push(Diagnostic {
+                            range: access.member_range,
+                            severity: Some(DiagnosticSeverity::ERROR),
+                            code: Some(NumberOrString::String(
+                                "inaccessible_member".to_string(),
+                            )),
+                            source: Some("lspintar".to_string()),
+                            message: format!(
+                                "'{}' has private access in '{}'",
+                                access.member_name, base_type
+                            ),
+                            ..Default::default()
+                        });
+                        continue;
+                    }
+
+                    // static_member_via_instance: at least one overload is static but
+                    // we're calling it on an instance variable
+                    let any_static =
+                        direct.iter().any(|mods| mods.iter().any(|m| m == "static"));
+                    if any_static {
+                        diagnostics.push(Diagnostic {
+                            range: access.member_range,
+                            severity: Some(DiagnosticSeverity::WARNING),
+                            code: Some(NumberOrString::String(
+                                "static_member_via_instance".to_string(),
+                            )),
+                            source: Some("lspintar".to_string()),
+                            message: format!(
+                                "Static member '{}' accessed via instance reference",
+                                access.member_name
+                            ),
+                            ..Default::default()
+                        });
+                    }
+                }
+            }
+        }
+
+        // Semantic check: wrong_type_argument_count
+        let generic_usages = lang.get_generic_type_usages(&tree, &content);
+        if !generic_usages.is_empty() {
+            if let Some(repo) = self.repo.get() {
+                let imports = lang.get_imports(&tree, &content);
+                let package = lang.get_package_name(&tree, &content);
+                let local_types = lang.get_declared_type_names(&tree, &content);
+
+                for usage in generic_usages {
+                    if is_type_ref_skippable(&usage.type_name, &local_types) {
+                        continue;
+                    }
+                    let Some(fqn) = self
+                        .resolve_fqn(&usage.type_name, imports.clone(), package.clone())
+                        .await
+                    else {
+                        continue;
+                    };
+                    // Look up the expected number of type parameters
+                    let expected = repo
+                        .find_symbol_by_fqn(&fqn)
+                        .await
+                        .ok()
+                        .flatten()
+                        .and_then(|s| s.metadata.0.type_params)
+                        .or_else(|| {
+                            // will be resolved below for external symbols
+                            None
+                        });
+                    let expected = if expected.is_none() {
+                        repo.find_external_symbol_by_fqn(&fqn)
+                            .await
+                            .ok()
+                            .flatten()
+                            .and_then(|s| s.metadata.0.type_params)
+                    } else {
+                        expected
+                    };
+                    let Some(type_params) = expected else {
+                        continue; // not a generic type or not indexed
+                    };
+                    let expected_count = type_params.len();
+                    if usage.arg_count != expected_count {
+                        diagnostics.push(Diagnostic {
+                            range: usage.range,
+                            severity: Some(DiagnosticSeverity::ERROR),
+                            code: Some(NumberOrString::String(
+                                "wrong_type_argument_count".to_string(),
+                            )),
+                            source: Some("lspintar".to_string()),
+                            message: format!(
+                                "'{}' expects {} type argument{}, but {} {} supplied",
+                                usage.type_name,
+                                expected_count,
+                                if expected_count == 1 { "" } else { "s" },
+                                usage.arg_count,
+                                if usage.arg_count == 1 { "was" } else { "were" },
+                            ),
+                            ..Default::default()
+                        });
+                    }
+                }
+            }
+        }
+
+        // Semantic check: override_incompatible_signature
+        let override_methods = lang.get_override_methods(&tree, &content);
+        if !override_methods.is_empty() {
+            let imports = lang.get_imports(&tree, &content);
+            let package = lang.get_package_name(&tree, &content);
+
+            for method in override_methods {
+                let Some(class_fqn) = self
+                    .resolve_fqn(&method.containing_class, imports.clone(), package.clone())
+                    .await
+                else {
+                    continue;
+                };
+                let Some(parent_ret_raw) = self
+                    .parent_method_return_type(&class_fqn, &method.method_name)
+                    .await
+                else {
+                    continue;
+                };
+                let parent_base = strip_type_args(&parent_ret_raw);
+                if is_unconstrained_return_type(parent_base) {
+                    continue;
+                }
+
+                let override_base = method
+                    .return_type
+                    .as_deref()
+                    .map(strip_type_args)
+                    .unwrap_or("void");
+                if is_unconstrained_return_type(override_base) {
+                    continue;
+                }
+
+                if override_base != parent_base {
+                    diagnostics.push(Diagnostic {
+                        range: method.range,
+                        severity: Some(DiagnosticSeverity::ERROR),
+                        code: Some(NumberOrString::String(
+                            "override_incompatible_signature".to_string(),
+                        )),
+                        source: Some("lspintar".to_string()),
+                        message: format!(
+                            "'{}' cannot override: return type '{}' is incompatible with '{}'",
+                            method.method_name, override_base, parent_base
+                        ),
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+
+        // Semantic check: narrowing_conversion (Java/Groovy — Kotlin skip is justified)
+        let narrowing_candidates = lang.get_narrowing_candidates(&tree, &content);
+        for candidate in narrowing_candidates {
+            let lookup_pos = candidate.range.start;
+            let Some(rhs_type_raw) =
+                lang.find_variable_type(&tree, &content, &candidate.rhs_name, &lookup_pos)
+            else {
+                continue;
+            };
+            let rhs_base = rhs_type_raw.split('<').next().unwrap_or(&rhs_type_raw).trim();
+            if is_narrowing_conversion(&candidate.declared_type, rhs_base) {
+                diagnostics.push(Diagnostic {
+                    range: candidate.range,
+                    severity: Some(DiagnosticSeverity::ERROR),
+                    code: Some(NumberOrString::String("narrowing_conversion".to_string())),
+                    source: Some("lspintar".to_string()),
+                    message: format!(
+                        "Narrowing conversion from '{}' to '{}'",
+                        rhs_base, candidate.declared_type
+                    ),
+                    ..Default::default()
+                });
+            }
+        }
+
+        // Semantic check: wrong_argument_types (Java/Groovy/Kotlin)
+        let call_sites = lang.get_method_call_sites(&tree, &content);
+        if !call_sites.is_empty() {
+            if let Some(repo) = self.repo.get() {
+                let imports = lang.get_imports(&tree, &content);
+                let package = lang.get_package_name(&tree, &content);
+
+                for site in call_sites {
+                    let recv_pos = site.receiver_range.start;
+                    let Some(raw_recv_type) =
+                        lang.find_variable_type(&tree, &content, &site.receiver_name, &recv_pos)
+                    else {
+                        continue;
+                    };
+                    let base_recv = raw_recv_type
+                        .split('<')
+                        .next()
+                        .unwrap_or(&raw_recv_type)
+                        .trim()
+                        .to_string();
+                    if is_type_ref_skippable(&base_recv, &[]) {
+                        continue;
+                    }
+                    let Some(recv_fqn) = self
+                        .resolve_fqn(&base_recv, imports.clone(), package.clone())
+                        .await
+                    else {
+                        continue;
+                    };
+
+                    // Collect all overloads of this method on the receiver type (project + external)
+                    let mut overloads: Vec<Vec<String>> = Vec::new();
+                    if let Ok(syms) = repo.find_symbols_by_parent_name(&recv_fqn).await {
+                        for s in syms {
+                            if s.short_name == site.method_name {
+                                let param_types: Vec<String> = s
+                                    .metadata
+                                    .0
+                                    .parameters
+                                    .unwrap_or_default()
+                                    .into_iter()
+                                    .filter_map(|p| p.type_name)
+                                    .collect();
+                                overloads.push(param_types);
+                            }
+                        }
+                    }
+                    if let Ok(ext_syms) = repo
+                        .find_external_symbols_by_parent_name(&recv_fqn)
+                        .await
+                    {
+                        for s in ext_syms {
+                            if s.short_name == site.method_name {
+                                let param_types: Vec<String> = s
+                                    .metadata
+                                    .0
+                                    .parameters
+                                    .unwrap_or_default()
+                                    .into_iter()
+                                    .filter_map(|p| p.type_name)
+                                    .collect();
+                                overloads.push(param_types);
+                            }
+                        }
+                    }
+
+                    if overloads.is_empty() {
+                        continue; // method unknown — skip
+                    }
+
+                    let arg_count = site.args.len();
+
+                    // Determine types for all arguments that are literals or identifiers.
+                    // If any argument type cannot be determined, treat it as compatible (no false positive).
+                    let mut arg_bases: Vec<Option<String>> = Vec::new();
+                    for arg in &site.args {
+                        let base = arg_literal_base_type(&arg.node_kind, &arg.text)
+                            .map(|s| s.to_string())
+                            .or_else(|| {
+                                if arg.node_kind == "identifier" {
+                                    lang.find_variable_type(
+                                        &tree,
+                                        &content,
+                                        &arg.text,
+                                        &arg.range.start,
+                                    )
+                                    .map(|t| {
+                                        t.split('<')
+                                            .next()
+                                            .unwrap_or(&t)
+                                            .trim()
+                                            .to_string()
+                                    })
+                                } else {
+                                    None // complex expression — skip type check
+                                }
+                            });
+                        arg_bases.push(base);
+                    }
+
+                    // Check whether any overload is compatible.
+                    // An overload is compatible when:
+                    //   (a) its arity matches arg_count (varargs ignored — conservative), AND
+                    //   (b) every determinable argument type is compatible with the overload's
+                    //       corresponding parameter type.
+                    let any_overload_matches = overloads.iter().any(|params| {
+                        if params.len() != arg_count {
+                            return false;
+                        }
+                        params.iter().enumerate().all(|(i, param_type)| {
+                            match arg_bases.get(i) {
+                                Some(Some(arg_base)) => {
+                                    is_arg_compatible_with_param(arg_base, param_type)
+                                }
+                                // Unknown arg type → assume compatible
+                                _ => true,
+                            }
+                        })
+                    });
+
+                    if !any_overload_matches {
+                        // Describe the actual argument types for the message
+                        let arg_desc: Vec<String> = arg_bases
+                            .iter()
+                            .map(|b| b.clone().unwrap_or_else(|| "?".to_string()))
+                            .collect();
+                        diagnostics.push(Diagnostic {
+                            range: site.method_range,
+                            severity: Some(DiagnosticSeverity::ERROR),
+                            code: Some(NumberOrString::String(
+                                "wrong_argument_types".to_string(),
+                            )),
+                            source: Some("lspintar".to_string()),
+                            message: format!(
+                                "No overload of '{}' matches argument types ({})",
+                                site.method_name,
+                                arg_desc.join(", "),
+                            ),
+                            ..Default::default()
+                        });
+                    }
+                }
+            }
+        }
+
         self.client
             .publish_diagnostics(uri, diagnostics, None)
             .await;
@@ -1552,15 +2452,22 @@ impl LanguageServer for Backend {
 
                 let indexing_start = Instant::now();
 
+                let token_ws = format!("idx-ws-{}", uuid::Uuid::new_v4());
+                let token_ws_end = token_ws.clone();
+
+                let token_ws_save = format!("idx-ws-save-{}", uuid::Uuid::new_v4());
+                let token_ws_save_end = token_ws_save.clone();
+
+                // Show the progress notification immediately so the user knows the server is active.
+                lsp_progress_begin!(&token_ws, "Resolving dependencies...");
+
                 lsp_info!("Resolving dependencies...");
-                tokio::time::sleep(Duration::from_millis(500)).await;
 
                 let external_deps = match build_tool.get_dependency_paths(&root) {
                     Ok(deps) => deps,
                     Err(e) => {
                         let message = format!("Failed to get dependencies: {e}");
                         lsp_error!("{}", message);
-                        tokio::time::sleep(Duration::from_millis(500)).await;
                         panic!("{}", message);
                     }
                 };
@@ -1569,7 +2476,6 @@ impl LanguageServer for Backend {
                     Err(e) => {
                         let message = format!("Failed to get JDK sources: {e}");
                         lsp_error!("{}", message);
-                        tokio::time::sleep(Duration::from_millis(500)).await;
                         panic!("{}", message);
                     }
                 };
@@ -1582,13 +2488,7 @@ impl LanguageServer for Backend {
                     jars.push((None, Some(src_zip)));
                 }
 
-                let token_ws = format!("idx-ws-{}", uuid::Uuid::new_v4());
-                let token_ws_end = token_ws.clone();
-
-                let token_ws_save = format!("idx-ws-save-{}", uuid::Uuid::new_v4());
-                let token_ws_save_end = token_ws_save.clone();
-
-                lsp_progress_begin!(&token_ws, "Indexing...");
+                lsp_progress!(&token_ws, "Indexing workspace...", 0.0);
 
                 let save_ws_begun = std::sync::Once::new();
 
@@ -2098,13 +2998,32 @@ impl LanguageServer for Backend {
 
         symbols.sort_by_key(|s| completion_rank(s, package_name.as_deref()));
 
+        // Deduplicate: keep the first occurrence of each fqn.
+        // Multiple JARs can contain the same class; after sorting, the preferred
+        // variant (lower rank) is already first.
+        let mut seen_fqns = std::collections::HashSet::new();
+        symbols.retain(|s| seen_fqns.insert(s.fully_qualified_name().to_string()));
+
         let items: Vec<CompletionItem> =
             symbols
                 .into_iter()
+                .filter(|s| s.name() != "<init>")
                 .map(|s| match s {
-                    ResolvedSymbol::External(_) | ResolvedSymbol::Project(_) => CompletionItem {
+                    ResolvedSymbol::External(_) | ResolvedSymbol::Project(_) => {
+                        let is_function = s.node_kind() == lsp_core::node_kind::NodeKind::Function;
+                        CompletionItem {
                         label: s.name().to_string(),
                         kind: s.node_kind().to_lsp_kind(),
+                        insert_text: if is_function {
+                            Some(format!("{}($0)", s.name()))
+                        } else {
+                            None
+                        },
+                        insert_text_format: if is_function {
+                            Some(InsertTextFormat::SNIPPET)
+                        } else {
+                            None
+                        },
                         detail: Some(s.package_name().unwrap_or_default().to_string()),
                         additional_text_edits: if lang.get_implicit_imports().iter().any(|i| {
                             i.trim_end_matches(".*") == s.package_name().unwrap_or_default()
@@ -2160,7 +3079,8 @@ impl LanguageServer for Backend {
                             }
                         },
                         ..Default::default()
-                    },
+                    }
+                    }
                     ResolvedSymbol::Local { name, var_type, .. } => CompletionItem {
                         label: name,
                         kind: Some(CompletionItemKind::VARIABLE),
@@ -2281,10 +3201,18 @@ impl LanguageServer for Backend {
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
-        let uri = params.text_document.uri.to_string();
+        let uri = params.text_document.uri.clone();
         if let Some(change) = params.content_changes.into_iter().last() {
-            self.documents.insert(uri, (change.text, Instant::now()));
+            self.documents
+                .insert(uri.to_string(), (change.text, Instant::now()));
         }
+        let _ = self.diag_debounce_tx.send(uri).await;
+    }
+
+    async fn did_close(&self, params: DidCloseTextDocumentParams) {
+        let uri = params.text_document.uri;
+        self.documents.remove(&uri.to_string());
+        self.client.publish_diagnostics(uri, vec![], None).await;
     }
 
     async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
@@ -2340,7 +3268,10 @@ impl LanguageServer for Backend {
                     }
                 }
 
-                let _ = self.debounce_tx.send(path).await;
+                // Skip files currently open in the editor — did_save already re-indexes them.
+                if !self.documents.contains_key(&change.uri.to_string()) {
+                    let _ = self.debounce_tx.send(path).await;
+                }
             }
         }
     }

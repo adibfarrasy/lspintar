@@ -1,4 +1,4 @@
-use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range};
+use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range};
 use tree_sitter::{Node, Query, QueryCursor, StreamingIterator, Tree};
 
 use crate::language_support::ParameterResult;
@@ -166,7 +166,7 @@ pub fn collect_syntax_errors(node: Node, source: &str, diagnostics: &mut Vec<Dia
             diagnostics.push(Diagnostic {
                 range,
                 severity: Some(DiagnosticSeverity::ERROR),
-                code: None,
+                code: Some(NumberOrString::String("syntax_error".to_string())),
                 code_description: None,
                 source: Some("lspintar".to_string()),
                 message,

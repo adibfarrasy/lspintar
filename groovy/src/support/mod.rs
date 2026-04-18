@@ -1,5 +1,5 @@
 use lsp_core::{
-    language_support::{IdentResult, LanguageSupport, ParameterResult, ParseResult},
+    language_support::{CallArgData, ClassDeclarationData, GenericTypeUsage, IdentResult, LanguageSupport, MemberAccessData, MethodCallSiteData, NarrowingCandidateData, ObjectCreationData, OverrideMethodData, ParameterResult, ParseResult},
     languages::Language,
     node_kind::NodeKind,
     ts_helper::{self, collect_syntax_errors, get_node_at_position, node_contains_position},
@@ -12,10 +12,13 @@ use tree_sitter::{Node, Parser, Point, Query, QueryCursor, QueryMatch, Streaming
 use crate::{
     constants::GROOVY_IMPLICIT_IMPORTS,
     support::queries::{
-        DECLARES_VARIABLE_QUERY, GET_ANNOTATIONS_QUERY, GET_EXTENDS_QUERY, GET_FIELD_RETURN_QUERY,
-        GET_FUNCTION_RETURN_QUERY, GET_GROOVYDOC_QUERY, GET_IMPLEMENTS_QUERY, GET_IMPORTS_QUERY,
-        GET_MODIFIERS_QUERY, GET_PACKAGE_NAME_QUERY, GET_PARAMETERS_QUERY, GET_SHORT_NAME_QUERY,
-        GET_TYPE_QUERY, IDENT_QUERY,
+        CLASS_METHOD_NAMES_QUERY, DECLARED_TYPES_QUERY, DECLARES_VARIABLE_QUERY,
+        GET_ANNOTATIONS_QUERY, GET_EXTENDS_QUERY, GET_FIELD_RETURN_QUERY,
+        GET_FUNCTION_RETURN_QUERY, GET_GENERIC_TYPE_USAGES_QUERY, GET_GROOVYDOC_QUERY,
+        GET_IMPLEMENTS_QUERY, GET_IMPORTS_QUERY, GET_MEMBER_ACCESSES_QUERY, GET_MODIFIERS_QUERY,
+        GET_METHOD_CALL_SITES_QUERY, GET_NARROWING_CANDIDATES_QUERY, GET_OBJECT_CREATIONS_QUERY, GET_OVERRIDE_METHODS_QUERY,
+        GET_PACKAGE_NAME_QUERY, GET_PARAMETERS_QUERY, GET_SHORT_NAME_QUERY, GET_TYPE_QUERY,
+        GET_TYPE_REFS_QUERY, IDENT_QUERY,
     },
 };
 
@@ -610,6 +613,259 @@ impl GroovySupport {
     }
 }
 
+fn node_to_range(node: &tree_sitter::Node) -> Range {
+    Range {
+        start: tower_lsp::lsp_types::Position {
+            line: node.start_position().row as u32,
+            character: node.start_position().column as u32,
+        },
+        end: tower_lsp::lsp_types::Position {
+            line: node.end_position().row as u32,
+            character: node.end_position().column as u32,
+        },
+    }
+}
+
+fn collect_duplicate_imports(
+    tree: &Tree,
+    source: &str,
+    diagnostics: &mut Vec<tower_lsp::lsp_types::Diagnostic>,
+) {
+    let mut cursor = QueryCursor::new();
+    let bytes = source.as_bytes();
+    let mut seen: std::collections::HashMap<String, Range> = std::collections::HashMap::new();
+
+    cursor
+        .matches(&GET_IMPORTS_QUERY, tree.root_node(), bytes)
+        .for_each(|m| {
+            let Some(cap) = m.captures.first() else {
+                return;
+            };
+            let node = cap.node;
+            let Ok(text) = node.utf8_text(bytes) else {
+                return;
+            };
+            let fqn = text
+                .trim_start_matches("import ")
+                .trim_start_matches("static ")
+                .trim_end_matches(';')
+                .trim()
+                .to_string();
+            let range = node_to_range(&node);
+            if seen.contains_key(&fqn) {
+                diagnostics.push(tower_lsp::lsp_types::Diagnostic {
+                    range,
+                    severity: Some(tower_lsp::lsp_types::DiagnosticSeverity::WARNING),
+                    code: Some(tower_lsp::lsp_types::NumberOrString::String(
+                        "duplicate_import".to_string(),
+                    )),
+                    source: Some("lspintar".to_string()),
+                    message: format!("Duplicate import: {fqn}"),
+                    ..Default::default()
+                });
+            } else {
+                seen.insert(fqn, range);
+            }
+        });
+}
+
+fn collect_unused_imports(
+    tree: &Tree,
+    source: &str,
+    diagnostics: &mut Vec<tower_lsp::lsp_types::Diagnostic>,
+) {
+    let mut cursor = QueryCursor::new();
+    let bytes = source.as_bytes();
+    let mut imports: Vec<(String, String, Range)> = Vec::new();
+
+    cursor
+        .matches(&GET_IMPORTS_QUERY, tree.root_node(), bytes)
+        .for_each(|m| {
+            let Some(cap) = m.captures.first() else {
+                return;
+            };
+            let node = cap.node;
+            let Ok(text) = node.utf8_text(bytes) else {
+                return;
+            };
+            let fqn = text
+                .trim_start_matches("import ")
+                .trim_start_matches("static ")
+                .trim_end_matches(';')
+                .trim()
+                .to_string();
+            if fqn.ends_with(".*") {
+                return;
+            }
+            let simple = fqn
+                .split('.')
+                .next_back()
+                .unwrap_or(&fqn)
+                .to_string();
+            imports.push((fqn, simple, node_to_range(&node)));
+        });
+
+    if imports.is_empty() {
+        return;
+    }
+
+    let import_section_end = imports
+        .iter()
+        .map(|(_, _, r)| {
+            let line = r.end.line as usize;
+            source
+                .lines()
+                .take(line + 1)
+                .map(|l| l.len() + 1)
+                .sum::<usize>()
+        })
+        .max()
+        .unwrap_or(0);
+    let body = if import_section_end < source.len() {
+        &source[import_section_end..]
+    } else {
+        ""
+    };
+
+    for (fqn, simple, range) in imports {
+        if !body_uses_name(body, &simple) {
+            diagnostics.push(tower_lsp::lsp_types::Diagnostic {
+                range,
+                severity: Some(tower_lsp::lsp_types::DiagnosticSeverity::WARNING),
+                code: Some(tower_lsp::lsp_types::NumberOrString::String(
+                    "unused_import".to_string(),
+                )),
+                source: Some("lspintar".to_string()),
+                message: format!("Unused import: {fqn}"),
+                ..Default::default()
+            });
+        }
+    }
+}
+
+/// Returns true if `name` appears as a word-boundary token in `body`.
+fn body_uses_name(body: &str, name: &str) -> bool {
+    let is_id = |c: char| c.is_alphanumeric() || c == '_' || c == '$';
+    let mut start = 0;
+    while let Some(pos) = body[start..].find(name) {
+        let abs = start + pos;
+        let before_ok = abs == 0 || !is_id(body[..abs].chars().next_back().unwrap());
+        let after_ok = abs + name.len() >= body.len()
+            || !is_id(body[abs + name.len()..].chars().next().unwrap());
+        if before_ok && after_ok {
+            return true;
+        }
+        start = abs + 1;
+    }
+    false
+}
+
+fn collect_unchecked_casts(
+    tree: &Tree,
+    source: &str,
+    diagnostics: &mut Vec<tower_lsp::lsp_types::Diagnostic>,
+) {
+    let bytes = source.as_bytes();
+    let mut stack = vec![tree.root_node()];
+    while let Some(node) = stack.pop() {
+        if node.kind() == "cast_expression" {
+            if let Some(type_node) = node.child_by_field_name("type") {
+                if type_node.kind() == "generic_type" {
+                    let type_text = type_node.utf8_text(bytes).unwrap_or("?");
+                    diagnostics.push(tower_lsp::lsp_types::Diagnostic {
+                        range: node_to_range(&type_node),
+                        severity: Some(tower_lsp::lsp_types::DiagnosticSeverity::WARNING),
+                        code: Some(tower_lsp::lsp_types::NumberOrString::String(
+                            "unchecked_cast".to_string(),
+                        )),
+                        source: Some("lspintar".to_string()),
+                        message: format!(
+                            "Unchecked cast to '{type_text}'; type arguments cannot be verified at runtime due to type erasure"
+                        ),
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+}
+
+fn extract_param_types(func_node: tree_sitter::Node, bytes: &[u8]) -> Vec<String> {
+    let mut cursor = func_node.walk();
+    for child in func_node.children(&mut cursor) {
+        if child.kind() == "parameters" {
+            let mut param_types = Vec::new();
+            let mut pc = child.walk();
+            for param in child.children(&mut pc) {
+                if param.kind() == "parameter" {
+                    if let Some(type_node) = param.child_by_field_name("type") {
+                        if let Ok(t) = type_node.utf8_text(bytes) {
+                            param_types.push(t.to_string());
+                        }
+                    }
+                }
+            }
+            return param_types;
+        }
+    }
+    Vec::new()
+}
+
+fn check_body_for_dup_sigs(
+    body_node: tree_sitter::Node,
+    bytes: &[u8],
+    diagnostics: &mut Vec<tower_lsp::lsp_types::Diagnostic>,
+) {
+    let mut seen: std::collections::HashMap<String, ()> = std::collections::HashMap::new();
+    let mut cursor = body_node.walk();
+    for child in body_node.children(&mut cursor) {
+        if child.kind() != "function_declaration" {
+            continue;
+        }
+        let Some(name_node) = child.child_by_field_name("name") else { continue; };
+        let Ok(name) = name_node.utf8_text(bytes) else { continue; };
+        let param_types = extract_param_types(child, bytes);
+        let sig = format!("{}({})", name, param_types.join(","));
+        if seen.contains_key(&sig) {
+            diagnostics.push(tower_lsp::lsp_types::Diagnostic {
+                range: node_to_range(&name_node),
+                severity: Some(tower_lsp::lsp_types::DiagnosticSeverity::ERROR),
+                code: Some(tower_lsp::lsp_types::NumberOrString::String(
+                    "duplicate_method_signature".to_string(),
+                )),
+                source: Some("lspintar".to_string()),
+                message: format!("Duplicate method signature: '{sig}'"),
+                ..Default::default()
+            });
+        } else {
+            seen.insert(sig, ());
+        }
+    }
+}
+
+fn collect_duplicate_method_signatures(
+    tree: &Tree,
+    source: &str,
+    diagnostics: &mut Vec<tower_lsp::lsp_types::Diagnostic>,
+) {
+    let bytes = source.as_bytes();
+    let mut stack = vec![tree.root_node()];
+    while let Some(node) = stack.pop() {
+        let kind = node.kind();
+        if kind == "class_body" || kind == "enum_body" {
+            check_body_for_dup_sigs(node, bytes, diagnostics);
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+}
+
 impl LanguageSupport for GroovySupport {
     fn get_language(&self) -> Language {
         Language::Groovy
@@ -1042,8 +1298,335 @@ impl LanguageSupport for GroovySupport {
     ) -> Vec<tower_lsp::lsp_types::Diagnostic> {
         let mut diagnostics = Vec::new();
         collect_syntax_errors(tree.root_node(), source, &mut diagnostics);
+        collect_duplicate_imports(tree, source, &mut diagnostics);
+        collect_unused_imports(tree, source, &mut diagnostics);
+        collect_duplicate_method_signatures(tree, source, &mut diagnostics);
+        collect_unchecked_casts(tree, source, &mut diagnostics);
         diagnostics
     }
+
+    fn get_type_references(&self, tree: &Tree, source: &str) -> Vec<(String, Range)> {
+        let mut cursor = QueryCursor::new();
+        let bytes = source.as_bytes();
+        let mut refs = Vec::new();
+
+        cursor
+            .matches(&GET_TYPE_REFS_QUERY, tree.root_node(), bytes)
+            .for_each(|m| {
+                for cap in m.captures {
+                    let node = cap.node;
+                    let Ok(text) = node.utf8_text(bytes) else {
+                        return;
+                    };
+                    refs.push((text.to_string(), node_to_range(&node)));
+                }
+            });
+
+        refs
+    }
+
+    fn get_declared_type_names(&self, tree: &Tree, source: &str) -> Vec<String> {
+        let mut cursor = QueryCursor::new();
+        let bytes = source.as_bytes();
+        let mut names = Vec::new();
+
+        cursor
+            .matches(&DECLARED_TYPES_QUERY, tree.root_node(), bytes)
+            .for_each(|m| {
+                if let Some(cap) = m.captures.first() {
+                    if let Ok(text) = cap.node.utf8_text(bytes) {
+                        names.push(text.to_string());
+                    }
+                }
+            });
+
+        names
+    }
+
+    fn get_class_declarations(&self, tree: &Tree, source: &str) -> Vec<ClassDeclarationData> {
+        let bytes = source.as_bytes();
+        let mut results = Vec::new();
+        let mut cursor = QueryCursor::new();
+
+        cursor
+            .matches(&DECLARED_TYPES_QUERY, tree.root_node(), bytes)
+            .for_each(|m| {
+                let Some(name_cap) = m.captures.first() else { return; };
+                let name_node = name_cap.node;
+                let Some(type_node) = name_node.parent() else { return; };
+
+                let kind = type_node.kind();
+                if kind != "class_declaration" && kind != "enum_declaration" {
+                    return;
+                }
+
+                let Ok(name) = name_node.utf8_text(bytes) else { return; };
+                let ident_range = node_to_range(&name_node);
+                let modifiers = self.get_modifiers(&type_node, source);
+                let is_abstract = modifiers.iter().any(|m| m == "abstract");
+
+                let extends: Vec<String> = self.get_extends(&type_node, source).into_iter().collect();
+                let implements = self.get_implements(&type_node, source);
+                let mut parents = extends;
+                parents.extend(implements);
+
+                let mut defined_method_names = std::collections::HashSet::new();
+                for i in 0..type_node.child_count() {
+                    let Some(child) = type_node.child(i) else { continue };
+                    if child.kind() == "class_body" || child.kind() == "enum_body" {
+                        let mut method_cursor = QueryCursor::new();
+                        method_cursor.set_max_start_depth(Some(1));
+                        method_cursor
+                            .matches(&CLASS_METHOD_NAMES_QUERY, child, bytes)
+                            .for_each(|mm| {
+                                if let Some(cap) = mm.captures.first() {
+                                    if let Ok(method_name) = cap.node.utf8_text(bytes) {
+                                        defined_method_names.insert(method_name.to_string());
+                                    }
+                                }
+                            });
+                        break;
+                    }
+                }
+
+                results.push(ClassDeclarationData {
+                    name: name.to_string(),
+                    ident_range,
+                    is_abstract,
+                    parents,
+                    defined_method_names,
+                });
+            });
+
+        results
+    }
+
+    fn get_object_creations(&self, tree: &Tree, source: &str) -> Vec<ObjectCreationData> {
+        let bytes = source.as_bytes();
+        let mut cursor = QueryCursor::new();
+        let mut results = Vec::new();
+
+        cursor
+            .matches(&GET_OBJECT_CREATIONS_QUERY, tree.root_node(), bytes)
+            .for_each(|m| {
+                if let Some(cap) = m.captures.first() {
+                    if let Ok(type_name) = cap.node.utf8_text(bytes) {
+                        results.push(ObjectCreationData {
+                            type_name: type_name.to_string(),
+                            range: node_to_range(&cap.node),
+                        });
+                    }
+                }
+            });
+
+        results
+    }
+
+    fn get_member_accesses(&self, tree: &Tree, source: &str) -> Vec<MemberAccessData> {
+        let bytes = source.as_bytes();
+        let mut cursor = QueryCursor::new();
+        let mut results = Vec::new();
+        let recv_idx = GET_MEMBER_ACCESSES_QUERY.capture_index_for_name("receiver");
+        let meth_idx = GET_MEMBER_ACCESSES_QUERY.capture_index_for_name("method");
+
+        cursor
+            .matches(&GET_MEMBER_ACCESSES_QUERY, tree.root_node(), bytes)
+            .for_each(|m| {
+                let Some(recv_cap) = m.captures.iter().find(|c| Some(c.index) == recv_idx) else {
+                    return;
+                };
+                let Some(meth_cap) = m.captures.iter().find(|c| Some(c.index) == meth_idx) else {
+                    return;
+                };
+                let Ok(receiver_name) = recv_cap.node.utf8_text(bytes) else { return; };
+                let Ok(member_name) = meth_cap.node.utf8_text(bytes) else { return; };
+                results.push(MemberAccessData {
+                    receiver_name: receiver_name.to_string(),
+                    member_name: member_name.to_string(),
+                    member_range: node_to_range(&meth_cap.node),
+                    receiver_range: node_to_range(&recv_cap.node),
+                });
+            });
+
+        results
+    }
+
+    fn get_generic_type_usages(&self, tree: &Tree, source: &str) -> Vec<GenericTypeUsage> {
+        let bytes = source.as_bytes();
+        let mut cursor = QueryCursor::new();
+        let mut results = Vec::new();
+        let base_idx = GET_GENERIC_TYPE_USAGES_QUERY.capture_index_for_name("base");
+        let args_idx = GET_GENERIC_TYPE_USAGES_QUERY.capture_index_for_name("args");
+
+        cursor
+            .matches(&GET_GENERIC_TYPE_USAGES_QUERY, tree.root_node(), bytes)
+            .for_each(|m| {
+                let Some(base_cap) = m.captures.iter().find(|c| Some(c.index) == base_idx) else {
+                    return;
+                };
+                let Some(args_cap) = m.captures.iter().find(|c| Some(c.index) == args_idx) else {
+                    return;
+                };
+                let Ok(type_name) = base_cap.node.utf8_text(bytes) else { return; };
+                let arg_count = args_cap
+                    .node
+                    .named_children(&mut args_cap.node.walk())
+                    .filter(|n| n.kind() != "," && n.is_named())
+                    .count();
+                let Some(generic_node) = base_cap.node.parent() else { return; };
+                results.push(GenericTypeUsage {
+                    type_name: type_name.to_string(),
+                    arg_count,
+                    range: node_to_range(&generic_node),
+                });
+            });
+
+        results
+    }
+
+    fn get_override_methods(&self, tree: &Tree, source: &str) -> Vec<OverrideMethodData> {
+        let bytes = source.as_bytes();
+        let mut cursor = QueryCursor::new();
+        let mut results = Vec::new();
+        let ann_idx = GET_OVERRIDE_METHODS_QUERY.capture_index_for_name("ann");
+        let ret_idx = GET_OVERRIDE_METHODS_QUERY.capture_index_for_name("ret");
+        let name_idx = GET_OVERRIDE_METHODS_QUERY.capture_index_for_name("name");
+
+        cursor
+            .matches(&GET_OVERRIDE_METHODS_QUERY, tree.root_node(), bytes)
+            .for_each(|m| {
+                let Some(ann_cap) = m.captures.iter().find(|c| Some(c.index) == ann_idx) else {
+                    return;
+                };
+                let Ok(ann_text) = ann_cap.node.utf8_text(bytes) else { return };
+                if ann_text != "Override" {
+                    return;
+                }
+                let Some(name_cap) = m.captures.iter().find(|c| Some(c.index) == name_idx) else {
+                    return;
+                };
+                let Ok(method_name) = name_cap.node.utf8_text(bytes) else { return };
+                let return_type = m
+                    .captures
+                    .iter()
+                    .find(|c| Some(c.index) == ret_idx)
+                    .and_then(|c| c.node.utf8_text(bytes).ok())
+                    .filter(|s| *s != "void")
+                    .map(|s| s.to_string());
+                let Some(containing_class) = find_containing_class(name_cap.node, bytes) else {
+                    return;
+                };
+                results.push(OverrideMethodData {
+                    containing_class,
+                    method_name: method_name.to_string(),
+                    return_type,
+                    range: node_to_range(&name_cap.node),
+                });
+            });
+
+        results
+    }
+
+    fn get_narrowing_candidates(&self, tree: &Tree, source: &str) -> Vec<NarrowingCandidateData> {
+        let bytes = source.as_bytes();
+        let mut cursor = QueryCursor::new();
+        let mut results = Vec::new();
+        let decl_type_idx = GET_NARROWING_CANDIDATES_QUERY.capture_index_for_name("decl_type");
+        let rhs_idx = GET_NARROWING_CANDIDATES_QUERY.capture_index_for_name("rhs_name");
+
+        cursor
+            .matches(&GET_NARROWING_CANDIDATES_QUERY, tree.root_node(), bytes)
+            .for_each(|m| {
+                let Some(dt_cap) = m.captures.iter().find(|c| Some(c.index) == decl_type_idx)
+                else {
+                    return;
+                };
+                let Ok(decl_type) = dt_cap.node.utf8_text(bytes) else { return };
+                if !is_numeric_primitive(decl_type) {
+                    return;
+                }
+                let Some(rhs_cap) = m.captures.iter().find(|c| Some(c.index) == rhs_idx) else {
+                    return;
+                };
+                let Ok(rhs_name) = rhs_cap.node.utf8_text(bytes) else { return };
+                results.push(NarrowingCandidateData {
+                    declared_type: decl_type.to_string(),
+                    rhs_name: rhs_name.to_string(),
+                    range: node_to_range(&rhs_cap.node),
+                });
+            });
+
+        results
+    }
+
+    fn get_method_call_sites(&self, tree: &Tree, source: &str) -> Vec<MethodCallSiteData> {
+        let bytes = source.as_bytes();
+        let mut cursor = QueryCursor::new();
+        let mut results = Vec::new();
+        let recv_idx = GET_METHOD_CALL_SITES_QUERY.capture_index_for_name("receiver");
+        let meth_idx = GET_METHOD_CALL_SITES_QUERY.capture_index_for_name("method");
+        let args_idx = GET_METHOD_CALL_SITES_QUERY.capture_index_for_name("args");
+
+        cursor
+            .matches(&GET_METHOD_CALL_SITES_QUERY, tree.root_node(), bytes)
+            .for_each(|m| {
+                let Some(recv_cap) = m.captures.iter().find(|c| Some(c.index) == recv_idx) else {
+                    return;
+                };
+                let Some(meth_cap) = m.captures.iter().find(|c| Some(c.index) == meth_idx) else {
+                    return;
+                };
+                let Some(args_cap) = m.captures.iter().find(|c| Some(c.index) == args_idx) else {
+                    return;
+                };
+                let Ok(receiver_name) = recv_cap.node.utf8_text(bytes) else { return };
+                let Ok(method_name) = meth_cap.node.utf8_text(bytes) else { return };
+
+                let mut args = Vec::new();
+                let mut arg_cursor = args_cap.node.walk();
+                for child in args_cap.node.children(&mut arg_cursor) {
+                    if !child.is_named() {
+                        continue;
+                    }
+                    let node_kind = child.kind().to_string();
+                    let text = child.utf8_text(bytes).unwrap_or("").to_string();
+                    args.push(CallArgData {
+                        node_kind,
+                        text,
+                        range: node_to_range(&child),
+                    });
+                }
+
+                results.push(MethodCallSiteData {
+                    receiver_name: receiver_name.to_string(),
+                    receiver_range: node_to_range(&recv_cap.node),
+                    method_name: method_name.to_string(),
+                    method_range: node_to_range(&meth_cap.node),
+                    args,
+                });
+            });
+
+        results
+    }
+}
+
+fn find_containing_class(mut node: Node, bytes: &[u8]) -> Option<String> {
+    while let Some(parent) = node.parent() {
+        if parent.kind() == "class_declaration" {
+            let mut walker = parent.walk();
+            for child in parent.children(&mut walker) {
+                if child.kind() == "identifier" || child.kind() == "type_identifier" {
+                    return child.utf8_text(bytes).ok().map(|s| s.to_string());
+                }
+            }
+        }
+        node = parent;
+    }
+    None
+}
+
+fn is_numeric_primitive(t: &str) -> bool {
+    matches!(t, "byte" | "short" | "int" | "long" | "float" | "double")
 }
 
 #[allow(dead_code)]
@@ -1051,6 +1634,7 @@ mod tests {
     use tower_lsp::lsp_types::Position;
     use tree_sitter::Node;
 
+    mod collect_diagnostics;
     mod extract_call_arguments;
     mod find_declarations_in_scope;
     mod find_ident_at_position;

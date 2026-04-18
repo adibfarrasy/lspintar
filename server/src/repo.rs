@@ -2,6 +2,15 @@ use sqlx::{SqlitePool, sqlite::SqlitePoolOptions};
 
 use crate::models::{external_symbol::ExternalSymbol, symbol::Symbol};
 
+fn capitalize_prefix(prefix: &str) -> String {
+    let lower = prefix.to_lowercase();
+    let mut chars = lower.chars();
+    match chars.next() {
+        None => String::new(),
+        Some(first) => first.to_uppercase().to_string() + chars.as_str(),
+    }
+}
+
 #[derive(Debug)]
 pub struct Repository {
     pool: SqlitePool,
@@ -19,6 +28,17 @@ impl Repository {
             .max_connections(num_cpus::get() as u32)
             .connect(&url)
             .await?;
+
+        // WAL mode: readers never block on writers, so autocomplete queries
+        // run concurrently with the initial indexing writes instead of queuing behind them.
+        // synchronous=NORMAL is safe with WAL and avoids the per-commit fsync overhead.
+        // busy_timeout gives queries a grace period before returning SQLITE_BUSY.
+        sqlx::query("PRAGMA journal_mode=WAL").execute(&pool).await?;
+        sqlx::query("PRAGMA synchronous=NORMAL").execute(&pool).await?;
+        sqlx::query("PRAGMA busy_timeout=5000").execute(&pool).await?;
+        // Enables index use for LIKE prefix queries. Queries use lower(prefix) for FQNs
+        // and capitalize(prefix) for short names to preserve case-insensitive matching.
+        sqlx::query("PRAGMA case_sensitive_like=ON").execute(&pool).await?;
 
         sqlx::migrate!("../migrations").run(&pool).await?;
         Ok(Self { pool })
@@ -110,13 +130,28 @@ impl Repository {
     #[tracing::instrument(skip(self))]
     pub async fn find_symbols_by_prefix(&self, prefix: &str) -> Result<Vec<Symbol>, sqlx::Error> {
         tracing::info!("find_symbols_by_prefix");
-        sqlx::query_as::<_, Symbol>(
-            "SELECT * FROM symbols WHERE (fully_qualified_name LIKE ? OR short_name LIKE ?) AND fully_qualified_name NOT LIKE '%#%'",
+        let fqn_pat = format!("{}%", prefix.to_lowercase());
+        let short_pat = format!("{}%", capitalize_prefix(prefix));
+        let mut by_fqn = sqlx::query_as::<_, Symbol>(
+            "SELECT * FROM symbols WHERE fully_qualified_name LIKE ? AND symbol_type NOT IN ('Function', 'Field') LIMIT 100",
         )
-        .bind(format!("{}%", prefix))
-        .bind(format!("{}%", prefix))
+        .bind(&fqn_pat)
         .fetch_all(&self.pool)
-        .await
+        .await?;
+
+        let seen: std::collections::HashSet<String> =
+            by_fqn.iter().map(|s| s.fully_qualified_name.clone()).collect();
+
+        let by_short = sqlx::query_as::<_, Symbol>(
+            "SELECT * FROM symbols WHERE short_name LIKE ? AND symbol_type NOT IN ('Function', 'Field') LIMIT 100",
+        )
+        .bind(&short_pat)
+        .fetch_all(&self.pool)
+        .await?;
+
+        by_fqn.extend(by_short.into_iter().filter(|s| !seen.contains(&s.fully_qualified_name)));
+        by_fqn.truncate(200);
+        Ok(by_fqn)
     }
 
     #[tracing::instrument(skip(self))]
@@ -344,13 +379,28 @@ impl Repository {
         prefix: &str,
     ) -> Result<Vec<ExternalSymbol>, sqlx::Error> {
         tracing::info!("find_external_symbols_by_prefix");
-        sqlx::query_as::<_, ExternalSymbol>(
-            "SELECT * FROM external_symbols WHERE (fully_qualified_name LIKE ? OR short_name LIKE ?) AND fully_qualified_name NOT LIKE '%#%' ORDER BY needs_decompilation ASC",
+        let fqn_pat = format!("{}%", prefix.to_lowercase());
+        let short_pat = format!("{}%", capitalize_prefix(prefix));
+        let mut by_fqn = sqlx::query_as::<_, ExternalSymbol>(
+            "SELECT * FROM external_symbols WHERE fully_qualified_name LIKE ? AND symbol_type NOT IN ('Function', 'Field') LIMIT 100",
         )
-        .bind(format!("{}%", prefix))
-        .bind(format!("{}%", prefix))
+        .bind(&fqn_pat)
         .fetch_all(&self.pool)
-        .await
+        .await?;
+
+        let seen: std::collections::HashSet<String> =
+            by_fqn.iter().map(|s| s.fully_qualified_name.clone()).collect();
+
+        let by_short = sqlx::query_as::<_, ExternalSymbol>(
+            "SELECT * FROM external_symbols WHERE short_name LIKE ? AND symbol_type NOT IN ('Function', 'Field') LIMIT 100",
+        )
+        .bind(&short_pat)
+        .fetch_all(&self.pool)
+        .await?;
+
+        by_fqn.extend(by_short.into_iter().filter(|s| !seen.contains(&s.fully_qualified_name)));
+        by_fqn.truncate(200);
+        Ok(by_fqn)
     }
 
     /// Like `find_external_symbols_by_prefix` but restricted to symbols from the given JARs.

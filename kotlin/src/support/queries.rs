@@ -197,6 +197,113 @@ pub static IDENT_QUERY: LazyLock<Query> = LazyLock::new(|| {
     .unwrap()
 });
 
+/// Captures the names of all type declarations in the file (class, interface, object).
+pub static DECLARED_TYPES_QUERY: LazyLock<Query> = LazyLock::new(|| {
+    Query::new(
+        &KOTLIN_TS_LANGUAGE,
+        r#"
+        [
+          (class_declaration name: (type_identifier) @name)
+          (interface_declaration name: (type_identifier) @name)
+          (object_declaration name: (type_identifier) @name)
+        ]
+        "#,
+    )
+    .unwrap()
+});
+
+/// Captures type identifier usage sites (not declarations).
+pub static GET_TYPE_REFS_QUERY: LazyLock<Query> = LazyLock::new(|| {
+    Query::new(
+        &KOTLIN_TS_LANGUAGE,
+        r#"
+        [
+          (variable_declaration type: (user_type (type_identifier) @ref))
+          (variable_declaration type: (nullable_type (user_type (type_identifier) @ref)))
+          (parameter type: (user_type (type_identifier) @ref))
+          (parameter type: (nullable_type (user_type (type_identifier) @ref)))
+          (class_parameter type: (user_type (type_identifier) @ref))
+          (class_parameter type: (nullable_type (user_type (type_identifier) @ref)))
+          (type_projection (user_type (type_identifier) @ref))
+          (as_expression (user_type (type_identifier) @ref))
+          (delegation_specifier (user_type (type_identifier) @ref))
+          (delegation_specifier (constructor_invocation (user_type (type_identifier) @ref)))
+          (function_declaration return_type: (user_type (type_identifier) @ref))
+        ]
+        "#,
+    )
+    .unwrap()
+});
+
+/// Captures function declarations with an explicit return type and name.
+/// Used to detect missing return statements in non-Unit functions.
+pub static FUNCTION_WITH_RETURN_QUERY: LazyLock<Query> = LazyLock::new(|| {
+    Query::new(
+        &KOTLIN_TS_LANGUAGE,
+        r#"(function_declaration
+          name: (identifier) @name
+          return_type: (_) @ret_type)"#,
+    )
+    .unwrap()
+});
+
+/// Captures method names directly defined in a class body.
+pub static CLASS_METHOD_NAMES_QUERY: LazyLock<Query> = LazyLock::new(|| {
+    Query::new(
+        &KOTLIN_TS_LANGUAGE,
+        r#"(function_declaration name: (identifier) @method_name)"#,
+    )
+    .unwrap()
+});
+
+/// Captures qualified member-access call sites `receiver.method(...)`.
+pub static GET_MEMBER_ACCESSES_QUERY: LazyLock<Query> = LazyLock::new(|| {
+    Query::new(
+        &KOTLIN_TS_LANGUAGE,
+        r#"(call_expression
+          (navigation_expression
+            (identifier) @receiver
+            (navigation_suffix (identifier) @method))
+          (call_suffix))"#,
+    )
+    .unwrap()
+});
+
+/// Captures parameterised type usages for wrong_type_argument_count detection.
+pub static GET_GENERIC_TYPE_USAGES_QUERY: LazyLock<Query> = LazyLock::new(|| {
+    Query::new(
+        &KOTLIN_TS_LANGUAGE,
+        r#"(user_type (type_identifier) @base (type_arguments) @args)"#,
+    )
+    .unwrap()
+});
+
+/// Captures `override`-modified functions: modifier text and function name.
+/// Return type (if any) is extracted from the function_declaration node in code,
+/// since it is an optional field not always present.
+pub static GET_OVERRIDE_METHODS_QUERY: LazyLock<Query> = LazyLock::new(|| {
+    Query::new(
+        &KOTLIN_TS_LANGUAGE,
+        r#"(function_declaration
+          (modifiers (member_modifier) @mod)
+          name: (identifier) @name)"#,
+    )
+    .unwrap()
+});
+
+/// Captures method call sites where the receiver is a simple identifier.
+pub static GET_METHOD_CALL_SITES_QUERY: LazyLock<Query> = LazyLock::new(|| {
+    Query::new(
+        &KOTLIN_TS_LANGUAGE,
+        r#"(call_expression
+          (navigation_expression
+            (identifier) @receiver
+            (navigation_suffix (identifier) @method))
+          (call_suffix (value_arguments) @args))"#,
+    )
+    .unwrap()
+});
+
 pub static GET_TYPE_QUERY: LazyLock<Query> = LazyLock::new(|| {
     Query::new(
         &KOTLIN_TS_LANGUAGE,
