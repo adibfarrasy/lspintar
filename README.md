@@ -66,17 +66,28 @@ Replace `/path/to/lspintar` with the path to the binary you built.
 
 ### VS Code and Cursor
 
-The `lspintar-vscode` extension connects VS Code (and Cursor, which uses the same extension API) to a locally built lspintar binary.
+The [`lspintar-vscode`](https://github.com/adibfarrasy/lspintar-vscode) extension connects VS Code (and Cursor, which uses the same extension API) to a locally built lspintar binary.
 
-1. Build the extension:
+1. Clone and build the extension:
 
 ```bash
+git clone https://github.com/adibfarrasy/lspintar-vscode
 cd lspintar-vscode
 npm install
 npm run compile
 ```
 
-2. In VS Code / Cursor, open the command palette and run **Extensions: Install from VSIX...**, then select the compiled extension, or load the `lspintar-vscode` folder as a development extension.
+2. Install as a development extension by symlinking the folder into your editor's extensions directory:
+
+```bash
+# Cursor
+ln -s "$(pwd)" ~/.cursor/extensions/lspintar-vscode
+
+# VS Code
+ln -s "$(pwd)" ~/.vscode/extensions/lspintar-vscode
+```
+
+Restart the editor to pick it up.
 
 3. Set the server path in your settings:
 
