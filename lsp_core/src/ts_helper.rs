@@ -67,12 +67,14 @@ pub fn get_many(node: &Node, content: &str, query: &Query, max_depth: Option<u32
 pub fn parse_parameter(param: &str) -> ParameterResult {
     let param = param.trim();
 
-    let (type_and_name, default) = if let Some(eq_pos) = param.find('=') {
+    let (type_and_name, default) = if let Some(eq_pos) = find_top_level_eq(param) {
         let (left, right) = param.split_at(eq_pos);
         (left.trim(), Some(right[1..].trim().trim_matches('\'')))
     } else {
         (param, None)
     };
+
+    let type_and_name = strip_leading_annotations(type_and_name);
 
     if let Some(last_space) = type_and_name.rfind(char::is_whitespace) {
         let type_name = type_and_name[..last_space].trim().to_string();
@@ -82,6 +84,92 @@ pub fn parse_parameter(param: &str) -> ParameterResult {
         // No whitespace = untyped parameter (for Groovy)
         (type_and_name.to_string(), None, default.map(String::from))
     }
+}
+
+fn find_top_level_eq(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut paren = 0i32;
+    let mut bracket = 0i32;
+    let mut brace = 0i32;
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        match b {
+            b'(' => paren += 1,
+            b')' => paren -= 1,
+            b'[' => bracket += 1,
+            b']' => bracket -= 1,
+            b'{' => brace += 1,
+            b'}' => brace -= 1,
+            b'"' | b'\'' => {
+                let quote = b;
+                i += 1;
+                while i < bytes.len() {
+                    if bytes[i] == b'\\' {
+                        i += 2;
+                        continue;
+                    }
+                    if bytes[i] == quote {
+                        break;
+                    }
+                    i += 1;
+                }
+            }
+            b'=' if paren == 0 && bracket == 0 && brace == 0 => {
+                // skip ==, >=, <=, !=
+                let next = bytes.get(i + 1).copied();
+                let prev = if i > 0 { Some(bytes[i - 1]) } else { None };
+                if next != Some(b'=')
+                    && prev != Some(b'=')
+                    && prev != Some(b'>')
+                    && prev != Some(b'<')
+                    && prev != Some(b'!')
+                {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+fn strip_leading_annotations(s: &str) -> &str {
+    let mut s = s.trim_start();
+    while let Some(rest) = s.strip_prefix('@') {
+        let id_end = rest
+            .find(|c: char| !(c.is_alphanumeric() || c == '_' || c == '.'))
+            .unwrap_or(rest.len());
+        let mut rest = &rest[id_end..];
+        let after_ws = rest.trim_start();
+        if after_ws.starts_with('(') {
+            let bytes = after_ws.as_bytes();
+            let mut depth = 0i32;
+            let mut end = None;
+            for (i, &b) in bytes.iter().enumerate() {
+                if b == b'(' {
+                    depth += 1;
+                } else if b == b')' {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = Some(i + 1);
+                        break;
+                    }
+                }
+            }
+            match end {
+                Some(e) => rest = &after_ws[e..],
+                None => return s,
+            }
+        }
+        let next = rest.trim_start();
+        if next == s {
+            return s;
+        }
+        s = next;
+    }
+    s
 }
 
 pub fn node_contains_position(node: &Node, position: &Position) -> bool {
@@ -180,5 +268,59 @@ pub fn collect_syntax_errors(node: Node, source: &str, diagnostics: &mut Vec<Dia
         for child in node.children(&mut node.walk()) {
             collect_syntax_errors(child, source, diagnostics);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_plain_typed_parameter() {
+        let (name, type_name, default) = parse_parameter("String snapshotId");
+        assert_eq!(name, "snapshotId");
+        assert_eq!(type_name.as_deref(), Some("String"));
+        assert!(default.is_none());
+    }
+
+    #[test]
+    fn strips_annotation_with_string_arg() {
+        let (name, type_name, _) =
+            parse_parameter("@PathVariable(\"snapshotId\") String snapshotId");
+        assert_eq!(name, "snapshotId");
+        assert_eq!(type_name.as_deref(), Some("String"));
+    }
+
+    #[test]
+    fn strips_multiple_annotations() {
+        let (name, type_name, _) =
+            parse_parameter("@Valid @RequestBody UserInfoSnapshot snapshot");
+        assert_eq!(name, "snapshot");
+        assert_eq!(type_name.as_deref(), Some("UserInfoSnapshot"));
+    }
+
+    #[test]
+    fn strips_annotation_with_nested_parens_and_eq() {
+        let (name, type_name, default) =
+            parse_parameter("@RequestParam(defaultValue = \"f(x)\") int count");
+        assert_eq!(name, "count");
+        assert_eq!(type_name.as_deref(), Some("int"));
+        assert!(default.is_none());
+    }
+
+    #[test]
+    fn strips_annotation_with_default_value() {
+        let (name, type_name, default) =
+            parse_parameter("@RequestParam String page = '1'");
+        assert_eq!(name, "page");
+        assert_eq!(type_name.as_deref(), Some("String"));
+        assert_eq!(default.as_deref(), Some("1"));
+    }
+
+    #[test]
+    fn untyped_parameter_unchanged() {
+        let (name, type_name, _) = parse_parameter("snapshotId");
+        assert_eq!(name, "snapshotId");
+        assert!(type_name.is_none());
     }
 }
