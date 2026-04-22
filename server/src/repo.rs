@@ -278,7 +278,7 @@ impl Repository {
             char_start, char_end, ident_line_start, ident_line_end, ident_char_start,
             ident_char_end, needs_decompilation, metadata, last_modified, file_type)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(jar_path, source_file_path, fully_qualified_name) DO UPDATE SET
+            ON CONFLICT(jar_path, source_file_path, fully_qualified_name, metadata) DO UPDATE SET
                 alt_jar_path = excluded.alt_jar_path,
                 short_name = excluded.short_name,
                 package_name = excluded.package_name,
@@ -447,6 +447,19 @@ impl Repository {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    /// Returns all symbols indexed for a single source file.  Used by the
+    /// rename handler to identify the declaration at the cursor when
+    /// `resolve_symbol_at_position` cannot resolve a declaration site.
+    pub async fn find_symbols_by_file_path(
+        &self,
+        file_path: &str,
+    ) -> Result<Vec<Symbol>, sqlx::Error> {
+        sqlx::query_as::<_, Symbol>("SELECT * FROM symbols WHERE file_path = ?")
+            .bind(file_path)
+            .fetch_all(&self.pool)
+            .await
     }
 
     /// Returns the distinct file paths of all indexed project symbols.

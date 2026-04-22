@@ -87,9 +87,26 @@ ln -s "$(pwd)" ~/.cursor/extensions/lspintar-vscode
 ln -s "$(pwd)" ~/.vscode/extensions/lspintar-vscode
 ```
 
-Restart the editor to pick it up.
+3. Register the extension in `extensions.json` so the editor loads it. Edit `~/.cursor/extensions/extensions.json` (or `~/.vscode/extensions/extensions.json`) and add this entry to the JSON array (adjust the paths if your home directory differs):
 
-3. Set the server path in your settings:
+```json
+{
+  "identifier": { "id": "undefined_publisher.lspintar" },
+  "version": "0.0.1",
+  "location": {
+    "$mid": 1,
+    "fsPath": "/Users/you/.cursor/extensions/lspintar-vscode",
+    "external": "file:///Users/you/.cursor/extensions/lspintar-vscode",
+    "path": "/Users/you/.cursor/extensions/lspintar-vscode",
+    "scheme": "file"
+  },
+  "relativeLocation": "lspintar-vscode"
+}
+```
+
+If the file doesn't exist, create it as `[ { ... } ]`. Fully quit and reopen the editor (`Cmd+Q` on macOS — closing the window is not enough).
+
+4. Set the server path in your settings:
 
 ```json
 {

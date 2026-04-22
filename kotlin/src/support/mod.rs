@@ -4,7 +4,7 @@ use lsp_core::{
     node_kind::NodeKind,
     ts_helper::{self, collect_syntax_errors, get_node_at_position, node_contains_position},
 };
-use std::{cell::RefCell, fs, path::Path};
+use std::{cell::RefCell, collections::HashSet, fs, path::Path, sync::LazyLock};
 
 use tower_lsp::lsp_types::{Position, Range};
 use tree_sitter::{Node, Parser, Point, Query, QueryCursor, QueryMatch, StreamingIterator, Tree};
@@ -1863,7 +1863,72 @@ impl LanguageSupport for KotlinSupport {
 
         results
     }
+
+    fn reserved_keywords(&self) -> &'static HashSet<&'static str> {
+        &KOTLIN_KEYWORDS
+    }
+
+    fn find_local_references(
+        &self,
+        tree: &Tree,
+        content: &str,
+        decl_position: &Position,
+    ) -> Option<Vec<Range>> {
+        lsp_core::local_refs::find_local_references(
+            tree,
+            content,
+            decl_position,
+            KOTLIN_DECL_NODE_KINDS,
+            KOTLIN_SCOPE_NODE_KINDS,
+        )
+    }
 }
+
+static KOTLIN_KEYWORDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
+    [
+        // Hard keywords — always reserved.
+        "as", "break", "class", "continue", "do", "else", "false", "for", "fun",
+        "if", "in", "interface", "is", "null", "object", "package", "return",
+        "super", "this", "throw", "true", "try", "typealias", "typeof", "val",
+        "var", "when", "while",
+        // Modifier keywords commonly treated as reserved in identifier contexts
+        // by IntelliJ; conservative to reject them.
+        "abstract", "actual", "annotation", "by", "companion", "const",
+        "crossinline", "data", "enum", "expect", "external", "final", "infix",
+        "init", "inline", "inner", "internal", "lateinit", "noinline", "open",
+        "operator", "out", "override", "private", "protected", "public",
+        "reified", "sealed", "suspend", "tailrec", "vararg",
+    ]
+    .into_iter()
+    .collect()
+});
+
+static KOTLIN_DECL_NODE_KINDS: &[&str] = &[
+    "property_declaration",
+    "variable_declaration",
+    "multi_variable_declaration",
+    "parameter",
+    "function_value_parameter",
+    "lambda_parameters",
+    "class_parameter",
+    "for_statement",
+];
+
+static KOTLIN_SCOPE_NODE_KINDS: &[&str] = &[
+    "function_declaration",
+    "secondary_constructor",
+    "primary_constructor",
+    "lambda_literal",
+    "anonymous_function",
+    "function_body",
+    "statements",
+    "class_body",
+    "block",
+    "for_statement",
+    "when_expression",
+    "catch_block",
+    "if_expression",
+];
 
 fn find_containing_class(mut node: Node, bytes: &[u8]) -> Option<String> {
     while let Some(parent) = node.parent() {

@@ -17,7 +17,10 @@ use std::{
     os::unix::fs::DirBuilderExt,
     path::{Path, PathBuf},
     str::FromStr,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 use tokio::sync::{OnceCell, RwLock};
@@ -48,7 +51,7 @@ pub struct Backend {
 
     indexer: Arc<RwLock<Option<Indexer>>>,
     workspace_root: Arc<RwLock<Option<PathBuf>>>,
-    languages: HashMap<String, Arc<dyn LanguageSupport + Send + Sync>>,
+    pub(crate) languages: HashMap<String, Arc<dyn LanguageSupport + Send + Sync>>,
     vcs_handler: Arc<RwLock<Option<Arc<dyn VcsHandler + Send + Sync>>>>,
     last_known_revision: Arc<RwLock<Option<String>>>,
     build_tool: Arc<RwLock<Option<Arc<dyn BuildToolHandler + Send + Sync>>>>,
@@ -64,6 +67,11 @@ pub struct Backend {
     /// Per-sub-project source-root → classpath JAR mapping.
     /// Empty when the workspace is a single-project build.
     subproject_classpath: Arc<RwLock<Vec<SubprojectClasspath>>>,
+
+    /// Set to true once the initial indexing pass completes. Diagnostics that rely on
+    /// cross-file symbol lookups are suppressed while this is false to avoid bogus errors
+    /// from a half-populated index.
+    index_ready: Arc<AtomicBool>,
 }
 
 /// Java primitive types and keywords that are never unresolved.
@@ -238,6 +246,7 @@ impl Backend {
             debounce_tx,
             diag_debounce_tx,
             subproject_classpath: Arc::new(RwLock::new(vec![])),
+            index_ready: Arc::new(AtomicBool::new(false)),
         };
 
         backend.spawn_debounce_task(debounce_rx);
@@ -1265,7 +1274,7 @@ impl Backend {
             .collect()
     }
 
-    async fn resolve_symbol_at_position(
+    pub(crate) async fn resolve_symbol_at_position(
         &self,
         params: &TextDocumentPositionParams,
     ) -> Result<Vec<ResolvedSymbol>> {
@@ -1749,6 +1758,11 @@ impl Backend {
     }
 
     pub async fn compute_diagnostics(&self, uri: &Url) -> Option<Vec<Diagnostic>> {
+        // Suppress diagnostics until the initial index is built; symbol lookups against
+        // a half-populated repo produce spurious unresolved/overload errors.
+        if !self.index_ready.load(Ordering::Acquire) {
+            return Some(vec![]);
+        }
         let path = PathBuf::from_str(uri.path()).unwrap();
         let ext = path.extension().and_then(|e| e.to_str())?;
         let lang = self.languages.get(ext)?;
@@ -2276,8 +2290,12 @@ impl Backend {
                         })
                     });
 
-                    if !any_overload_matches {
-                        // Describe the actual argument types for the message
+                    // If any argument type couldn't be determined, skip — avoids false
+                    // positives when the overload index is incomplete or the arg is a
+                    // complex expression.
+                    let all_args_known = arg_bases.iter().all(|b| b.is_some());
+
+                    if !any_overload_matches && all_args_known {
                         let arg_desc: Vec<String> = arg_bases
                             .iter()
                             .map(|b| b.clone().unwrap_or_else(|| "?".to_string()))
@@ -2423,6 +2441,7 @@ impl LanguageServer for Backend {
                 implementation_provider: Some(ImplementationProviderCapability::Simple(true)),
                 type_definition_provider: Some(TypeDefinitionProviderCapability::Simple(true)),
                 references_provider: Some(OneOf::Left(true)),
+                rename_provider: Some(OneOf::Left(true)),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 completion_provider: Some(CompletionOptions {
                     trigger_characters: Some(
@@ -2470,13 +2489,6 @@ impl LanguageServer for Backend {
             });
 
             if self.needs_full_reindex(&root) {
-                debug!("Full reindex required, clearing existing index.");
-                let _ = tokio::fs::remove_file(root.join(MANIFEST_PATH_FRAGMENT)).await;
-                if let Err(e) = repo.clear_all().await {
-                    lsp_error!("Failed to clear index: {e}");
-                    return;
-                }
-
                 let indexing_start = Instant::now();
 
                 let token_ws = format!("idx-ws-{}", uuid::Uuid::new_v4());
@@ -2485,9 +2497,18 @@ impl LanguageServer for Backend {
                 let token_ws_save = format!("idx-ws-save-{}", uuid::Uuid::new_v4());
                 let token_ws_save_end = token_ws_save.clone();
 
-                // Show the progress notification immediately so the user knows the server is active.
-                lsp_progress_begin!(&token_ws, "Resolving dependencies...");
+                // Show progress before any slow work so the user immediately sees the server is active.
+                lsp_progress_begin!(&token_ws, "Preparing index...");
 
+                debug!("Full reindex required, clearing existing index.");
+                let _ = tokio::fs::remove_file(root.join(MANIFEST_PATH_FRAGMENT)).await;
+                if let Err(e) = repo.clear_all().await {
+                    lsp_error!("Failed to clear index: {e}");
+                    lsp_progress_end!(&token_ws_end);
+                    return;
+                }
+
+                lsp_progress!(&token_ws, "Resolving dependencies...", 0.0);
                 lsp_info!("Resolving dependencies...");
 
                 let external_deps = match build_tool.get_dependency_paths(&root) {
@@ -2700,6 +2721,18 @@ impl LanguageServer for Backend {
 
             if let Err(e) = tokio::fs::write(root.join(INDEX_PATH_FRAGMENT), APP_VERSION).await {
                 lsp_error!("Failed to write {INDEX_PATH_FRAGMENT}: {e}");
+            }
+
+            self.index_ready.store(true, Ordering::Release);
+
+            // Publish diagnostics for any files already opened during indexing.
+            let open_uris: Vec<Url> = self
+                .documents
+                .iter()
+                .filter_map(|entry| Url::parse(entry.key()).ok())
+                .collect();
+            for uri in open_uris {
+                self.publish_diagnostics(uri).await;
             }
         }
     }
@@ -3122,6 +3155,10 @@ impl LanguageServer for Backend {
         } else {
             Ok(Some(CompletionResponse::Array(items)))
         }
+    }
+
+    async fn rename(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
+        self.rename_impl(params).await
     }
 
     async fn references(

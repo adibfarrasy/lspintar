@@ -172,6 +172,47 @@ pub trait LanguageSupport: Send + Sync {
     fn get_method_call_sites(&self, _tree: &Tree, _source: &str) -> Vec<MethodCallSiteData> {
         vec![]
     }
+
+    /// Returns true when `name` is a syntactically valid identifier in this language
+    /// and is not a reserved keyword.  Default checks ASCII rules
+    /// (letter or `_`/`$` followed by letters, digits, `_`, `$`) and delegates
+    /// keyword filtering to `reserved_keywords`.
+    fn is_valid_identifier(&self, name: &str) -> bool {
+        if name.is_empty() {
+            return false;
+        }
+        let mut chars = name.chars();
+        let first = chars.next().unwrap();
+        let is_ident_start = |c: char| c.is_ascii_alphabetic() || c == '_' || c == '$';
+        let is_ident_cont = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '$';
+        if !is_ident_start(first) {
+            return false;
+        }
+        if !chars.all(is_ident_cont) {
+            return false;
+        }
+        !self.reserved_keywords().contains(name)
+    }
+
+    /// Reserved keywords for this language.  Used by `is_valid_identifier`.
+    fn reserved_keywords(&self) -> &'static HashSet<&'static str>;
+
+    /// Given the declaration position of a local variable or parameter, return
+    /// the ranges of all identifier occurrences in the file that resolve to
+    /// that declaration.  The result includes the declaration's own identifier
+    /// range.  References that resolve to a shadowing inner declaration are
+    /// excluded by construction.
+    ///
+    /// Returns `None` when the language does not distinguish locals from
+    /// fields at this position, or when the declaration cannot be located.
+    fn find_local_references(
+        &self,
+        _tree: &Tree,
+        _content: &str,
+        _decl_position: &Position,
+    ) -> Option<Vec<Range>> {
+        None
+    }
 }
 
 /// One argument at a method call site, with enough information for the server to

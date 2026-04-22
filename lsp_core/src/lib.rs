@@ -1,6 +1,7 @@
 pub mod build_tools;
 pub mod language_support;
 pub mod languages;
+pub mod local_refs;
 pub mod lsp_logging;
 pub mod node_kind;
 pub mod ts_helper;

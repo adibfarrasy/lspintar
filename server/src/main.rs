@@ -7,6 +7,7 @@ mod generic_resolution;
 mod indexer;
 mod lsp_convert;
 mod models;
+mod rename;
 mod repo;
 mod server;
 

@@ -4,6 +4,7 @@ pub mod generic_resolution;
 pub mod indexer;
 pub mod lsp_convert;
 pub mod models;
+pub mod rename;
 pub mod repo;
 pub mod server;
 

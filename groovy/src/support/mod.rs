@@ -4,7 +4,7 @@ use lsp_core::{
     node_kind::NodeKind,
     ts_helper::{self, collect_syntax_errors, get_node_at_position, node_contains_position},
 };
-use std::{cell::RefCell, fs, path::Path};
+use std::{cell::RefCell, collections::HashSet, fs, path::Path, sync::LazyLock};
 
 use tower_lsp::lsp_types::{Position, Range};
 use tree_sitter::{Node, Parser, Point, Query, QueryCursor, QueryMatch, StreamingIterator, Tree};
@@ -1621,7 +1621,67 @@ impl LanguageSupport for GroovySupport {
 
         results
     }
+
+    fn reserved_keywords(&self) -> &'static HashSet<&'static str> {
+        &GROOVY_KEYWORDS
+    }
+
+    fn find_local_references(
+        &self,
+        tree: &Tree,
+        content: &str,
+        decl_position: &Position,
+    ) -> Option<Vec<Range>> {
+        lsp_core::local_refs::find_local_references(
+            tree,
+            content,
+            decl_position,
+            GROOVY_DECL_NODE_KINDS,
+            GROOVY_SCOPE_NODE_KINDS,
+        )
+    }
 }
+
+static GROOVY_KEYWORDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
+    [
+        // Java keywords are also Groovy keywords.
+        "abstract", "assert", "boolean", "break", "byte", "case", "catch", "char",
+        "class", "const", "continue", "default", "do", "double", "else", "enum",
+        "extends", "final", "finally", "float", "for", "goto", "if", "implements",
+        "import", "instanceof", "int", "interface", "long", "native", "new",
+        "package", "private", "protected", "public", "return", "short", "static",
+        "strictfp", "super", "switch", "synchronized", "this", "throw", "throws",
+        "transient", "try", "void", "volatile", "while",
+        "true", "false", "null",
+        // Groovy additions.
+        "as", "def", "in", "trait",
+    ]
+    .into_iter()
+    .collect()
+});
+
+static GROOVY_DECL_NODE_KINDS: &[&str] = &[
+    "local_variable_declaration",
+    "variable_declarator",
+    "formal_parameter",
+    "parameter",
+    "catch_formal_parameter",
+    "enhanced_for_statement",
+    "closure_parameter",
+    "closure_parameters",
+];
+
+static GROOVY_SCOPE_NODE_KINDS: &[&str] = &[
+    "method_declaration",
+    "constructor_declaration",
+    "closure",
+    "closure_expression",
+    "block",
+    "for_statement",
+    "enhanced_for_statement",
+    "catch_clause",
+    "class_body",
+];
 
 fn find_containing_class(mut node: Node, bytes: &[u8]) -> Option<String> {
     while let Some(parent) = node.parent() {

@@ -383,12 +383,9 @@ impl Indexer {
                 }
                 let ext = Path::new(&entry_name).extension().and_then(|s| s.to_str());
                 match ext {
-                    Some("class") => {
-                        let symbols = self
-                            .extract_class_metadata(&buffer, &entry_name, jar_path)
-                            .ok()?;
-                        Some((symbols, vec![]))
-                    }
+                    Some("class") => self
+                        .extract_class_metadata(&buffer, &entry_name, jar_path)
+                        .ok(),
                     Some("java" | "groovy" | "kt") => {
                         let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
                             self.extract_source_symbols(buffer, &entry_name, jar_path)
@@ -507,18 +504,58 @@ impl Indexer {
         class_bytes: &[u8],
         entry_name: &str,
         jar_path: &Path,
-    ) -> Result<Vec<ExternalSymbol>> {
+    ) -> Result<(Vec<ExternalSymbol>, Vec<SymbolSuperMapping>)> {
         let class = class_parser(class_bytes)
             .map_err(|e| anyhow!("Failed to parse class: {:?}", e))?
             .1;
 
         if !class.access_flags.contains(ClassAccessFlags::PUBLIC) {
-            return Ok(vec![]);
+            return Ok((vec![], vec![]));
         }
 
         let mut symbols = Vec::new();
+        let mut super_mappings = Vec::new();
 
         let class_name = get_class_name(&class.const_pool, class.this_class)?.replace('/', ".");
+
+        // Record superclass (skip java.lang.Object — its methods are already in the
+        // reachable set and every class points to it, adding noise).
+        if class.super_class != 0 {
+            if let Ok(super_name) = get_class_name(&class.const_pool, class.super_class) {
+                let super_fqn = super_name.replace('/', ".");
+                if super_fqn != "java.lang.Object" {
+                    let super_short = super_fqn
+                        .rsplit('.')
+                        .next()
+                        .unwrap_or(&super_fqn)
+                        .to_string();
+                    super_mappings.push(SymbolSuperMapping {
+                        id: None,
+                        symbol_fqn: class_name.clone(),
+                        super_short_name: super_short,
+                        super_fqn: Some(super_fqn),
+                    });
+                }
+            }
+        }
+
+        // Record implemented interfaces.
+        for iface_idx in &class.interfaces {
+            if let Ok(iface_name) = get_class_name(&class.const_pool, *iface_idx) {
+                let iface_fqn = iface_name.replace('/', ".");
+                let iface_short = iface_fqn
+                    .rsplit('.')
+                    .next()
+                    .unwrap_or(&iface_fqn)
+                    .to_string();
+                super_mappings.push(SymbolSuperMapping {
+                    id: None,
+                    symbol_fqn: class_name.clone(),
+                    super_short_name: iface_short,
+                    super_fqn: Some(iface_fqn),
+                });
+            }
+        }
         let package_name = class_name
             .rfind('.')
             .map(|i| &class_name[..i])
@@ -681,7 +718,7 @@ impl Indexer {
             });
         }
 
-        Ok(symbols)
+        Ok((symbols, super_mappings))
     }
 
     pub async fn index_external_deps<F, G>(

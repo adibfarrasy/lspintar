@@ -4,7 +4,7 @@ use lsp_core::{
     node_kind::NodeKind,
     ts_helper::{self, collect_syntax_errors, get_node_at_position, node_contains_position},
 };
-use std::{cell::RefCell, fs, path::Path};
+use std::{cell::RefCell, collections::HashSet, fs, path::Path, sync::LazyLock};
 
 use tower_lsp::lsp_types::{Position, Range};
 use tree_sitter::{Node, Parser, Point, Query, QueryCursor, QueryMatch, StreamingIterator, Tree};
@@ -1546,7 +1546,68 @@ impl LanguageSupport for JavaSupport {
 
         results
     }
+
+    fn reserved_keywords(&self) -> &'static HashSet<&'static str> {
+        &JAVA_KEYWORDS
+    }
+
+    fn find_local_references(
+        &self,
+        tree: &Tree,
+        content: &str,
+        decl_position: &Position,
+    ) -> Option<Vec<Range>> {
+        lsp_core::local_refs::find_local_references(
+            tree,
+            content,
+            decl_position,
+            JAVA_DECL_NODE_KINDS,
+            JAVA_SCOPE_NODE_KINDS,
+        )
+    }
 }
+
+static JAVA_KEYWORDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
+    [
+        "abstract", "assert", "boolean", "break", "byte", "case", "catch", "char",
+        "class", "const", "continue", "default", "do", "double", "else", "enum",
+        "exports", "extends", "final", "finally", "float", "for", "goto", "if",
+        "implements", "import", "instanceof", "int", "interface", "long", "module",
+        "native", "new", "non-sealed", "open", "opens", "package", "permits",
+        "private", "protected", "provides", "public", "record", "requires", "return",
+        "sealed", "short", "static", "strictfp", "super", "switch", "synchronized",
+        "this", "throw", "throws", "to", "transient", "transitive", "try", "uses",
+        "var", "void", "volatile", "while", "with", "yield",
+        "true", "false", "null",
+    ]
+    .into_iter()
+    .collect()
+});
+
+/// Tree-sitter node kinds whose child `name`/`identifier` creates a new binding.
+static JAVA_DECL_NODE_KINDS: &[&str] = &[
+    "local_variable_declaration",
+    "variable_declarator",
+    "formal_parameter",
+    "catch_formal_parameter",
+    "enhanced_for_statement",
+    "resource",
+    "spread_parameter",
+];
+
+/// Tree-sitter node kinds that introduce a lexical scope.
+static JAVA_SCOPE_NODE_KINDS: &[&str] = &[
+    "method_declaration",
+    "constructor_declaration",
+    "lambda_expression",
+    "block",
+    "for_statement",
+    "enhanced_for_statement",
+    "catch_clause",
+    "try_with_resources_statement",
+    "switch_block_statement_group",
+    "class_body",
+];
 
 fn find_containing_class(mut node: Node, bytes: &[u8]) -> Option<String> {
     while let Some(parent) = node.parent() {
