@@ -278,7 +278,13 @@ impl Backend {
                         for path in batch {
                             let indexer = indexer.clone();
                             let path_clone = path.clone();
-                            let result = tokio::task::spawn_blocking(move || indexer.index_file(&path_clone)).await;
+                            let buffered = Url::from_file_path(&path)
+                                .ok()
+                                .and_then(|uri| backend.documents.get(&uri.to_string()).map(|e| e.0.clone()));
+                            let result = tokio::task::spawn_blocking(move || match buffered {
+                                Some(content) => indexer.index_content(&path_clone, &content),
+                                None => indexer.index_file(&path_clone),
+                            }).await;
 
                             match result {
                                 Ok(Ok(Some((symbols, supers)))) => {
@@ -3279,6 +3285,9 @@ impl LanguageServer for Backend {
         if let Some(change) = params.content_changes.into_iter().last() {
             self.documents
                 .insert(uri.to_string(), (change.text, Instant::now()));
+        }
+        if let Ok(path) = uri.to_file_path() {
+            let _ = self.debounce_tx.send(path).await;
         }
         let _ = self.diag_debounce_tx.send(uri).await;
     }

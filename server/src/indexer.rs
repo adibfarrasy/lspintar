@@ -160,6 +160,32 @@ impl Indexer {
         Ok(None)
     }
 
+    pub fn index_content(
+        &self,
+        path: &Path,
+        content: &str,
+    ) -> Result<Option<(Vec<Symbol>, Vec<SymbolSuperMapping>)>> {
+        if let Some(ext) = path.extension().and_then(|e| e.to_str())
+            && self.languages.contains_key(ext)
+        {
+            let lang = self
+                .languages
+                .get(ext)
+                .ok_or_else(|| anyhow!("failed to get language implementation"))?;
+            let parsed = lang
+                .parse_str(content)
+                .ok_or_else(|| anyhow!("failed to parse in-memory content for {}", path.display()))?;
+
+            if let Ok(result) =
+                self.get_symbols_from_tree(&parsed.0, lang.as_ref(), path, &parsed.1, false)
+            {
+                return Ok(Some(result));
+            }
+        }
+
+        Ok(None)
+    }
+
     fn get_symbols_from_tree(
         &self,
         tree: &Tree,
