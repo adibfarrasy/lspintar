@@ -1,5 +1,5 @@
 use lsp_core::{
-    language_support::{CallArgData, ClassDeclarationData, GenericTypeUsage, IdentResult, LanguageSupport, MemberAccessData, MethodCallSiteData, OverrideMethodData, ParameterResult, ParseResult},
+    language_support::{CallArgData, ClassDeclarationData, GenericTypeUsage, IdentResult, LanguageSupport, MemberAccessData, MethodCallSiteData, MethodSig, OverrideMethodData, ParameterResult, ParseResult},
     languages::Language,
     node_kind::NodeKind,
     ts_helper::{self, collect_syntax_errors, get_node_at_position, node_contains_position},
@@ -12,7 +12,7 @@ use tree_sitter::{Node, Parser, Point, Query, QueryCursor, QueryMatch, Streaming
 use crate::{
     constants::KOTLIN_IMPLICIT_IMPORTS,
     support::queries::{
-        CLASS_METHOD_NAMES_QUERY, DECLARED_TYPES_QUERY, DECLARES_VARIABLE_QUERY,
+        DECLARED_TYPES_QUERY, DECLARES_VARIABLE_QUERY,
         FUNCTION_WITH_RETURN_QUERY, GET_ANNOTATIONS_QUERY, GET_EXTENDS_QUERY,
         GET_FIELD_RETURN_QUERY, GET_FIELD_SHORT_NAME_QUERY, GET_FUNCTION_RETURN_QUERY,
         GET_GENERIC_TYPE_USAGES_QUERY, GET_IMPLEMENTS_QUERY, GET_IMPORTS_QUERY, GET_KDOC_QUERY,
@@ -1670,21 +1670,20 @@ impl LanguageSupport for KotlinSupport {
                 let mut parents = extends;
                 parents.extend(implements);
 
-                let mut defined_method_names = std::collections::HashSet::new();
+                let mut defined_methods: Vec<MethodSig> = Vec::new();
                 for i in 0..type_node.child_count() {
                     let Some(child) = type_node.child(i) else { continue };
                     if child.kind() == "class_body" || child.kind() == "enum_class_body" {
-                        let mut method_cursor = QueryCursor::new();
-                        method_cursor.set_max_start_depth(Some(1));
-                        method_cursor
-                            .matches(&CLASS_METHOD_NAMES_QUERY, child, bytes)
-                            .for_each(|mm| {
-                                if let Some(cap) = mm.captures.first() {
-                                    if let Ok(method_name) = cap.node.utf8_text(bytes) {
-                                        defined_method_names.insert(method_name.to_string());
-                                    }
-                                }
-                            });
+                        for j in 0..child.child_count() {
+                            let Some(member) = child.child(j) else { continue };
+                            if member.kind() != "function_declaration" {
+                                continue;
+                            }
+                            let Some(name_node) = member.child_by_field_name("name") else { continue };
+                            let Ok(method_name) = name_node.utf8_text(bytes) else { continue };
+                            let param_types = extract_param_types(member, bytes);
+                            defined_methods.push(MethodSig::new(method_name, param_types));
+                        }
                         break;
                     }
                 }
@@ -1694,7 +1693,7 @@ impl LanguageSupport for KotlinSupport {
                     ident_range,
                     is_abstract,
                     parents,
-                    defined_method_names,
+                    defined_methods,
                 });
             });
 

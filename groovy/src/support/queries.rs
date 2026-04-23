@@ -199,15 +199,6 @@ pub static GET_TYPE_REFS_QUERY: LazyLock<Query> = LazyLock::new(|| {
     .unwrap()
 });
 
-/// Captures method names directly defined in a class body.
-pub static CLASS_METHOD_NAMES_QUERY: LazyLock<Query> = LazyLock::new(|| {
-    Query::new(
-        &GROOVY_TS_LANGUAGE,
-        r#"(function_declaration name: (identifier) @method_name)"#,
-    )
-    .unwrap()
-});
-
 /// Captures `new T(...)` expressions.
 pub static GET_OBJECT_CREATIONS_QUERY: LazyLock<Query> = LazyLock::new(|| {
     Query::new(

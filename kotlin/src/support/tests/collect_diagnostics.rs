@@ -287,8 +287,13 @@ class Foo {
 "#;
     let decls = class_decls_for(source);
     assert_eq!(decls.len(), 1);
-    assert!(decls[0].defined_method_names.contains("alpha"), "expected 'alpha' in defined methods");
-    assert!(decls[0].defined_method_names.contains("beta"), "expected 'beta' in defined methods");
+    let names: Vec<&str> = decls[0]
+        .defined_methods
+        .iter()
+        .map(|m| m.name.as_str())
+        .collect();
+    assert!(names.contains(&"alpha"), "expected 'alpha' in defined methods");
+    assert!(names.contains(&"beta"), "expected 'beta' in defined methods");
 }
 
 #[test]
@@ -303,11 +308,31 @@ class Outer {
 "#;
     let decls = class_decls_for(source);
     let outer = decls.iter().find(|d| d.name == "Outer").expect("Outer not found");
-    assert!(outer.defined_method_names.contains("outerMethod"));
+    let outer_names: Vec<&str> = outer.defined_methods.iter().map(|m| m.name.as_str()).collect();
+    assert!(outer_names.contains(&"outerMethod"));
     assert!(
-        !outer.defined_method_names.contains("innerMethod"),
+        !outer_names.contains(&"innerMethod"),
         "inner class methods should not appear in outer class defined methods"
     );
+}
+
+#[test]
+fn test_defined_method_param_types_distinguish_overloads() {
+    let source = r#"
+class Foo {
+    fun foo(s: String) {}
+    fun foo(n: Int) {}
+}
+"#;
+    let decls = class_decls_for(source);
+    assert_eq!(decls.len(), 1);
+    let sigs: Vec<(String, Vec<String>)> = decls[0]
+        .defined_methods
+        .iter()
+        .map(|m| (m.name.clone(), m.param_types.clone()))
+        .collect();
+    assert!(sigs.contains(&("foo".to_string(), vec!["String".to_string()])));
+    assert!(sigs.contains(&("foo".to_string(), vec!["int".to_string()])));
 }
 
 #[test]

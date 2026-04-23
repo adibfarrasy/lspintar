@@ -134,3 +134,99 @@ class UserRepository : BaseRepository<User> {
         "diagnostic message should mention 'findById', got: {msg}"
     );
 }
+
+/// A class that implements only one of two same-named overloads must still
+/// trigger unimplemented_abstract_methods for the missing overload, even though
+/// the *name* is technically present.  Notifier declares both
+/// `notify(String)` and `notify(String, int)`; this fixture only supplies the
+/// single-arg version.
+#[tokio::test]
+async fn diagnostic_when_overload_missing() {
+    let server = get_test_server("polyglot-spring").await;
+
+    let uri = Url::parse("file:///tmp/PartialNotifier.kt").unwrap();
+    let content = r#"package com.example
+
+class PartialNotifier : Notifier {
+    override fun notify(message: String) {}
+}
+"#;
+    server
+        .backend
+        .did_open(DidOpenTextDocumentParams {
+            text_document: TextDocumentItem {
+                uri: uri.clone(),
+                language_id: "kotlin".to_string(),
+                version: 1,
+                text: content.to_string(),
+            },
+        })
+        .await;
+
+    let diags = server
+        .backend
+        .compute_diagnostics(&uri)
+        .await
+        .expect("compute_diagnostics returned None");
+
+    assert!(
+        has_code(&diags, "unimplemented_abstract_methods"),
+        "expected unimplemented_abstract_methods when notify(String, int) overload is missing, got: {diags:?}"
+    );
+
+    let msg = diags
+        .iter()
+        .find(|d| {
+            d.code
+                == Some(tower_lsp::lsp_types::NumberOrString::String(
+                    "unimplemented_abstract_methods".to_string(),
+                ))
+        })
+        .map(|d| d.message.clone())
+        .unwrap_or_default();
+    assert!(
+        msg.contains("notify"),
+        "diagnostic message should mention 'notify', got: {msg}"
+    );
+    assert!(
+        msg.contains("int") || msg.contains("Int"),
+        "diagnostic message should reference the missing overload's int parameter, got: {msg}"
+    );
+}
+
+/// The complement: implementing both overloads must produce no diagnostic.
+#[tokio::test]
+async fn no_diagnostic_when_all_overloads_implemented() {
+    let server = get_test_server("polyglot-spring").await;
+
+    let uri = Url::parse("file:///tmp/FullNotifier.kt").unwrap();
+    let content = r#"package com.example
+
+class FullNotifier : Notifier {
+    override fun notify(message: String) {}
+    override fun notify(message: String, priority: Int) {}
+}
+"#;
+    server
+        .backend
+        .did_open(DidOpenTextDocumentParams {
+            text_document: TextDocumentItem {
+                uri: uri.clone(),
+                language_id: "kotlin".to_string(),
+                version: 1,
+                text: content.to_string(),
+            },
+        })
+        .await;
+
+    let diags = server
+        .backend
+        .compute_diagnostics(&uri)
+        .await
+        .expect("compute_diagnostics returned None");
+
+    assert!(
+        !has_code(&diags, "unimplemented_abstract_methods"),
+        "expected no unimplemented_abstract_methods when both overloads are implemented, got: {diags:?}"
+    );
+}

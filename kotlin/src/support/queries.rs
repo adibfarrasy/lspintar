@@ -247,15 +247,6 @@ pub static FUNCTION_WITH_RETURN_QUERY: LazyLock<Query> = LazyLock::new(|| {
     .unwrap()
 });
 
-/// Captures method names directly defined in a class body.
-pub static CLASS_METHOD_NAMES_QUERY: LazyLock<Query> = LazyLock::new(|| {
-    Query::new(
-        &KOTLIN_TS_LANGUAGE,
-        r#"(function_declaration name: (identifier) @method_name)"#,
-    )
-    .unwrap()
-});
-
 /// Captures qualified member-access call sites `receiver.method(...)`.
 pub static GET_MEMBER_ACCESSES_QUERY: LazyLock<Query> = LazyLock::new(|| {
     Query::new(

@@ -218,16 +218,6 @@ pub static FUNCTION_WITH_RETURN_QUERY: LazyLock<Query> = LazyLock::new(|| {
     .unwrap()
 });
 
-/// Captures method names directly defined in the body of a specific class.
-/// Intended for use with QueryCursor scoped to a single class_declaration node.
-pub static CLASS_METHOD_NAMES_QUERY: LazyLock<Query> = LazyLock::new(|| {
-    Query::new(
-        &JAVA_TS_LANGUAGE,
-        r#"(function_declaration name: (identifier) @method_name)"#,
-    )
-    .unwrap()
-});
-
 /// Captures `new T(...)` expressions.
 /// Two capture groups: @type_name for raw types, @generic_type_name for parameterised types.
 pub static GET_OBJECT_CREATIONS_QUERY: LazyLock<Query> = LazyLock::new(|| {

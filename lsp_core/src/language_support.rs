@@ -252,8 +252,159 @@ pub struct ClassDeclarationData {
     pub is_abstract: bool,
     /// Direct parent names as written in source: the extends type and all implements types.
     pub parents: Vec<String>,
-    /// Short names of all methods defined directly in this class body (not inherited).
-    pub defined_method_names: HashSet<String>,
+    /// All methods defined directly in this class body (not inherited), with their
+    /// normalized parameter-type signatures so overloads can be distinguished.
+    pub defined_methods: Vec<MethodSig>,
+}
+
+/// A method signature used to compare overloads between a class and the abstract
+/// contracts it must satisfy.  Parameter types are normalized via
+/// [`normalize_param_type`] so parent and child signatures compare structurally
+/// regardless of surface differences (qualifier prefixes, generics, whitespace).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct MethodSig {
+    pub name: String,
+    pub param_types: Vec<String>,
+}
+
+impl MethodSig {
+    pub fn new<S: Into<String>>(name: S, param_types: Vec<String>) -> Self {
+        Self {
+            name: name.into(),
+            param_types: param_types
+                .into_iter()
+                .map(|t| normalize_param_type(&t))
+                .collect(),
+        }
+    }
+
+    /// Returns true when `self` is a valid concrete implementation of the abstract
+    /// signature `parent`.  Names must match and parameter counts must agree.
+    /// Each parameter type matches when the normalized forms are equal, or when
+    /// the parent-side type is a generic type parameter placeholder (a single
+    /// uppercase letter such as `T`/`E`/`K`) — the subclass has already bound it
+    /// to a concrete type.
+    pub fn implements(&self, parent: &MethodSig) -> bool {
+        if self.name != parent.name {
+            return false;
+        }
+        if self.param_types.len() != parent.param_types.len() {
+            return false;
+        }
+        self.param_types
+            .iter()
+            .zip(parent.param_types.iter())
+            .all(|(child, parent_ty)| child == parent_ty || looks_like_generic_param(parent_ty))
+    }
+}
+
+/// Heuristic: a parameter type of the form `T`, `E`, `K`, `V`, `R` — a single
+/// uppercase ASCII letter, optionally followed by digits — is treated as an
+/// unbound generic type parameter during abstract-method matching.  This covers
+/// the Java/Kotlin/Groovy convention without requiring full generic resolution.
+fn looks_like_generic_param(t: &str) -> bool {
+    let mut chars = t.chars();
+    let Some(first) = chars.next() else { return false };
+    if !first.is_ascii_uppercase() {
+        return false;
+    }
+    chars.all(|c| c.is_ascii_digit())
+}
+
+/// Normalize a parameter type string so signatures from tree-sitter source and
+/// from stored symbol metadata compare equal.  Strips leading annotations,
+/// generic arguments, and qualifier prefixes; collapses whitespace; preserves
+/// array `[]` and varargs `...` suffixes (varargs become `[]` for matching).
+pub fn normalize_param_type(t: &str) -> String {
+    let mut s = t.trim().to_string();
+
+    // Strip leading @Annotation(...) segments.
+    loop {
+        let trimmed = s.trim_start();
+        if !trimmed.starts_with('@') {
+            s = trimmed.to_string();
+            break;
+        }
+        let rest = &trimmed[1..];
+        let id_end = rest
+            .find(|c: char| !(c.is_alphanumeric() || c == '_' || c == '.'))
+            .unwrap_or(rest.len());
+        let mut tail = &rest[id_end..];
+        let after_ws = tail.trim_start();
+        if after_ws.starts_with('(') {
+            let bytes = after_ws.as_bytes();
+            let mut depth = 0i32;
+            let mut end = None;
+            for (i, &b) in bytes.iter().enumerate() {
+                if b == b'(' {
+                    depth += 1;
+                } else if b == b')' {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = Some(i + 1);
+                        break;
+                    }
+                }
+            }
+            match end {
+                Some(e) => tail = &after_ws[e..],
+                None => break,
+            }
+        }
+        s = tail.trim_start().to_string();
+    }
+
+    // Varargs → array: `String...` ≡ `String[]`.
+    let trailing_array = if let Some(stripped) = s.strip_suffix("...") {
+        s = stripped.trim_end().to_string();
+        "[]".to_string()
+    } else {
+        let mut suffix = String::new();
+        while s.trim_end().ends_with("[]") {
+            s = s.trim_end().trim_end_matches("[]").trim_end().to_string();
+            suffix.push_str("[]");
+        }
+        suffix
+    };
+
+    // Strip generic arguments: everything between matched `<` and `>`.
+    let mut buf = String::with_capacity(s.len());
+    let mut depth = 0i32;
+    for ch in s.chars() {
+        match ch {
+            '<' => depth += 1,
+            '>' if depth > 0 => depth -= 1,
+            _ if depth == 0 => buf.push(ch),
+            _ => {}
+        }
+    }
+    let s = buf;
+
+    // Collapse whitespace and drop qualifier prefix: `java.util.List` → `List`.
+    let s: String = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    let short = s.rsplit('.').next().unwrap_or("").to_string();
+
+    // Strip Kotlin's nullable marker: `String?` → `String`.
+    let short = short.trim_end_matches('?').to_string();
+
+    // Canonicalize cross-language equivalents so a Java `int` parameter matches
+    // its Kotlin `Int` override.  The canonical form is the lowercase Java
+    // primitive name (or the boxed reference when there is no primitive).
+    let canon = match short.as_str() {
+        "Int" | "Integer" => "int",
+        "Long" => "long",
+        "Short" => "short",
+        "Byte" => "byte",
+        "Float" => "float",
+        "Double" => "double",
+        "Boolean" => "boolean",
+        "Char" | "Character" => "char",
+        "Unit" | "Void" => "void",
+        "Any" | "Object" => "Object",
+        other => other,
+    };
+
+    format!("{canon}{trailing_array}")
 }
 
 /// A `new T(...)` expression site.

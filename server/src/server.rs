@@ -1583,9 +1583,11 @@ impl Backend {
         }
     }
 
-    /// Returns the short names of methods that are abstract (or implicitly abstract because they
-    /// belong to an interface) in the type identified by `parent_fqn`.
-    async fn abstract_method_names(&self, parent_fqn: &str) -> Vec<String> {
+    /// Returns the signatures of methods that are abstract (or implicitly abstract because they
+    /// belong to an interface) in the type identified by `parent_fqn`.  Each signature
+    /// carries the method name plus the normalized types of its parameters, so overload
+    /// resolution distinguishes `foo(String)` from `foo(int)`.
+    async fn abstract_methods(&self, parent_fqn: &str) -> Vec<lsp_core::language_support::MethodSig> {
         let Some(repo) = self.repo.get() else {
             return vec![];
         };
@@ -1625,7 +1627,7 @@ impl Backend {
             has_abstract || (is_interface && !has_default && !has_static)
         }
 
-        let mut names = Vec::new();
+        let mut sigs = Vec::new();
 
         for sym in repo
             .find_symbols_by_parent_name(parent_fqn)
@@ -1633,7 +1635,21 @@ impl Backend {
             .unwrap_or_default()
         {
             if is_required(&sym.symbol_type, &sym.modifiers.0, is_interface) {
-                names.push(sym.short_name.clone());
+                let params = sym
+                    .metadata
+                    .0
+                    .parameters
+                    .as_ref()
+                    .map(|ps| {
+                        ps.iter()
+                            .map(|p| p.type_name.clone().unwrap_or_default())
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                sigs.push(lsp_core::language_support::MethodSig::new(
+                    sym.short_name.clone(),
+                    params,
+                ));
             }
         }
 
@@ -1643,11 +1659,25 @@ impl Backend {
             .unwrap_or_default()
         {
             if is_required(&sym.symbol_type, &sym.modifiers.0, is_interface) {
-                names.push(sym.short_name.clone());
+                let params = sym
+                    .metadata
+                    .0
+                    .parameters
+                    .as_ref()
+                    .map(|ps| {
+                        ps.iter()
+                            .map(|p| p.type_name.clone().unwrap_or_default())
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                sigs.push(lsp_core::language_support::MethodSig::new(
+                    sym.short_name.clone(),
+                    params,
+                ));
             }
         }
 
-        names
+        sigs
     }
 
     /// Returns the modifiers of a type (class/interface/enum) identified by its FQN.
@@ -1872,23 +1902,33 @@ impl Backend {
                         });
                     }
 
-                    let required = self.abstract_method_names(&parent_fqn).await;
-                    for method_name in required {
-                        if !class_data.defined_method_names.contains(&method_name) {
-                            diagnostics.push(Diagnostic {
-                                range: class_data.ident_range,
-                                severity: Some(DiagnosticSeverity::ERROR),
-                                code: Some(NumberOrString::String(
-                                    "unimplemented_abstract_methods".to_string(),
-                                )),
-                                source: Some("lspintar".to_string()),
-                                message: format!(
-                                    "'{}' must implement '{}'",
-                                    class_data.name, method_name
-                                ),
-                                ..Default::default()
-                            });
+                    let required = self.abstract_methods(&parent_fqn).await;
+                    for required_sig in required {
+                        if class_data
+                            .defined_methods
+                            .iter()
+                            .any(|d| d.implements(&required_sig))
+                        {
+                            continue;
                         }
+                        let pretty = format!(
+                            "{}({})",
+                            required_sig.name,
+                            required_sig.param_types.join(", "),
+                        );
+                        diagnostics.push(Diagnostic {
+                            range: class_data.ident_range,
+                            severity: Some(DiagnosticSeverity::ERROR),
+                            code: Some(NumberOrString::String(
+                                "unimplemented_abstract_methods".to_string(),
+                            )),
+                            source: Some("lspintar".to_string()),
+                            message: format!(
+                                "'{}' must implement '{}'",
+                                class_data.name, pretty
+                            ),
+                            ..Default::default()
+                        });
                     }
                 }
             }
@@ -3286,8 +3326,14 @@ impl LanguageServer for Backend {
             self.documents
                 .insert(uri.to_string(), (change.text, Instant::now()));
         }
-        if let Ok(path) = uri.to_file_path() {
-            let _ = self.debounce_tx.send(path).await;
+        // Only enqueue an in-memory reindex once the initial bulk index has
+        // finished publishing.  Otherwise our 300 ms-debounced writes contend
+        // with the bulk indexer's DELETE/INSERT batch on the same SQLite file
+        // and surface as "database is locked" errors.
+        if self.index_ready.load(Ordering::Acquire) {
+            if let Ok(path) = uri.to_file_path() {
+                let _ = self.debounce_tx.send(path).await;
+            }
         }
         let _ = self.diag_debounce_tx.send(uri).await;
     }
