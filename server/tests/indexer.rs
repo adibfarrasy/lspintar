@@ -1092,47 +1092,52 @@ async fn index_jdk_dep_source_jar() {
         .expect("Query failed");
     assert!(result.is_some(), "External symbol should be found");
 
-    let mut symbol = result.unwrap();
-    symbol.id = None;
-    symbol.last_modified = 0;
-    symbol.jar_path = String::new();
-    symbol.metadata.documentation = None;
+    let symbol = result.unwrap();
 
-    assert_eq!(
-        symbol,
-        ExternalSymbol {
-            id: None,
-            jar_path: String::new(),
-            source_file_path: "java.base/java/lang/String.java".to_string(),
-            alt_jar_path: None,
-            short_name: "String".to_string(),
-            fully_qualified_name: "java.lang.String".to_string(),
-            package_name: "java.lang".to_string(),
-            parent_name: Some("java.lang".to_string()),
-            symbol_type: "Class".to_string(),
-            modifiers: Json(vec!["public".to_string(), "final".to_string()]),
-            line_start: 65,
-            line_end: 4916,
-            char_start: 0,
-            char_end: 1,
-            ident_line_start: 141,
-            ident_line_end: 141,
-            ident_char_start: 19,
-            ident_char_end: 25,
-            needs_decompilation: false,
-            metadata: Json(SymbolMetadata {
-                parameters: None,
-                return_type: None,
-                documentation: None,
-                annotations: Some(vec![]),
-                generic_return_type: None,
-                type_params: None,
-                generic_param_types: None,
-                method_type_params: None,
-            },),
-            last_modified: 0,
-            file_type: "java".to_string(),
-        }
+    // JDK-stable assertions — these must hold for any JDK version that ships
+    // String.java in src.zip.
+    assert_eq!(symbol.short_name, "String");
+    assert_eq!(symbol.fully_qualified_name, "java.lang.String");
+    assert_eq!(symbol.package_name, "java.lang");
+    assert_eq!(symbol.parent_name.as_deref(), Some("java.lang"));
+    assert_eq!(symbol.symbol_type, "Class");
+    assert_eq!(symbol.file_type, "java");
+    assert_eq!(symbol.source_file_path, "java.base/java/lang/String.java");
+    assert!(
+        symbol.modifiers.0.iter().any(|m| m == "public"),
+        "String should be public, got: {:?}",
+        symbol.modifiers.0
+    );
+    assert!(
+        symbol.modifiers.0.iter().any(|m| m == "final"),
+        "String should be final, got: {:?}",
+        symbol.modifiers.0
+    );
+    assert!(!symbol.needs_decompilation, "source jar dep is not decompiled");
+    assert!(symbol.metadata.0.annotations.as_ref().map(|a| a.is_empty()).unwrap_or(true));
+
+    // JDK-version-dependent — line counts and identifier columns shift between
+    // releases. Just check they're plausible rather than pinning exact numbers.
+    assert!(
+        symbol.line_start > 0 && symbol.line_end > symbol.line_start,
+        "implausible line range: {}..{}",
+        symbol.line_start,
+        symbol.line_end
+    );
+    assert!(
+        symbol.line_end - symbol.line_start > 1000,
+        "String.java should span thousands of lines, got: {}..{}",
+        symbol.line_start,
+        symbol.line_end
+    );
+    assert!(
+        symbol.ident_line_start >= symbol.line_start
+            && symbol.ident_line_end <= symbol.line_end,
+        "identifier range {}..{} must sit inside class range {}..{}",
+        symbol.ident_line_start,
+        symbol.ident_line_end,
+        symbol.line_start,
+        symbol.line_end
     );
 }
 
