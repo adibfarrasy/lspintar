@@ -14,16 +14,22 @@ lspintar is built differently. It indexes your workspace into a local SQLite dat
 
 ## Features
 
-- **Go to definition** — workspace source files and external JAR dependencies
-- **Go to implementation** — interfaces, abstract methods, and overridden methods
-- **Find references** — cross-file and cross-language (Java ↔ Groovy ↔ Kotlin)
-- **Rename** — signature-matched hierarchy walk, scope-aware for locals, parameters, and closure/lambda bindings; rejects invalid identifiers and reserved keywords
-- **Hover** — classes, methods, fields, interfaces; markdown is tagged with the producer's source language
-- **Completion** — chained member access, prefix completion, local-before-global ranking, implicit-import resolution (Groovy `groovy.lang.*`, etc.)
-- **Diagnostics** — `unimplemented_abstract_methods` (signature-aware, overload-aware), `final_class_extended` (incl. Kotlin's final-by-default), `syntax_error`, `unresolved_symbol`, `method_not_found`, `wrong_argument_types`, `narrowing_conversion`, and more
-- **Cross-language interop** — a Groovy file can import Java and Kotlin classes (and vice versa) with all of the above features working across the boundary
-- **Dependency indexing** — reads JAR files from the Gradle cache; decompiles bytecode when source is unavailable
-- **Incremental re-indexing** on file save and on VCS revision change between startups
+- [x] Go to definition
+- [x] Go to implementation
+- [x] Find references
+- [x] Rename
+- [x] Hover
+- [x] Completion
+- [x] Diagnostics (`unimplemented_abstract_methods`, `final_class_extended`, `syntax_error`, `unresolved_symbol`, `method_not_found`, `wrong_argument_types`, `narrowing_conversion`, and more)
+- [ ] Signature help
+- [ ] Code actions
+- [ ] Document / workspace symbols
+- [ ] Formatting
+- [ ] Folding ranges
+- [ ] Semantic tokens
+- [ ] Inlay hints
+- [ ] Call hierarchy
+- [ ] Type hierarchy
 
 ## Prerequisites
 
@@ -140,8 +146,6 @@ just tt
 # Run tests for a specific package
 just tp lsp_core
 ```
-
-Integration tests are gated behind the `integration-test` feature flag and run against the Gradle fixtures under `server/tests/fixtures/`. Each test binary copies its fixture into a per-process tempdir, so the suite is safe to run in parallel — no `--test-threads=1` required. On first run, the Gradle handler downloads classpath and source jars into `~/.gradle/caches`; subsequent runs are fast.
 
 CI runs the full parallel suite on every push and PR — see `.github/workflows/ci.yml`.
 
