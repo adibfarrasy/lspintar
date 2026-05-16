@@ -2,13 +2,13 @@
 
 [![CI](https://github.com/adibfarrasy/lspintar/actions/workflows/ci.yml/badge.svg)](https://github.com/adibfarrasy/lspintar/actions/workflows/ci.yml)
 
-A Language Server Protocol (LSP) server for Java, Groovy, and Kotlin — built to be fast, lightweight, and free.
+A Language Server Protocol (LSP) server for Java, Groovy, and Kotlin. Fast, lightweight, free.
 
 ## Why
 
-IntelliJ is the de facto standard for JVM development, but it is expensive, resource-heavy, and locked to its own editor. Open source alternatives like Eclipse JDT LS either require a running JVM process, carry significant memory overhead, or offer incomplete support for the full JVM language family — particularly Groovy.
+IntelliJ is the de facto standard for JVM development, but it is expensive, resource-heavy, and locked to its own editor. Open source alternatives like Eclipse JDT LS either require a running JVM process, carry significant memory overhead, or offer incomplete support for the full JVM language family (particularly Groovy).
 
-lspintar is built differently. It indexes your workspace into a local SQLite database and answers LSP queries from that index, with no JVM process involved. It uses a fraction of the memory of IntelliJ — in practice, often 99% less — at the cost of some disk space for the index. The goal is to bring first-class Java, Groovy, and Kotlin navigation to any LSP-capable editor, for free.
+lspintar is built differently. It indexes your workspace into a local SQLite database and answers LSP queries from that index, with no JVM process involved. It uses a fraction of the memory of IntelliJ (in practice, often 99% less) at the cost of some disk space for the index. The goal is to bring first-class Java, Groovy, and Kotlin navigation to any LSP-capable editor, for free.
 
 **Status: alpha.** Core navigation, refactoring, and completion features work. A growing set of diagnostics is implemented (see below); full type-checker parity with IntelliJ is not a goal.
 
@@ -117,7 +117,7 @@ ln -s "$(pwd)" ~/.vscode/extensions/lspintar-vscode
 }
 ```
 
-If the file doesn't exist, create it as `[ { ... } ]`. Fully quit and reopen the editor (`Cmd+Q` on macOS — closing the window is not enough).
+If the file doesn't exist, create it as `[ { ... } ]`. Fully quit and reopen the editor (`Cmd+Q` on macOS; closing the window is not enough).
 
 4. Set the server path in your settings:
 
@@ -131,7 +131,7 @@ If the file doesn't exist, create it as `[ { ... } ]`. Fully quit and reopen the
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `gradle_cache_dir` | Path to the Gradle files cache | — |
+| `gradle_cache_dir` | Path to the Gradle files cache | _none_ |
 | `build_on_init` | Trigger a Gradle build when the server starts | `false` |
 
 ## Development
@@ -147,7 +147,7 @@ just tt
 just tp lsp_core
 ```
 
-CI runs the full parallel suite on every push and PR — see `.github/workflows/ci.yml`.
+CI runs the full parallel suite on every push and PR. See `.github/workflows/ci.yml`.
 
 ## License
 
