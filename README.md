@@ -1,5 +1,7 @@
 # lspintar
 
+[![CI](https://github.com/adibfarrasy/lspintar/actions/workflows/ci.yml/badge.svg)](https://github.com/adibfarrasy/lspintar/actions/workflows/ci.yml)
+
 A Language Server Protocol (LSP) server for Java, Groovy, and Kotlin — built to be fast, lightweight, and free.
 
 ## Why
@@ -8,15 +10,20 @@ IntelliJ is the de facto standard for JVM development, but it is expensive, reso
 
 lspintar is built differently. It indexes your workspace into a local SQLite database and answers LSP queries from that index, with no JVM process involved. It uses a fraction of the memory of IntelliJ — in practice, often 99% less — at the cost of some disk space for the index. The goal is to bring first-class Java, Groovy, and Kotlin navigation to any LSP-capable editor, for free.
 
-**Status: alpha.** Core navigation features work. Diagnostics are not yet implemented.
+**Status: alpha.** Core navigation, refactoring, and completion features work. A growing set of diagnostics is implemented (see below); full type-checker parity with IntelliJ is not a goal.
 
 ## Features
 
-- Go to definition — workspace source files and external JAR dependencies
-- Go to implementation — interfaces and abstract methods
-- Hover information — classes, methods, fields, interfaces
-- Dependency indexing — reads JAR files from the Gradle cache; decompiles bytecode when source is unavailable
-- Incremental re-indexing on build file changes
+- **Go to definition** — workspace source files and external JAR dependencies
+- **Go to implementation** — interfaces, abstract methods, and overridden methods
+- **Find references** — cross-file and cross-language (Java ↔ Groovy ↔ Kotlin)
+- **Rename** — signature-matched hierarchy walk, scope-aware for locals, parameters, and closure/lambda bindings; rejects invalid identifiers and reserved keywords
+- **Hover** — classes, methods, fields, interfaces; markdown is tagged with the producer's source language
+- **Completion** — chained member access, prefix completion, local-before-global ranking, implicit-import resolution (Groovy `groovy.lang.*`, etc.)
+- **Diagnostics** — `unimplemented_abstract_methods` (signature-aware, overload-aware), `final_class_extended` (incl. Kotlin's final-by-default), `syntax_error`, `unresolved_symbol`, `method_not_found`, `wrong_argument_types`, `narrowing_conversion`, and more
+- **Cross-language interop** — a Groovy file can import Java and Kotlin classes (and vice versa) with all of the above features working across the boundary
+- **Dependency indexing** — reads JAR files from the Gradle cache; decompiles bytecode when source is unavailable
+- **Incremental re-indexing** on file save and on VCS revision change between startups
 
 ## Prerequisites
 
@@ -134,7 +141,9 @@ just tt
 just tp lsp_core
 ```
 
-Integration tests require a real Gradle project on disk; they are gated behind the `integration-test` feature flag and run with `--test-threads=1`.
+Integration tests are gated behind the `integration-test` feature flag and run against the Gradle fixtures under `server/tests/fixtures/`. Each test binary copies its fixture into a per-process tempdir, so the suite is safe to run in parallel — no `--test-threads=1` required. On first run, the Gradle handler downloads classpath and source jars into `~/.gradle/caches`; subsequent runs are fast.
+
+CI runs the full parallel suite on every push and PR — see `.github/workflows/ci.yml`.
 
 ## License
 
