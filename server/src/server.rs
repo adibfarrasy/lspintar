@@ -4,6 +4,7 @@ use futures::{StreamExt, stream};
 use groovy::GroovySupport;
 use java::JavaSupport;
 use kotlin::KotlinSupport;
+use scala::ScalaSupport;
 use lsp_core::{
     build_tools::{BuildToolHandler, SubprojectClasspath, get_build_tool},
     language_support::LanguageSupport,
@@ -230,6 +231,8 @@ impl Backend {
         languages.insert("groovy".to_string(), Arc::new(GroovySupport::new()));
         languages.insert("java".to_string(), Arc::new(JavaSupport::new()));
         languages.insert("kt".to_string(), Arc::new(KotlinSupport::new()));
+        languages.insert("scala".to_string(), Arc::new(ScalaSupport::new()));
+        languages.insert("sc".to_string(), Arc::new(ScalaSupport::new()));
 
         let (debounce_tx, debounce_rx) = tokio::sync::mpsc::channel::<PathBuf>(64);
         let (diag_debounce_tx, diag_debounce_rx) = tokio::sync::mpsc::channel::<Url>(64);

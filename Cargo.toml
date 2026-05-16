@@ -4,6 +4,7 @@ members = [
     "java",
     "groovy",
     "kotlin",
+    "scala",
     "server",
 ]
 resolver = "2"
@@ -17,6 +18,7 @@ tree-sitter = "0.25.6"
 tree-sitter-groovy = { git = "https://github.com/adibfarrasy/tree-sitter-groovy" }
 tree-sitter-java = { git = "https://github.com/adibfarrasy/tree-sitter-java" }
 tree-sitter-kotlin = { git = "https://github.com/adibfarrasy/tree-sitter-kotlin" }
+tree-sitter-scala = { git = "https://github.com/adibfarrasy/tree-sitter-scala" }
 walkdir = "2.0"
 num_cpus = "1.0"
 futures = "0.3"
