@@ -1,11 +1,9 @@
 //! Integration tests for `textDocument/rename` across Java, Groovy and Kotlin.
 
-use std::env;
-
 use tower_lsp::{
     LanguageServer,
     lsp_types::{
-        PartialResultParams, Position, Range, RenameParams, TextDocumentIdentifier,
+        Position, Range, RenameParams, TextDocumentIdentifier,
         TextDocumentPositionParams, Url, WorkDoneProgressParams, WorkspaceEdit,
     },
 };
@@ -45,11 +43,12 @@ fn edits_for<'a>(
 #[tokio::test]
 async fn rename_java_class_across_files() {
     let server = get_test_server("polyglot-spring").await;
-    let root = env::current_dir().expect("cwd");
-    let java_service =
-        root.join("tests/fixtures/polyglot-spring/src/main/java/com/example/demo/JavaService.java");
-    let controller = root
-        .join("tests/fixtures/polyglot-spring/src/main/groovy/com/example/demo/Controller.groovy");
+    let java_service = server
+        .root()
+        .join("src/main/java/com/example/demo/JavaService.java");
+    let controller = server
+        .root()
+        .join("src/main/groovy/com/example/demo/Controller.groovy");
 
     // `public class JavaService` — JavaService identifier at (line 5, col 13).
     let params = rename_params(java_service.clone(), Position::new(5, 13), "JavaServiceRenamed");
@@ -83,12 +82,12 @@ async fn rename_java_class_across_files() {
 #[tokio::test]
 async fn rename_kotlin_class_across_files() {
     let server = get_test_server("polyglot-spring").await;
-    let root = env::current_dir().expect("cwd");
-    let kotlin_service = root.join(
-        "tests/fixtures/polyglot-spring/src/main/kotlin/com/example/demo/KotlinService.kt",
-    );
-    let controller = root
-        .join("tests/fixtures/polyglot-spring/src/main/groovy/com/example/demo/Controller.groovy");
+    let kotlin_service = server
+        .root()
+        .join("src/main/kotlin/com/example/demo/KotlinService.kt");
+    let controller = server
+        .root()
+        .join("src/main/groovy/com/example/demo/Controller.groovy");
 
     // `class KotlinService` — KotlinService identifier at (line 5, col 6).
     let params = rename_params(
@@ -118,12 +117,12 @@ async fn rename_kotlin_class_across_files() {
 #[tokio::test]
 async fn rename_groovy_class_across_files() {
     let server = get_test_server("polyglot-spring").await;
-    let root = env::current_dir().expect("cwd");
-    let groovy_service = root.join(
-        "tests/fixtures/polyglot-spring/src/main/groovy/com/example/demo/GroovyService.groovy",
-    );
-    let controller = root
-        .join("tests/fixtures/polyglot-spring/src/main/groovy/com/example/demo/Controller.groovy");
+    let groovy_service = server
+        .root()
+        .join("src/main/groovy/com/example/demo/GroovyService.groovy");
+    let controller = server
+        .root()
+        .join("src/main/groovy/com/example/demo/Controller.groovy");
 
     // `class GroovyService` — GroovyService identifier at (line 7, col 6).
     let params = rename_params(
@@ -152,13 +151,12 @@ async fn rename_groovy_class_across_files() {
 #[tokio::test]
 async fn rename_function_propagates_to_overrides() {
     let server = get_test_server("polyglot-spring").await;
-    let root = env::current_dir().expect("cwd");
-    let base = root.join(
-        "tests/fixtures/polyglot-spring/src/main/java/com/example/demo/BaseRepository.java",
-    );
-    let user_repo = root.join(
-        "tests/fixtures/polyglot-spring/src/main/kotlin/com/example/demo/UserRepository.kt",
-    );
+    let base = server
+        .root()
+        .join("src/main/java/com/example/demo/BaseRepository.java");
+    let user_repo = server
+        .root()
+        .join("src/main/kotlin/com/example/demo/UserRepository.kt");
 
     // `T findById(Long id);` — `findById` identifier at (line 3, col 6).
     let params = rename_params(base.clone(), Position::new(3, 6), "findByIdentifier");
@@ -185,10 +183,9 @@ async fn rename_function_propagates_to_overrides() {
 #[tokio::test]
 async fn rename_local_is_single_file() {
     let server = get_test_server("polyglot-spring").await;
-    let root = env::current_dir().expect("cwd");
-    let controller = root.join(
-        "tests/fixtures/polyglot-spring/src/main/groovy/com/example/demo/Controller.groovy",
-    );
+    let controller = server
+        .root()
+        .join("src/main/groovy/com/example/demo/Controller.groovy");
 
     // `String input = StringUtils.capitalize("input")` — `input` on LHS at
     // roughly line 25 col 15.  Find it by scanning.
@@ -236,9 +233,9 @@ async fn rename_local_is_single_file() {
 #[tokio::test]
 async fn rename_rejects_reserved_keyword() {
     let server = get_test_server("polyglot-spring").await;
-    let root = env::current_dir().expect("cwd");
-    let java_service =
-        root.join("tests/fixtures/polyglot-spring/src/main/java/com/example/demo/JavaService.java");
+    let java_service = server
+        .root()
+        .join("src/main/java/com/example/demo/JavaService.java");
 
     let params = rename_params(java_service, Position::new(5, 13), "class");
     let result = server.backend.rename(params).await;
@@ -250,9 +247,9 @@ async fn rename_rejects_reserved_keyword() {
 #[tokio::test]
 async fn rename_rejects_syntactically_invalid_name() {
     let server = get_test_server("polyglot-spring").await;
-    let root = env::current_dir().expect("cwd");
-    let java_service =
-        root.join("tests/fixtures/polyglot-spring/src/main/java/com/example/demo/JavaService.java");
+    let java_service = server
+        .root()
+        .join("src/main/java/com/example/demo/JavaService.java");
 
     let params = rename_params(java_service, Position::new(5, 13), "1BadName");
     assert!(server.backend.rename(params).await.is_err());

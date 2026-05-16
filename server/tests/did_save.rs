@@ -1,4 +1,4 @@
-use std::{env, fs};
+use std::fs;
 
 use tower_lsp::{
     LanguageServer,
@@ -12,10 +12,9 @@ mod util;
 #[tokio::test]
 async fn did_save_reindexes_file() {
     let server = get_test_server("polyglot-spring").await;
-    let root = env::current_dir().expect("cannot get current dir");
-    let file_path = root.join(
-        "tests/fixtures/polyglot-spring/src/main/groovy/com/example/demo/ControllerCopy.groovy",
-    );
+    let file_path = server
+        .root()
+        .join("src/main/groovy/com/example/demo/ControllerCopy.groovy");
     let uri = Url::from_file_path(&file_path).expect("cannot parse URI");
 
     let content = r#"

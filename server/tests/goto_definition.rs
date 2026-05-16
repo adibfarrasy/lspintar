@@ -1,12 +1,9 @@
-use std::path::PathBuf;
-use std::{env, sync::LazyLock};
-
 use pretty_assertions::assert_eq;
 use tower_lsp::{
     LanguageServer,
     lsp_types::{
         GotoDefinitionParams, GotoDefinitionResponse, Location, PartialResultParams, Position,
-        Range, TextDocumentIdentifier, TextDocumentPositionParams, Url, WorkDoneProgressParams,
+        Range, TextDocumentIdentifier, TextDocumentPositionParams, WorkDoneProgressParams,
     },
 };
 
@@ -14,20 +11,14 @@ use crate::util::get_test_server;
 
 mod util;
 
-static HOME_DIR: LazyLock<PathBuf> =
-    LazyLock::new(|| dirs::home_dir().expect("cannot get home dir"));
-
 #[tokio::test]
 async fn gtd_simple() {
     let server = get_test_server("groovy-gradle-multi").await;
 
-    let root = env::current_dir().expect("cannot get current dir");
-
     let params = GotoDefinitionParams {
         text_document_position_params: TextDocumentPositionParams {
             text_document: TextDocumentIdentifier {
-                uri: Url::from_file_path(root.join("tests/fixtures/groovy-gradle-multi/app/src/main/groovy/com/example/app/Application.groovy"))
-                    .expect("cannot parse root URI"),
+                uri: server.uri("app/src/main/groovy/com/example/app/Application.groovy"),
             },
             position: Position::new(6, 35),
         },
@@ -39,19 +30,10 @@ async fn gtd_simple() {
     assert!(result.is_some());
 
     let location = Location::new(
-        Url::from_file_path(root.join(
-            "tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy",
-        ))
-        .unwrap(),
+        server.uri("api/src/main/groovy/com/example/api/UserController.groovy"),
         Range {
-            start: Position {
-                line: 6,
-                character: 6,
-            },
-            end: Position {
-                line: 6,
-                character: 20,
-            },
+            start: Position { line: 6, character: 6 },
+            end: Position { line: 6, character: 20 },
         },
     );
 
@@ -62,13 +44,10 @@ async fn gtd_simple() {
 async fn gtd_static_member() {
     let server = get_test_server("groovy-gradle-multi").await;
 
-    let root = env::current_dir().expect("cannot get current dir");
-
     let params = GotoDefinitionParams {
         text_document_position_params: TextDocumentPositionParams {
             text_document: TextDocumentIdentifier {
-                uri: Url::from_file_path(root.join("tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy"))
-                    .expect("cannot parse root URI"),
+                uri: server.uri("api/src/main/groovy/com/example/api/UserController.groovy"),
             },
             position: Position::new(47, 37),
         },
@@ -80,19 +59,10 @@ async fn gtd_static_member() {
     assert!(result.is_some());
 
     let location = Location::new(
-        Url::from_file_path(root.join(
-            HOME_DIR.join("Projects/lspintar-ws/lspintar/server/tests/fixtures/groovy-gradle-multi/core/src/main/groovy/com/example/core/DataProcessor.groovy",
-        )))
-        .unwrap(),
+        server.uri("core/src/main/groovy/com/example/core/DataProcessor.groovy"),
         Range {
-            start: Position {
-                line: 5,
-                character: 21,
-            },
-            end: Position {
-                line: 5,
-                character: 35,
-            },
+            start: Position { line: 5, character: 21 },
+            end: Position { line: 5, character: 35 },
         },
     );
 
@@ -103,13 +73,10 @@ async fn gtd_static_member() {
 async fn gtd_this_member() {
     let server = get_test_server("groovy-gradle-multi").await;
 
-    let root = env::current_dir().expect("cannot get current dir");
-
     let params = GotoDefinitionParams {
         text_document_position_params: TextDocumentPositionParams {
             text_document: TextDocumentIdentifier {
-                uri: Url::from_file_path(root.join("tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy"))
-                    .expect("cannot parse root URI"),
+                uri: server.uri("api/src/main/groovy/com/example/api/UserController.groovy"),
             },
             position: Position::new(51, 14),
         },
@@ -121,19 +88,10 @@ async fn gtd_this_member() {
     assert!(result.is_some());
 
     let location = Location::new(
-        Url::from_file_path(root.join(
-            HOME_DIR.join("Projects/lspintar-ws/lspintar/server/tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy",
-        )))
-        .unwrap(),
+        server.uri("api/src/main/groovy/com/example/api/UserController.groovy"),
         Range {
-            start: Position {
-                line: 19,
-                character: 9,
-            },
-            end: Position {
-                line: 19,
-                character: 16,
-            },
+            start: Position { line: 19, character: 9 },
+            end: Position { line: 19, character: 16 },
         },
     );
 
@@ -144,13 +102,10 @@ async fn gtd_this_member() {
 async fn gtd_this_super_member() {
     let server = get_test_server("groovy-gradle-multi").await;
 
-    let root = env::current_dir().expect("cannot get current dir");
-
     let params = GotoDefinitionParams {
         text_document_position_params: TextDocumentPositionParams {
             text_document: TextDocumentIdentifier {
-                uri: Url::from_file_path(root.join("tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy"))
-                    .expect("cannot parse root URI"),
+                uri: server.uri("api/src/main/groovy/com/example/api/UserController.groovy"),
             },
             position: Position::new(54, 14),
         },
@@ -162,19 +117,10 @@ async fn gtd_this_super_member() {
     assert!(result.is_some());
 
     let location = Location::new(
-        Url::from_file_path(root.join(
-            HOME_DIR.join("Projects/lspintar-ws/lspintar/server/tests/fixtures/groovy-gradle-multi/core/src/main/groovy/com/example/core/BaseService.groovy",
-        )))
-        .unwrap(),
+        server.uri("core/src/main/groovy/com/example/core/BaseService.groovy"),
         Range {
-            start: Position {
-                line: 7,
-                character: 11,
-            },
-            end: Position {
-                line: 7,
-                character: 22,
-            },
+            start: Position { line: 7, character: 11 },
+            end: Position { line: 7, character: 22 },
         },
     );
 
@@ -185,13 +131,10 @@ async fn gtd_this_super_member() {
 async fn gtd_instance_member_access() {
     let server = get_test_server("groovy-gradle-multi").await;
 
-    let root = env::current_dir().expect("cannot get current dir");
-
     let params = GotoDefinitionParams {
         text_document_position_params: TextDocumentPositionParams {
             text_document: TextDocumentIdentifier {
-                uri: Url::from_file_path(root.join("tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy"))
-                    .expect("cannot parse root URI"),
+                uri: server.uri("api/src/main/groovy/com/example/api/UserController.groovy"),
             },
             position: Position::new(63, 49),
         },
@@ -203,19 +146,10 @@ async fn gtd_instance_member_access() {
     assert!(result.is_some());
 
     let location = Location::new(
-        Url::from_file_path(root.join(
-            HOME_DIR.join("Projects/lspintar-ws/lspintar/server/tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy",
-        )))
-        .unwrap(),
+        server.uri("api/src/main/groovy/com/example/api/UserController.groovy"),
         Range {
-            start: Position {
-                line: 24,
-                character: 22,
-            },
-            end: Position {
-                line: 24,
-                character: 29,
-            },
+            start: Position { line: 24, character: 22 },
+            end: Position { line: 24, character: 29 },
         },
     );
 
@@ -225,15 +159,12 @@ async fn gtd_instance_member_access() {
 #[tokio::test]
 async fn gtd_resolve_chain() {
     let server = get_test_server("groovy-gradle-multi").await;
-
-    let root = env::current_dir().expect("cannot get current dir");
+    let controller_uri =
+        server.uri("api/src/main/groovy/com/example/api/UserController.groovy");
 
     let params = GotoDefinitionParams {
         text_document_position_params: TextDocumentPositionParams {
-            text_document: TextDocumentIdentifier {
-                uri: Url::from_file_path(root.join("tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy"))
-                    .expect("cannot parse root URI"),
-            },
+            text_document: TextDocumentIdentifier { uri: controller_uri.clone() },
             position: Position::new(69, 44),
         },
         work_done_progress_params: WorkDoneProgressParams::default(),
@@ -243,31 +174,18 @@ async fn gtd_resolve_chain() {
     let result = server.backend.goto_definition(params).await.unwrap();
     assert!(result.is_some());
 
-    let location = Location::new(
-        Url::from_file_path(root.join(
-            HOME_DIR.join("Projects/lspintar-ws/lspintar/server/tests/fixtures/groovy-gradle-multi/core/src/main/groovy/com/example/core/DataProcessResult.groovy",
-        )))
-        .unwrap(),
+    let expected = Location::new(
+        server.uri("core/src/main/groovy/com/example/core/DataProcessResult.groovy"),
         Range {
-            start: Position {
-                line: 8,
-                character: 11,
-            },
-            end: Position {
-                line: 8,
-                character: 18,
-            },
+            start: Position { line: 8, character: 11 },
+            end: Position { line: 8, character: 18 },
         },
     );
-
-    assert_eq!(result.unwrap(), GotoDefinitionResponse::from(location));
+    assert_eq!(result.unwrap(), GotoDefinitionResponse::from(expected.clone()));
 
     let params = GotoDefinitionParams {
         text_document_position_params: TextDocumentPositionParams {
-            text_document: TextDocumentIdentifier {
-                uri: Url::from_file_path(root.join("tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy"))
-                    .expect("cannot parse root URI"),
-            },
+            text_document: TextDocumentIdentifier { uri: controller_uri },
             position: Position::new(71, 54),
         },
         work_done_progress_params: WorkDoneProgressParams::default(),
@@ -276,181 +194,55 @@ async fn gtd_resolve_chain() {
 
     let result = server.backend.goto_definition(params).await.unwrap();
     assert!(result.is_some());
-
-    let location = Location::new(
-        Url::from_file_path(root.join(
-            HOME_DIR.join("Projects/lspintar-ws/lspintar/server/tests/fixtures/groovy-gradle-multi/core/src/main/groovy/com/example/core/DataProcessResult.groovy",
-        )))
-        .unwrap(),
-        Range {
-            start: Position {
-                line: 8,
-                character: 11,
-            },
-            end: Position {
-                line: 8,
-                character: 18,
-            },
-        },
-    );
-
-    assert_eq!(result.unwrap(), GotoDefinitionResponse::from(location));
+    assert_eq!(result.unwrap(), GotoDefinitionResponse::from(expected));
 }
 
 #[tokio::test]
 async fn gtd_method_overloading() {
     let server = get_test_server("groovy-gradle-multi").await;
+    let controller_uri =
+        server.uri("api/src/main/groovy/com/example/api/UserController.groovy");
 
-    let root = env::current_dir().expect("cannot get current dir");
+    let cases = [
+        (74u32, 28u32),
+        (76, 32),
+        (79, 36),
+        (81, 40),
+    ];
 
-    let params = GotoDefinitionParams {
-        text_document_position_params: TextDocumentPositionParams {
-            text_document: TextDocumentIdentifier {
-                uri: Url::from_file_path(root.join("tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy"))
-                    .expect("cannot parse root URI"),
+    for (cursor_line, expected_line) in cases {
+        let params = GotoDefinitionParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri: controller_uri.clone() },
+                position: Position::new(cursor_line, 14),
             },
-            position: Position::new(74, 14),
-        },
-        work_done_progress_params: WorkDoneProgressParams::default(),
-        partial_result_params: PartialResultParams::default(),
-    };
+            work_done_progress_params: WorkDoneProgressParams::default(),
+            partial_result_params: PartialResultParams::default(),
+        };
 
-    let result = server.backend.goto_definition(params).await.unwrap();
-    assert!(result.is_some());
+        let result = server.backend.goto_definition(params).await.unwrap();
+        assert!(result.is_some(), "cursor line {cursor_line} returned None");
 
-    let location = Location::new(
-        Url::from_file_path(root.join(
-            HOME_DIR.join("Projects/lspintar-ws/lspintar/server/tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy",
-        )))
-        .unwrap(),
-        Range {
-            start: Position {
-                line: 28,
-                character: 17,
+        let location = Location::new(
+            controller_uri.clone(),
+            Range {
+                start: Position { line: expected_line, character: 17 },
+                end: Position { line: expected_line, character: 32 },
             },
-            end: Position {
-                line: 28,
-                character: 32,
-            },
-        },
-    );
+        );
 
-    assert_eq!(result.unwrap(), GotoDefinitionResponse::from(location));
-
-    let params = GotoDefinitionParams {
-        text_document_position_params: TextDocumentPositionParams {
-            text_document: TextDocumentIdentifier {
-                uri: Url::from_file_path(root.join("tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy"))
-                    .expect("cannot parse root URI"),
-            },
-            position: Position::new(76, 14),
-        },
-        work_done_progress_params: WorkDoneProgressParams::default(),
-        partial_result_params: PartialResultParams::default(),
-    };
-
-    let result = server.backend.goto_definition(params).await.unwrap();
-    assert!(result.is_some());
-
-    let location = Location::new(
-        Url::from_file_path(root.join(
-            HOME_DIR.join("Projects/lspintar-ws/lspintar/server/tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy",
-        )))
-        .unwrap(),
-        Range {
-            start: Position {
-                line: 32,
-                character: 17,
-            },
-            end: Position {
-                line: 32,
-                character: 32,
-            },
-        },
-    );
-
-    assert_eq!(result.unwrap(), GotoDefinitionResponse::from(location));
-
-    let params = GotoDefinitionParams {
-        text_document_position_params: TextDocumentPositionParams {
-            text_document: TextDocumentIdentifier {
-                uri: Url::from_file_path(root.join("tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy"))
-                    .expect("cannot parse root URI"),
-            },
-            position: Position::new(79, 14),
-        },
-        work_done_progress_params: WorkDoneProgressParams::default(),
-        partial_result_params: PartialResultParams::default(),
-    };
-
-    let result = server.backend.goto_definition(params).await.unwrap();
-    assert!(result.is_some());
-
-    let location = Location::new(
-        Url::from_file_path(root.join(
-            HOME_DIR.join("Projects/lspintar-ws/lspintar/server/tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy",
-        )))
-        .unwrap(),
-        Range {
-            start: Position {
-                line: 36,
-                character: 17,
-            },
-            end: Position {
-                line: 36,
-                character: 32,
-            },
-        },
-    );
-
-    assert_eq!(result.unwrap(), GotoDefinitionResponse::from(location));
-
-    let params = GotoDefinitionParams {
-        text_document_position_params: TextDocumentPositionParams {
-            text_document: TextDocumentIdentifier {
-                uri: Url::from_file_path(root.join("tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy"))
-                    .expect("cannot parse root URI"),
-            },
-            position: Position::new(81, 14),
-        },
-        work_done_progress_params: WorkDoneProgressParams::default(),
-        partial_result_params: PartialResultParams::default(),
-    };
-
-    let result = server.backend.goto_definition(params).await.unwrap();
-    assert!(result.is_some());
-
-    let location = Location::new(
-        Url::from_file_path(root.join(
-            HOME_DIR.join("Projects/lspintar-ws/lspintar/server/tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy",
-        )))
-        .unwrap(),
-        Range {
-            start: Position {
-                line: 40,
-                character: 17,
-            },
-            end: Position {
-                line: 40,
-                character: 32,
-            },
-        },
-    );
-
-    assert_eq!(result.unwrap(), GotoDefinitionResponse::from(location));
+        assert_eq!(result.unwrap(), GotoDefinitionResponse::from(location));
+    }
 }
 
 #[tokio::test]
 async fn gtd_goto_superclass() {
     let server = get_test_server("groovy-gradle-multi").await;
 
-    let root = env::current_dir().expect("cannot get current dir");
-
     let params = GotoDefinitionParams {
         text_document_position_params: TextDocumentPositionParams {
             text_document: TextDocumentIdentifier {
-                uri: Url::from_file_path(root.join("tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy"))
-                    .expect("cannot parse root URI"),
+                uri: server.uri("api/src/main/groovy/com/example/api/UserController.groovy"),
             },
             position: Position::new(6, 30),
         },
@@ -462,19 +254,10 @@ async fn gtd_goto_superclass() {
     assert!(result.is_some());
 
     let location = Location::new(
-        Url::from_file_path(root.join(
-            HOME_DIR.join("Projects/lspintar-ws/lspintar/server/tests/fixtures/groovy-gradle-multi/core/src/main/groovy/com/example/core/BaseService.groovy",
-        )))
-        .unwrap(),
+        server.uri("core/src/main/groovy/com/example/core/BaseService.groovy"),
         Range {
-            start: Position {
-                line: 4,
-                character: 15,
-            },
-            end: Position {
-                line: 4,
-                character: 26,
-            },
+            start: Position { line: 4, character: 15 },
+            end: Position { line: 4, character: 26 },
         },
     );
 
@@ -485,13 +268,10 @@ async fn gtd_goto_superclass() {
 async fn gtd_goto_interface() {
     let server = get_test_server("groovy-gradle-multi").await;
 
-    let root = env::current_dir().expect("cannot get current dir");
-
     let params = GotoDefinitionParams {
         text_document_position_params: TextDocumentPositionParams {
             text_document: TextDocumentIdentifier {
-                uri: Url::from_file_path(root.join("tests/fixtures/groovy-gradle-multi/api/src/main/groovy/com/example/api/UserController.groovy"))
-                    .expect("cannot parse root URI"),
+                uri: server.uri("api/src/main/groovy/com/example/api/UserController.groovy"),
             },
             position: Position::new(6, 53),
         },
@@ -503,19 +283,10 @@ async fn gtd_goto_interface() {
     assert!(result.is_some());
 
     let location = Location::new(
-        Url::from_file_path(root.join(
-            HOME_DIR.join("Projects/lspintar-ws/lspintar/server/tests/fixtures/groovy-gradle-multi/core/src/main/groovy/com/example/core/DataProcessor.groovy",
-        )))
-        .unwrap(),
+        server.uri("core/src/main/groovy/com/example/core/DataProcessor.groovy"),
         Range {
-            start: Position {
-                line: 4,
-                character: 10,
-            },
-            end: Position {
-                line: 4,
-                character: 23,
-            },
+            start: Position { line: 4, character: 10 },
+            end: Position { line: 4, character: 23 },
         },
     );
 
@@ -526,13 +297,10 @@ async fn gtd_goto_interface() {
 async fn gtd_goto_property() {
     let server = get_test_server("polyglot-spring").await;
 
-    let root = env::current_dir().expect("cannot get current dir");
-
     let params = GotoDefinitionParams {
         text_document_position_params: TextDocumentPositionParams {
             text_document: TextDocumentIdentifier {
-                uri: Url::from_file_path(root.join("tests/fixtures/polyglot-spring/src/main/groovy/com/example/demo/Controller.groovy"))
-                    .expect("cannot parse root URI"),
+                uri: server.uri("src/main/groovy/com/example/demo/Controller.groovy"),
             },
             position: Position::new(28, 29),
         },
@@ -544,19 +312,10 @@ async fn gtd_goto_property() {
     assert!(result.is_some());
 
     let location = Location::new(
-        Url::from_file_path(root.join(
-            "tests/fixtures/polyglot-spring/src/main/groovy/com/example/demo/Controller.groovy",
-        ))
-        .unwrap(),
+        server.uri("src/main/groovy/com/example/demo/Controller.groovy"),
         Range {
-            start: Position {
-                line: 11,
-                character: 16,
-            },
-            end: Position {
-                line: 11,
-                character: 16,
-            },
+            start: Position { line: 11, character: 16 },
+            end: Position { line: 11, character: 16 },
         },
     );
 
@@ -567,13 +326,10 @@ async fn gtd_goto_property() {
 async fn gtd_goto_data_class_field() {
     let server = get_test_server("polyglot-spring").await;
 
-    let root = env::current_dir().expect("cannot get current dir");
-
     let params = GotoDefinitionParams {
         text_document_position_params: TextDocumentPositionParams {
             text_document: TextDocumentIdentifier {
-                uri: Url::from_file_path(root.join("tests/fixtures/polyglot-spring/src/main/groovy/com/example/demo/Controller.groovy"))
-                    .expect("cannot parse root URI"),
+                uri: server.uri("src/main/groovy/com/example/demo/Controller.groovy"),
             },
             position: Position::new(43, 32),
         },
@@ -585,19 +341,10 @@ async fn gtd_goto_data_class_field() {
     assert!(result.is_some());
 
     let location = Location::new(
-        Url::from_file_path(
-            root.join("tests/fixtures/polyglot-spring/src/main/kotlin/com/example/demo/User.kt"),
-        )
-        .unwrap(),
+        server.uri("src/main/kotlin/com/example/demo/User.kt"),
         Range {
-            start: Position {
-                line: 4,
-                character: 8,
-            },
-            end: Position {
-                line: 4,
-                character: 12,
-            },
+            start: Position { line: 4, character: 8 },
+            end: Position { line: 4, character: 12 },
         },
     );
 
@@ -608,13 +355,10 @@ async fn gtd_goto_data_class_field() {
 async fn gtd_resolve_chain_external() {
     let server = get_test_server("polyglot-spring").await;
 
-    let root = env::current_dir().expect("cannot get current dir");
-
     let params = GotoDefinitionParams {
         text_document_position_params: TextDocumentPositionParams {
             text_document: TextDocumentIdentifier {
-                uri: Url::from_file_path(root.join("tests/fixtures/polyglot-spring/src/main/groovy/com/example/demo/Controller.groovy"))
-                    .expect("cannot parse root URI"),
+                uri: server.uri("src/main/groovy/com/example/demo/Controller.groovy"),
             },
             position: Position::new(25, 36),
         },

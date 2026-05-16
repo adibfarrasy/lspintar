@@ -283,6 +283,144 @@ pub fn get_import_text_edit(
 mod tests {
     use super::*;
 
+    // ----- capitalize ---------------------------------------------------
+
+    #[test]
+    fn capitalize_uppercases_first_char() {
+        assert_eq!(capitalize("foo"), "Foo");
+    }
+
+    #[test]
+    fn capitalize_empty_string_stays_empty() {
+        assert_eq!(capitalize(""), "");
+    }
+
+    #[test]
+    fn capitalize_already_uppercase_unchanged() {
+        assert_eq!(capitalize("Foo"), "Foo");
+    }
+
+    #[test]
+    fn capitalize_preserves_remaining_chars() {
+        assert_eq!(capitalize("fooBar"), "FooBar");
+    }
+
+    #[test]
+    fn capitalize_handles_non_ascii_first_char() {
+        // grapheme that uppercases to more than one char shouldn't panic.
+        assert_eq!(capitalize("ßomething"), "SSomething");
+    }
+
+    // ----- naive_resolve_fqn -------------------------------------------
+
+    #[test]
+    fn naive_resolve_fqn_matches_last_segment() {
+        let imports = vec!["com.example.Foo".to_string(), "java.util.List".to_string()];
+        assert_eq!(
+            naive_resolve_fqn("Foo", &imports),
+            Some("com.example.Foo".to_string())
+        );
+        assert_eq!(
+            naive_resolve_fqn("List", &imports),
+            Some("java.util.List".to_string())
+        );
+    }
+
+    #[test]
+    fn naive_resolve_fqn_returns_none_when_missing() {
+        let imports = vec!["com.example.Foo".to_string()];
+        assert!(naive_resolve_fqn("Bar", &imports).is_none());
+    }
+
+    #[test]
+    fn naive_resolve_fqn_returns_first_hit_for_duplicate_short_names() {
+        // Two imports end in `Foo` — current behaviour returns the first match.
+        // Pinning this so any future "all matches" change is intentional.
+        let imports = vec!["com.a.Foo".to_string(), "com.b.Foo".to_string()];
+        assert_eq!(
+            naive_resolve_fqn("Foo", &imports),
+            Some("com.a.Foo".to_string())
+        );
+    }
+
+    // ----- strip_comment_signifiers -------------------------------------
+
+    #[test]
+    fn strip_comment_signifiers_removes_javadoc_markers() {
+        let input = "/**\n * line one\n * line two\n */";
+        let output = strip_comment_signifiers(input);
+        assert!(!output.contains("/**"));
+        assert!(!output.contains("*/"));
+        assert!(output.contains("line one"));
+        assert!(output.contains("line two"));
+    }
+
+    #[test]
+    fn strip_comment_signifiers_handles_single_line_comments() {
+        let input = "// a comment";
+        let output = strip_comment_signifiers(input);
+        assert!(!output.contains("//"));
+        assert!(output.contains("a comment"));
+    }
+
+    #[test]
+    fn strip_comment_signifiers_trims_empty_leading_trailing_lines() {
+        let input = "/**\n *\n * body\n *\n */";
+        let output = strip_comment_signifiers(input);
+        // First and last lines after stripping should be non-empty body content.
+        let lines: Vec<&str> = output.lines().collect();
+        assert!(!lines.first().unwrap().is_empty());
+        assert!(!lines.last().unwrap().is_empty());
+        assert!(lines.iter().any(|l| l.contains("body")));
+    }
+
+    // ----- extract_prefix ----------------------------------------------
+
+    #[test]
+    fn extract_prefix_returns_identifier_before_cursor() {
+        let line = "    val foo = bar";
+        // cursor at end of "foo" (position 11)
+        assert_eq!(extract_prefix(line, 11), "foo");
+    }
+
+    #[test]
+    fn extract_prefix_returns_partial_identifier_when_cursor_mid_word() {
+        let line = "    val groovy = 1";
+        // cursor after "groo" (position 12)
+        assert_eq!(extract_prefix(line, 12), "groo");
+    }
+
+    #[test]
+    fn extract_prefix_empty_when_cursor_after_whitespace() {
+        let line = "    val foo = ";
+        // cursor at very end after trailing space
+        assert_eq!(extract_prefix(line, line.len()), "");
+    }
+
+    // ----- extract_receiver --------------------------------------------
+
+    #[test]
+    fn extract_receiver_returns_identifier_before_dot() {
+        // For `foo.bar` with the cursor on `bar`, the receiver — the thing
+        // being called .bar on — is `foo`.
+        let line = "    foo.bar";
+        assert_eq!(extract_receiver(line, line.len()), Some("foo"));
+    }
+
+    #[test]
+    fn extract_receiver_returns_none_when_no_dot() {
+        let line = "    foo";
+        assert_eq!(extract_receiver(line, line.len()), None);
+    }
+
+    #[test]
+    fn extract_receiver_takes_last_dot_in_chain() {
+        // For `obj.foo.bar`, cursor after `bar` — the immediate receiver
+        // is the identifier before the *last* dot, which is `foo`.
+        let line = "obj.foo.bar";
+        assert_eq!(extract_receiver(line, line.len()), Some("foo"));
+    }
+
     #[test]
     fn test_get_import_text_edit() {
         let cases = vec![

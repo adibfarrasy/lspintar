@@ -9,8 +9,6 @@
 // IncrementalOpen path itself is tested via unit tests in lsp_core::vcs::git.
 // The tests here cover the observable side-effects of the full-reindex path.
 
-use std::env;
-
 use crate::util::get_test_server;
 use lspintar_server::constants::VCS_REVISION_PATH_FRAGMENT;
 
@@ -21,13 +19,8 @@ mod util;
 #[tokio::test]
 async fn no_vcs_workspace_leaves_no_revision_file() {
     let server = get_test_server("polyglot-spring").await;
-    let root = env::current_dir()
-        .expect("cannot get current dir")
-        .join("tests/fixtures/polyglot-spring");
 
-    let _ = server; // ensure initialization has run
-
-    let revision_path = root.join(VCS_REVISION_PATH_FRAGMENT);
+    let revision_path = server.root().join(VCS_REVISION_PATH_FRAGMENT);
     assert!(
         !revision_path.exists(),
         "revision file should not exist for a NoVcs workspace, found: {}",

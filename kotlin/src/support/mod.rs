@@ -1151,6 +1151,18 @@ impl LanguageSupport for KotlinSupport {
                     .find(|n| n.kind() == "variable_declarator")?;
                 declarator.child_by_field_name("name")?
             }
+            "property_declaration" => {
+                // Tree shape: property_declaration → [modifiers] →
+                //   binding_pattern_kind → variable_declaration → name: identifier
+                // A missing identifier here previously caused get_ident_range to
+                // return None, which the server-side indexer treats as a hard
+                // error and silently drops the entire file's symbols (see
+                // server/src/indexer.rs `get_symbols_from_tree`).
+                let var_decl = node
+                    .children(&mut node.walk())
+                    .find(|n| n.kind() == "variable_declaration")?;
+                var_decl.child_by_field_name("name")?
+            }
             _ => node
                 .children(&mut node.walk())
                 .find(|n| n.kind() == "identifier")?,
@@ -1271,11 +1283,18 @@ impl LanguageSupport for KotlinSupport {
             ts_helper::get_many(&tree.root_node(), source, &GET_IMPORTS_QUERY, None)
                 .into_iter()
                 .map(|i| {
-                    i.strip_prefix("import ")
+                    let trimmed = i
+                        .strip_prefix("import ")
                         .unwrap_or_default()
                         .trim_end_matches(';')
-                        .trim()
-                        .to_string()
+                        .trim();
+                    // Strip Kotlin aliased-import suffix `as Alias` — downstream
+                    // resolvers look up symbols by their target FQN, so the local
+                    // alias must not contaminate the stored import string.
+                    match trimmed.split_once(" as ") {
+                        Some((path, _alias)) => path.trim().to_string(),
+                        None => trimmed.to_string(),
+                    }
                 })
                 .collect::<Vec<String>>();
 

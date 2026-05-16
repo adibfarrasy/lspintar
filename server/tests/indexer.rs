@@ -273,6 +273,127 @@ async fn index_groovy_gradle_single_workspace() {
     );
 }
 
+// --- Extras.groovy: new fixture exercising nested generic class, enum,
+//     static method, and static final field ---------------------------
+
+#[tokio::test]
+async fn index_groovy_static_final_field() {
+    let db_name = Uuid::new_v4();
+    let db_dir = format!("file:{}?mode=memory", db_name);
+    let repo = Arc::new(Repository::new(&db_dir).await.unwrap());
+    let path = Path::new("tests/fixtures/groovy-gradle-single");
+
+    let mut indexer = Indexer::new(Arc::clone(&repo));
+    indexer.register_language("groovy", Arc::new(GroovySupport::new()));
+    indexer
+        .index_workspace(&path, |_, _| {}, |_, _| {})
+        .await
+        .expect("Indexing failed");
+
+    let sym = repo
+        .find_symbol_by_fqn("com.example.Extras#MAX_RETRIES")
+        .await
+        .expect("Query failed")
+        .expect("MAX_RETRIES should be indexed");
+
+    assert_eq!(sym.short_name, "MAX_RETRIES");
+    assert_eq!(sym.symbol_type, "Field");
+    // Pin modifiers — `static final` declaration should yield both modifiers.
+    let mods: &Vec<String> = &sym.modifiers.0;
+    assert!(mods.iter().any(|m| m == "static"), "expected static modifier, got: {mods:?}");
+    assert!(mods.iter().any(|m| m == "final"), "expected final modifier, got: {mods:?}");
+    assert_eq!(
+        sym.metadata.0.return_type.as_deref(),
+        Some("int"),
+        "expected return_type int for MAX_RETRIES"
+    );
+}
+
+#[tokio::test]
+async fn index_groovy_static_method() {
+    let db_name = Uuid::new_v4();
+    let db_dir = format!("file:{}?mode=memory", db_name);
+    let repo = Arc::new(Repository::new(&db_dir).await.unwrap());
+    let path = Path::new("tests/fixtures/groovy-gradle-single");
+
+    let mut indexer = Indexer::new(Arc::clone(&repo));
+    indexer.register_language("groovy", Arc::new(GroovySupport::new()));
+    indexer
+        .index_workspace(&path, |_, _| {}, |_, _| {})
+        .await
+        .expect("Indexing failed");
+
+    let sym = repo
+        .find_symbol_by_fqn("com.example.Extras#describe")
+        .await
+        .expect("Query failed")
+        .expect("Extras.describe should be indexed");
+
+    assert_eq!(sym.short_name, "describe");
+    assert_eq!(sym.symbol_type, "Function");
+    let mods: &Vec<String> = &sym.modifiers.0;
+    assert!(mods.iter().any(|m| m == "static"), "expected static modifier, got: {mods:?}");
+}
+
+#[tokio::test]
+async fn index_groovy_generic_nested_class() {
+    let db_name = Uuid::new_v4();
+    let db_dir = format!("file:{}?mode=memory", db_name);
+    let repo = Arc::new(Repository::new(&db_dir).await.unwrap());
+    let path = Path::new("tests/fixtures/groovy-gradle-single");
+
+    let mut indexer = Indexer::new(Arc::clone(&repo));
+    indexer.register_language("groovy", Arc::new(GroovySupport::new()));
+    indexer
+        .index_workspace(&path, |_, _| {}, |_, _| {})
+        .await
+        .expect("Indexing failed");
+
+    let sym = repo
+        .find_symbol_by_fqn("com.example.Extras#Pair")
+        .await
+        .expect("Query failed")
+        .expect("nested Pair<A, B> class should be indexed");
+
+    assert_eq!(sym.short_name, "Pair");
+    assert_eq!(sym.symbol_type, "Class");
+    assert_eq!(
+        sym.parent_name.as_deref(),
+        Some("com.example.Extras"),
+        "nested class parent should be the enclosing class"
+    );
+}
+
+#[tokio::test]
+async fn index_groovy_enum_nested_in_class() {
+    let db_name = Uuid::new_v4();
+    let db_dir = format!("file:{}?mode=memory", db_name);
+    let repo = Arc::new(Repository::new(&db_dir).await.unwrap());
+    let path = Path::new("tests/fixtures/groovy-gradle-single");
+
+    let mut indexer = Indexer::new(Arc::clone(&repo));
+    indexer.register_language("groovy", Arc::new(GroovySupport::new()));
+    indexer
+        .index_workspace(&path, |_, _| {}, |_, _| {})
+        .await
+        .expect("Indexing failed");
+
+    let sym = repo
+        .find_symbol_by_fqn("com.example.Extras#Severity")
+        .await
+        .expect("Query failed")
+        .expect("nested Severity enum should be indexed");
+
+    assert_eq!(sym.short_name, "Severity");
+    // Pin symbol_type — `Enum` or `Class` depending on how groovy support
+    // models enums. Whatever it is, the lookup must succeed.
+    assert!(
+        sym.symbol_type == "Enum" || sym.symbol_type == "Class",
+        "unexpected symbol_type for nested enum: {}",
+        sym.symbol_type
+    );
+}
+
 #[tokio::test]
 async fn index_groovy_class_multi_project() {
     let db_name = Uuid::new_v4();
@@ -606,6 +727,43 @@ async fn index_groovy_inheritance() {
             last_modified: 0,
         }
     );
+}
+
+// Regression: a Kotlin file containing a property without an initializer
+// (e.g. `lateinit var`) used to make `get_ident_range` return None on the
+// property, which the indexer treats as a hard error and silently drops
+// every symbol from the file. The class itself then became invisible to
+// `find_all_source_file_paths`, breaking find-references and rename for any
+// type it consumed.
+#[tokio::test]
+async fn index_kotlin_class_with_lateinit_var_property() {
+    let db_name = Uuid::new_v4();
+    let db_dir = format!("file:{}?mode=memory", db_name);
+    let repo = Arc::new(Repository::new(&db_dir).await.unwrap());
+    let path = Path::new("tests/fixtures/polyglot-spring");
+
+    let mut indexer = Indexer::new(Arc::clone(&repo));
+    indexer.register_language("kt", Arc::new(KotlinSupport::new()));
+    indexer
+        .index_workspace(&path, |_, _| {}, |_, _| {})
+        .await
+        .expect("Indexing failed");
+
+    // The class itself must be indexed.
+    let class_sym = repo
+        .find_symbol_by_fqn("com.example.KotlinConsumer")
+        .await
+        .expect("Query failed")
+        .expect("KotlinConsumer class must be indexed");
+    assert_eq!(class_sym.symbol_type, "Class");
+
+    // The `lateinit var groovyService: GroovyService` property must be indexed too.
+    let prop_sym = repo
+        .find_symbol_by_fqn("com.example.KotlinConsumer#groovyService")
+        .await
+        .expect("Query failed")
+        .expect("lateinit var groovyService must be indexed");
+    assert_eq!(prop_sym.symbol_type, "Field");
 }
 
 #[tokio::test]

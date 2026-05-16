@@ -1,10 +1,11 @@
-use std::env;
-
-use tower_lsp::lsp_types::{CompletionParams, CompletionResponse, DidChangeTextDocumentParams, TextDocumentContentChangeEvent, VersionedTextDocumentIdentifier};
+use tower_lsp::lsp_types::{
+    CompletionParams, CompletionResponse, DidChangeTextDocumentParams,
+    TextDocumentContentChangeEvent, VersionedTextDocumentIdentifier,
+};
 use tower_lsp::{
     LanguageServer,
     lsp_types::{
-        PartialResultParams, Position, TextDocumentIdentifier, TextDocumentPositionParams, Url,
+        PartialResultParams, Position, TextDocumentIdentifier, TextDocumentPositionParams,
         WorkDoneProgressParams,
     },
 };
@@ -13,18 +14,16 @@ use crate::util::get_test_server;
 
 mod util;
 
+const CONTROLLER: &str = "src/main/groovy/com/example/demo/Controller.groovy";
+const COMPLETION_TEST: &str = "src/main/groovy/com/example/demo/CompletionTest.groovy";
+
 #[tokio::test]
 async fn completion_chain_with_import() {
     let server = get_test_server("polyglot-spring").await;
 
-    let root = env::current_dir().expect("cannot get current dir");
-
     let params = CompletionParams {
         text_document_position: TextDocumentPositionParams {
-            text_document: TextDocumentIdentifier {
-                uri: Url::from_file_path(root.join("tests/fixtures/polyglot-spring/src/main/groovy/com/example/demo/Controller.groovy"))
-                    .expect("cannot parse root URI"),
-            },
+            text_document: TextDocumentIdentifier { uri: server.uri(CONTROLLER) },
             position: Position::new(25, 36),
         },
         context: None,
@@ -38,13 +37,7 @@ async fn completion_chain_with_import() {
     match result.unwrap() {
         CompletionResponse::Array(items) => {
             assert!(!items.is_empty());
-
-            assert!(
-                items
-                    .iter()
-                    .map(|i| i.label.clone())
-                    .any(|l| l == "capitalize".to_string())
-            )
+            assert!(items.iter().any(|i| i.label == "capitalize"));
         }
         _ => panic!("Invalid completion response"),
     }
@@ -54,14 +47,9 @@ async fn completion_chain_with_import() {
 async fn completion_prefix_with_import() {
     let server = get_test_server("polyglot-spring").await;
 
-    let root = env::current_dir().expect("cannot get current dir");
-
     let params = CompletionParams {
         text_document_position: TextDocumentPositionParams {
-            text_document: TextDocumentIdentifier {
-                uri: Url::from_file_path(root.join("tests/fixtures/polyglot-spring/src/main/groovy/com/example/demo/Controller.groovy"))
-                    .expect("cannot parse root URI"),
-            },
+            text_document: TextDocumentIdentifier { uri: server.uri(CONTROLLER) },
             position: Position::new(25, 31),
         },
         context: None,
@@ -75,13 +63,7 @@ async fn completion_prefix_with_import() {
     match result.unwrap() {
         CompletionResponse::Array(items) => {
             assert!(!items.is_empty());
-
-            assert!(
-                items
-                    .iter()
-                    .map(|i| i.label.clone())
-                    .any(|l| l == "StringUtils".to_string())
-            )
+            assert!(items.iter().any(|i| i.label == "StringUtils"));
         }
         _ => panic!("Invalid completion response"),
     }
@@ -92,16 +74,10 @@ async fn completion_prefix_with_import() {
 #[tokio::test]
 async fn completion_prefix_excludes_class_members() {
     let server = get_test_server("polyglot-spring").await;
-    let root = env::current_dir().expect("cannot get current dir");
 
     let params = CompletionParams {
         text_document_position: TextDocumentPositionParams {
-            text_document: TextDocumentIdentifier {
-                uri: Url::from_file_path(root.join(
-                    "tests/fixtures/polyglot-spring/src/main/groovy/com/example/demo/CompletionTest.groovy",
-                ))
-                .expect("cannot parse root URI"),
-            },
+            text_document: TextDocumentIdentifier { uri: server.uri(COMPLETION_TEST) },
             position: Position::new(9, 18),
         },
         context: None,
@@ -111,9 +87,7 @@ async fn completion_prefix_excludes_class_members() {
 
     let result = server.backend.completion(params).await.unwrap();
     match result {
-        None => {
-            // No completions at all – capitalize is absent, which is the expected outcome.
-        }
+        None => {}
         Some(CompletionResponse::Array(items)) => {
             assert!(
                 !items.iter().any(|i| i.label == "capitalize"),
@@ -128,16 +102,10 @@ async fn completion_prefix_excludes_class_members() {
 #[tokio::test]
 async fn completion_locals_before_globals() {
     let server = get_test_server("polyglot-spring").await;
-    let root = env::current_dir().expect("cannot get current dir");
 
     let params = CompletionParams {
         text_document_position: TextDocumentPositionParams {
-            text_document: TextDocumentIdentifier {
-                uri: Url::from_file_path(root.join(
-                    "tests/fixtures/polyglot-spring/src/main/groovy/com/example/demo/CompletionTest.groovy",
-                ))
-                .expect("cannot parse root URI"),
-            },
+            text_document: TextDocumentIdentifier { uri: server.uri(COMPLETION_TEST) },
             position: Position::new(15, 14),
         },
         context: None,
@@ -168,18 +136,11 @@ async fn completion_locals_before_globals() {
 #[tokio::test]
 async fn completion_chain_via_implicit_import() {
     let server = get_test_server("polyglot-spring").await;
-    let root = env::current_dir().expect("cannot get current dir");
-
-    let uri = Url::from_file_path(root.join(
-        "tests/fixtures/polyglot-spring/src/main/groovy/com/example/demo/CompletionTest.groovy",
-    ))
-    .expect("cannot parse root URI");
+    let uri = server.uri(COMPLETION_TEST);
+    let path = server.root().join(COMPLETION_TEST);
 
     // Send did_change so the server uses in-memory content at the exact cursor position.
-    let content = std::fs::read_to_string(root.join(
-        "tests/fixtures/polyglot-spring/src/main/groovy/com/example/demo/CompletionTest.groovy",
-    ))
-    .expect("cannot read fixture");
+    let content = std::fs::read_to_string(&path).expect("cannot read fixture");
     server
         .backend
         .did_change(DidChangeTextDocumentParams {

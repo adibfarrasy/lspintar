@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: build + test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Temurin ships lib/src.zip, which `index_jdk_dep_source_jar` relies on.
+      - name: Install JDK 21 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      # The integration tests invoke `./gradlew` in each fixture to resolve
+      # classpath and source jars on demand. Cache ~/.gradle so reruns are fast.
+      - name: Cache ~/.gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('server/tests/fixtures/**/build.gradle', 'server/tests/fixtures/**/settings.gradle', 'server/tests/fixtures/**/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install just
+        uses: extractions/setup-just@v2
+
+      - name: Pre-warm gradle dependencies (download deps + source jars)
+        # Lspintar's gradle handler will run this on first test call anyway,
+        # but doing it up-front means the (slow) network step happens once
+        # and isn't repeated for each fixture during the test run.
+        run: |
+          for fixture in server/tests/fixtures/*/; do
+            if [ -f "$fixture/gradlew" ]; then
+              echo "::group::resolve deps for $fixture"
+              (cd "$fixture" && chmod +x ./gradlew && ./gradlew --no-daemon -q dependencies || true)
+              echo "::endgroup::"
+            fi
+          done
+
+      - name: Build
+        run: just b
+
+      - name: Test (parallel, integration-test feature)
+        run: just tt

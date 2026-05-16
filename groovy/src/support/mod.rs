@@ -911,7 +911,9 @@ impl LanguageSupport for GroovySupport {
 
     fn get_ident_range(&self, node: &Node) -> Option<Range> {
         let ident_node = match node.kind() {
-            "class_declaration" | "function_declaration" => node.child_by_field_name("name")?,
+            "class_declaration" | "function_declaration" | "trait_declaration" => {
+                node.child_by_field_name("name")?
+            }
             "field_declaration" | "constant_declaration" => {
                 let declarator = node
                     .children(&mut node.walk())
@@ -944,6 +946,11 @@ impl LanguageSupport for GroovySupport {
         match node.kind() {
             "class_declaration" => Some(NodeKind::Class),
             "interface_declaration" => Some(NodeKind::Interface),
+            // Groovy traits are structurally like classes (member methods can have
+            // bodies) but semantically interface-like. Model as Interface so that
+            // implementation-resolution and abstract-method checks treat them
+            // the same way as `interface`.
+            "trait_declaration" => Some(NodeKind::Interface),
             "enum_declaration" => Some(NodeKind::Enum),
             "function_declaration" => Some(NodeKind::Function),
             "field_declaration" => node.parent().and_then(|parent| match parent.kind() {
@@ -1186,13 +1193,16 @@ impl LanguageSupport for GroovySupport {
     ) -> Option<(String, Vec<String>)> {
         let query_text = r#"
         [
-           (class_declaration 
+           (class_declaration
             name: (identifier) @receiver
             body: (class_body (function_declaration) @method))
-          (interface_declaration 
+          (interface_declaration
             name: (identifier) @receiver
             body: (interface_body (function_declaration) @method))
-          (enum_declaration 
+          (trait_declaration
+            name: (identifier) @receiver
+            body: (class_body (function_declaration) @method))
+          (enum_declaration
             name: (identifier) @receiver
             body: (enum_body (function_declaration) @method))
         ]
@@ -1247,7 +1257,10 @@ impl LanguageSupport for GroovySupport {
         if var_name == "this" {
             let mut node = current_node;
             while let Some(parent) = node.parent() {
-                if parent.kind() == "class_declaration" || parent.kind() == "enum_declaration" {
+                if matches!(
+                    parent.kind(),
+                    "class_declaration" | "enum_declaration" | "trait_declaration"
+                ) {
                     let type_node = parent.child_by_field_name("name")?;
                     let pos = Position {
                         line: type_node.start_position().row as u32,
@@ -1369,7 +1382,10 @@ impl LanguageSupport for GroovySupport {
                 let Some(type_node) = name_node.parent() else { return; };
 
                 let kind = type_node.kind();
-                if kind != "class_declaration" && kind != "enum_declaration" {
+                if !matches!(
+                    kind,
+                    "class_declaration" | "enum_declaration" | "trait_declaration"
+                ) {
                     return;
                 }
 

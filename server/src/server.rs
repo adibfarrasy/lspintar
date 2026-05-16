@@ -1695,6 +1695,36 @@ impl Backend {
         vec![]
     }
 
+    /// Whether a type cannot be extended. Java/Groovy use explicit `final`;
+    /// Kotlin classes are final-by-default unless `open` (or `abstract` /
+    /// `sealed` which permit inheritance) is present.
+    async fn type_is_final(&self, fqn: &str) -> bool {
+        let Some(repo) = self.repo.get() else {
+            return false;
+        };
+        let (mods, file_type) = if let Some(sym) =
+            repo.find_symbol_by_fqn(fqn).await.ok().flatten()
+        {
+            (sym.modifiers.0.clone(), sym.file_type.clone())
+        } else if let Some(sym) = repo.find_external_symbol_by_fqn(fqn).await.ok().flatten() {
+            (sym.modifiers.0.clone(), sym.file_type.clone())
+        } else {
+            return false;
+        };
+
+        if mods.iter().any(|m| m == "final") {
+            return true;
+        }
+        // Kotlin: classes are final-by-default; `open`/`abstract`/`sealed` opt in to inheritance.
+        if file_type == "kotlin" {
+            let opens_inheritance = mods
+                .iter()
+                .any(|m| m == "open" || m == "abstract" || m == "sealed");
+            return !opens_inheritance;
+        }
+        false
+    }
+
     /// Returns the set of all method names reachable on a type (direct + inherited via supers).
     /// Follows the project super-mapping chain one level; also includes direct external methods.
     async fn reachable_method_names(&self, type_fqn: &str) -> HashSet<String> {
@@ -1884,9 +1914,9 @@ impl Backend {
                     else {
                         continue;
                     };
-                    // final_class_extended: check whether the parent is declared final.
-                    let parent_mods = self.type_modifiers(&parent_fqn).await;
-                    if parent_mods.iter().any(|m| m == "final") {
+                    // final_class_extended: check whether the parent cannot be extended.
+                    // Handles both Java/Groovy `final` and Kotlin's final-by-default.
+                    if self.type_is_final(&parent_fqn).await {
                         diagnostics.push(Diagnostic {
                             range: class_data.ident_range,
                             severity: Some(DiagnosticSeverity::ERROR),

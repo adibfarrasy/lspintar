@@ -1,11 +1,9 @@
-use std::env;
-
 use pretty_assertions::assert_eq;
 use tower_lsp::{
     LanguageServer,
     lsp_types::{
         Hover, HoverContents, HoverParams, MarkupContent, MarkupKind, Position,
-        TextDocumentIdentifier, TextDocumentPositionParams, Url, WorkDoneProgressParams,
+        TextDocumentIdentifier, TextDocumentPositionParams, WorkDoneProgressParams,
     },
 };
 
@@ -17,13 +15,10 @@ mod util;
 async fn hover_project_symbol() {
     let server = get_test_server("groovy-gradle-multi").await;
 
-    let root = env::current_dir().expect("cannot get current dir");
-
     let params = HoverParams {
         text_document_position_params: TextDocumentPositionParams {
             text_document: TextDocumentIdentifier {
-                uri: Url::from_file_path(root.join("tests/fixtures/groovy-gradle-multi/core/src/main/groovy/com/example/core/DataProcessor.groovy"))
-                    .expect("cannot parse root URI"),
+                uri: server.uri("core/src/main/groovy/com/example/core/DataProcessor.groovy"),
             },
             position: Position::new(4, 11),
         },
@@ -49,13 +44,10 @@ async fn hover_project_symbol() {
 async fn hover_external_symbol() {
     let server = get_test_server("polyglot-spring").await;
 
-    let root = env::current_dir().expect("cannot get current dir");
-
     let params = HoverParams {
         text_document_position_params: TextDocumentPositionParams {
             text_document: TextDocumentIdentifier {
-                uri: Url::from_file_path(root.join("tests/fixtures/polyglot-spring/src/main/groovy/com/example/demo/Controller.groovy"))
-                    .expect("cannot parse root URI"),
+                uri: server.uri("src/main/groovy/com/example/demo/Controller.groovy"),
             },
             position: Position::new(25, 24),
         },
@@ -81,13 +73,10 @@ async fn hover_external_symbol() {
 async fn hover_class() {
     let server = get_test_server("polyglot-spring").await;
 
-    let root = env::current_dir().expect("cannot get current dir");
-
     let params = HoverParams {
         text_document_position_params: TextDocumentPositionParams {
             text_document: TextDocumentIdentifier {
-                uri: Url::from_file_path(root.join("tests/fixtures/polyglot-spring/src/main/groovy/com/example/demo/Controller.groovy"))
-                    .expect("cannot parse root URI"),
+                uri: server.uri("src/main/groovy/com/example/demo/Controller.groovy"),
             },
             position: Position::new(11, 5),
         },
@@ -113,13 +102,10 @@ async fn hover_class() {
 async fn hover_interface() {
     let server = get_test_server("polyglot-spring").await;
 
-    let root = env::current_dir().expect("cannot get current dir");
-
     let params = HoverParams {
         text_document_position_params: TextDocumentPositionParams {
             text_document: TextDocumentIdentifier {
-                uri: Url::from_file_path(root.join("tests/fixtures/polyglot-spring/src/main/kotlin/com/example/demo/UserRepository.kt"))
-                    .expect("cannot parse root URI"),
+                uri: server.uri("src/main/kotlin/com/example/demo/UserRepository.kt"),
             },
             position: Position::new(5, 24),
         },
@@ -145,13 +131,10 @@ async fn hover_interface() {
 async fn hover_method() {
     let server = get_test_server("polyglot-spring").await;
 
-    let root = env::current_dir().expect("cannot get current dir");
-
     let params = HoverParams {
         text_document_position_params: TextDocumentPositionParams {
             text_document: TextDocumentIdentifier {
-                uri: Url::from_file_path(root.join("tests/fixtures/polyglot-spring/src/main/groovy/com/example/demo/Controller.groovy"))
-                    .expect("cannot parse root URI"),
+                uri: server.uri("src/main/groovy/com/example/demo/Controller.groovy"),
             },
             position: Position::new(31, 45),
         },
