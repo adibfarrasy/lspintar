@@ -5,6 +5,7 @@ pub enum Language {
     Java,
     Groovy,
     Kotlin,
+    Scala,
 }
 
 impl Display for Language {
@@ -13,6 +14,7 @@ impl Display for Language {
             Language::Java => write!(f, "java"),
             Language::Groovy => write!(f, "groovy"),
             Language::Kotlin => write!(f, "kotlin"),
+            Language::Scala => write!(f, "scala"),
         }
     }
 }

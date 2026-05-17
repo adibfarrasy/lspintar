@@ -43,14 +43,17 @@ impl NodeKind {
             NodeKind::Class => Some("class"),
             NodeKind::Interface => match file_type {
                 "kotlin" => Some("interface"),
+                "scala" => Some("trait"),
                 _ => Some("interface"),
             },
             NodeKind::Function => match file_type {
                 "kotlin" => Some("fun"),
+                "scala" => Some("def"),
                 _ => None,
             },
             NodeKind::Enum => match file_type {
                 "kotlin" => Some("enum class"),
+                "scala" => Some("enum"),
                 _ => Some("enum"),
             },
             NodeKind::Annotation => Some("@interface"),

@@ -1,18 +1,10 @@
 [package]
-name = "lspintar-server"
-version = "0.1.2"
+name = "scala"
+version = "0.1.0"
 edition = "2024"
-
-[dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-pretty_assertions = "1.4"
 
 [dependencies]
 lsp_core = { path = "../lsp_core" }
-java = { path = "../java" }
-groovy = { path = "../groovy" }
-kotlin = { path = "../kotlin" }
-scala = { path = "../scala" }
 
 anyhow = { workspace = true }
 log = { workspace = true }
@@ -39,9 +31,4 @@ sqlx = { workspace = true }
 bincode = { workspace = true }
 sha2 = { workspace = true }
 tempfile = { workspace = true }
-classfile-parser = "0.3.8"
-uuid = { version = "1", features = ["v4"] }
-dashmap = { workspace = true }
-
-[features]
-integration-test = []
+regex = { workspace = true }

@@ -1499,6 +1499,7 @@ dependencies = [
  "num_cpus",
  "pretty_assertions",
  "rayon",
+ "scala",
  "serde",
  "serde_json",
  "sha2",
@@ -1512,6 +1513,7 @@ dependencies = [
  "tree-sitter-groovy",
  "tree-sitter-java",
  "tree-sitter-kotlin",
+ "tree-sitter-scala",
  "uuid",
  "walkdir",
  "zip",
@@ -2128,6 +2130,39 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "93fc1dc3aaa9bfed95e02e6eadabb4baf7e3078b0bd1b4d7b6b0b68378900502"
 dependencies = [
  "winapi-util",
+]
+
+[[package]]
+name = "scala"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bincode",
+ "chrono",
+ "dirs",
+ "futures",
+ "just",
+ "log",
+ "lsp_core",
+ "num_cpus",
+ "rayon",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tower-lsp",
+ "tracing",
+ "tracing-subscriber",
+ "tree-sitter",
+ "tree-sitter-groovy",
+ "tree-sitter-java",
+ "tree-sitter-kotlin",
+ "tree-sitter-scala",
+ "walkdir",
+ "zip",
 ]
 
 [[package]]
@@ -2977,6 +3012,15 @@ name = "tree-sitter-language"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c4013970217383f67b18aef68f6fb2e8d409bc5755227092d32efb0422ba24b8"
+
+[[package]]
+name = "tree-sitter-scala"
+version = "0.26.0"
+source = "git+https://github.com/adibfarrasy/tree-sitter-scala#c1a83a6be68c85647e2a8e8d8bf5a57ca5c97a9e"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
 
 [[package]]
 name = "typed-arena"
