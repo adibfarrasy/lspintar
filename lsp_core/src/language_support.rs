@@ -400,7 +400,12 @@ pub fn normalize_param_type(t: &str) -> String {
         "Boolean" => "boolean",
         "Char" | "Character" => "char",
         "Unit" | "Void" => "void",
-        "Any" | "Object" => "Object",
+        // Scala 2/3: `AnyRef` is the JVM reference universe — the type of any
+        // non-primitive value, which canonicalises to Java's `Object`.
+        // `Any` is the universal supertype; we already collapse it to `Object`
+        // for cross-language signature matching (Scala-only code paths needing
+        // a `scala.Any` distinction are not currently part of the matcher).
+        "Any" | "AnyRef" | "Object" => "Object",
         other => other,
     };
 
@@ -459,4 +464,54 @@ pub struct NarrowingCandidateData {
     pub rhs_name: String,
     /// Range of the RHS identifier — where diagnostics are anchored.
     pub range: Range,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalizes_scala_int_to_java_int() {
+        assert_eq!(normalize_param_type("Int"), "int");
+    }
+
+    #[test]
+    fn normalizes_scala_unit_to_void() {
+        assert_eq!(normalize_param_type("Unit"), "void");
+    }
+
+    #[test]
+    fn normalizes_scala_anyref_to_object() {
+        assert_eq!(normalize_param_type("AnyRef"), "Object");
+    }
+
+    #[test]
+    fn normalizes_scala_any_to_object() {
+        assert_eq!(normalize_param_type("Any"), "Object");
+    }
+
+    #[test]
+    fn strips_scala_qualifier_prefix() {
+        assert_eq!(normalize_param_type("scala.collection.immutable.List"), "List");
+    }
+
+    #[test]
+    fn strips_scala_generic_arguments() {
+        assert_eq!(normalize_param_type("List[Int]"), "List[Int]");
+        // The matcher strips angle-bracket generics, not Scala's `[…]`.  That's
+        // intentional — Scala's brackets aren't currently elided so
+        // `List[Int]` stays distinct from `List[String]`.  Java/Kotlin
+        // generics use `<>` which IS stripped.
+        assert_eq!(normalize_param_type("List<Int>"), "List");
+    }
+
+    #[test]
+    fn cross_language_int_signature_match() {
+        let java_sig = MethodSig::new("process", vec!["int".to_string()]);
+        let scala_sig = MethodSig::new("process", vec!["Int".to_string()]);
+        let kotlin_sig = MethodSig::new("process", vec!["Int".to_string()]);
+        assert!(scala_sig.implements(&java_sig));
+        assert!(kotlin_sig.implements(&java_sig));
+        assert!(scala_sig.implements(&kotlin_sig));
+    }
 }
