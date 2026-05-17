@@ -143,6 +143,175 @@ fn collect_diagnostics_clean_for_valid_source() {
     assert!(diags.is_empty(), "unexpected diagnostics on valid source: {diags:?}");
 }
 
+// ---------- Phase 2: hierarchy + metadata ----------
+
+fn first_child_with_kind<'a>(
+    parent: tree_sitter::Node<'a>,
+    kind: &str,
+) -> Option<tree_sitter::Node<'a>> {
+    let mut c = parent.walk();
+    parent.children(&mut c).find(|n| n.kind() == kind)
+}
+
+#[test]
+fn get_extends_returns_single_parent() {
+    let src = "class C extends Base";
+    let (tree, content) = parse(src);
+    let cls = first_child_with_kind(tree.root_node(), "class_definition").unwrap();
+    assert_eq!(support().get_extends(&cls, &content).as_deref(), Some("Base"));
+}
+
+#[test]
+fn get_implements_returns_with_mixins_only() {
+    let src = "class C extends Base with M1 with M2";
+    let (tree, content) = parse(src);
+    let cls = first_child_with_kind(tree.root_node(), "class_definition").unwrap();
+    assert_eq!(support().get_extends(&cls, &content).as_deref(), Some("Base"));
+    assert_eq!(support().get_implements(&cls, &content), vec!["M1", "M2"]);
+}
+
+#[test]
+fn get_implements_for_trait_extends_with() {
+    let src = "trait T extends A with B";
+    let (tree, content) = parse(src);
+    let t = first_child_with_kind(tree.root_node(), "trait_definition").unwrap();
+    assert_eq!(support().get_extends(&t, &content).as_deref(), Some("A"));
+    assert_eq!(support().get_implements(&t, &content), vec!["B"]);
+}
+
+#[test]
+fn get_extends_none_when_absent() {
+    let src = "class C { val x = 1 }";
+    let (tree, content) = parse(src);
+    let cls = first_child_with_kind(tree.root_node(), "class_definition").unwrap();
+    assert!(support().get_extends(&cls, &content).is_none());
+    assert!(support().get_implements(&cls, &content).is_empty());
+}
+
+#[test]
+fn get_modifiers_captures_modifiers_block() {
+    let src = "final private class C";
+    let (tree, content) = parse(src);
+    let cls = first_child_with_kind(tree.root_node(), "class_definition").unwrap();
+    let mods = support().get_modifiers(&cls, &content);
+    assert!(mods.iter().any(|m| m == "final"), "missing final in {mods:?}");
+    assert!(mods.iter().any(|m| m.contains("private")), "missing private in {mods:?}");
+}
+
+#[test]
+fn get_modifiers_captures_case_keyword() {
+    let src = "case class CC(a: Int)";
+    let (tree, content) = parse(src);
+    let cls = first_child_with_kind(tree.root_node(), "class_definition").unwrap();
+    let mods = support().get_modifiers(&cls, &content);
+    assert!(mods.iter().any(|m| m == "case"), "case modifier not captured: {mods:?}");
+}
+
+#[test]
+fn get_modifiers_captures_override_on_function() {
+    let src = "class C extends A { override def f: Int = 1 }";
+    let (tree, content) = parse(src);
+    let cls = first_child_with_kind(tree.root_node(), "class_definition").unwrap();
+    let body = first_child_with_kind(cls, "template_body").unwrap();
+    let func = first_child_with_kind(body, "function_definition").unwrap();
+    let mods = support().get_modifiers(&func, &content);
+    assert!(mods.iter().any(|m| m == "override"), "override missing in {mods:?}");
+}
+
+#[test]
+fn get_annotations_returns_full_text() {
+    let src = "@Deprecated(\"x\")\n@Override\nclass Foo";
+    let (tree, content) = parse(src);
+    let cls = first_child_with_kind(tree.root_node(), "class_definition").unwrap();
+    let anns = support().get_annotations(&cls, &content);
+    assert!(anns.iter().any(|a| a.contains("Deprecated")), "{anns:?}");
+    assert!(anns.iter().any(|a| a.contains("Override")), "{anns:?}");
+}
+
+#[test]
+fn get_documentation_picks_up_scaladoc_previous_sibling() {
+    let src = "/** doc */\nclass D";
+    let (tree, content) = parse(src);
+    let cls = first_child_with_kind(tree.root_node(), "class_definition").unwrap();
+    let doc = support().get_documentation(&cls, &content);
+    assert_eq!(doc.as_deref(), Some("/** doc */"));
+}
+
+#[test]
+fn get_documentation_none_for_regular_block_comment() {
+    let src = "/* not scaladoc */\nclass D";
+    let (tree, content) = parse(src);
+    let cls = first_child_with_kind(tree.root_node(), "class_definition").unwrap();
+    assert!(support().get_documentation(&cls, &content).is_none());
+}
+
+#[test]
+fn get_parameters_for_function_returns_name_type_default() {
+    let src = "def f(a: Int, b: String = \"x\"): Int = 0";
+    let (tree, content) = parse(src);
+    let func = first_child_with_kind(tree.root_node(), "function_definition").unwrap();
+    let params = support().get_parameters(&func, &content).expect("params");
+    assert_eq!(params.len(), 2);
+    assert_eq!(params[0].0, "a");
+    assert_eq!(params[0].1.as_deref(), Some("Int"));
+    assert!(params[0].2.is_none());
+    assert_eq!(params[1].0, "b");
+    assert_eq!(params[1].1.as_deref(), Some("String"));
+    assert_eq!(params[1].2.as_deref(), Some("x"));
+}
+
+#[test]
+fn get_parameters_for_class_constructor() {
+    let src = "class P(val x: Int, var y: String = \"z\")";
+    let (tree, content) = parse(src);
+    let cls = first_child_with_kind(tree.root_node(), "class_definition").unwrap();
+    let params = support().get_parameters(&cls, &content).expect("params");
+    assert_eq!(params.len(), 2);
+    assert_eq!(params[0].0, "x");
+    assert_eq!(params[0].1.as_deref(), Some("Int"));
+    assert_eq!(params[1].0, "y");
+    assert_eq!(params[1].2.as_deref(), Some("z"));
+}
+
+#[test]
+fn get_parameters_generic_type() {
+    let src = "def f(c: List[Int]): Unit = ()";
+    let (tree, content) = parse(src);
+    let func = first_child_with_kind(tree.root_node(), "function_definition").unwrap();
+    let params = support().get_parameters(&func, &content).expect("params");
+    assert_eq!(params.len(), 1);
+    assert_eq!(params[0].1.as_deref(), Some("List[Int]"));
+}
+
+#[test]
+fn get_return_for_function_picks_return_type_field() {
+    let src = "def f(): Map[String, Int] = ???";
+    let (tree, content) = parse(src);
+    let func = first_child_with_kind(tree.root_node(), "function_definition").unwrap();
+    let r = support().get_return(&func, &content);
+    assert_eq!(r.as_deref(), Some("Map[String, Int]"));
+}
+
+#[test]
+fn get_return_none_for_def_without_explicit_type() {
+    let src = "def f() = 1";
+    let (tree, content) = parse(src);
+    let func = first_child_with_kind(tree.root_node(), "function_definition").unwrap();
+    assert!(support().get_return(&func, &content).is_none());
+}
+
+#[test]
+fn get_return_for_val_declaration_picks_type_field() {
+    // Abstract val in a trait: `val x: Int`
+    let src = "trait T { val x: Int }";
+    let (tree, content) = parse(src);
+    let t = first_child_with_kind(tree.root_node(), "trait_definition").unwrap();
+    let body = first_child_with_kind(t, "template_body").unwrap();
+    let v = first_child_with_kind(body, "val_declaration").unwrap();
+    let r = support().get_return(&v, &content);
+    assert_eq!(r.as_deref(), Some("Int"));
+}
+
 #[test]
 fn reserved_keywords_blocked_in_is_valid_identifier() {
     let s = support();

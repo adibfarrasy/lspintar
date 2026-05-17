@@ -37,6 +37,35 @@ impl ScalaSupport {
     }
 }
 
+/// Extract every parent type written under an `extends_clause`, in source order.
+/// The first entry is the `extends T` target; subsequent entries are the
+/// `with M1 with M2` mixins.  Filters out the literal `extends` / `with`
+/// keyword tokens and any constructor `arguments` field.
+fn extends_clause_types(extend: Node, source: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut c = extend.walk();
+    for child in extend.children(&mut c) {
+        match child.kind() {
+            "type_identifier"
+            | "generic_type"
+            | "stable_type_identifier"
+            | "projected_type"
+            | "compound_type"
+            | "infix_type"
+            | "applied_constructor_type"
+            | "function_type"
+            | "annotated_type"
+            | "literal_type" => {
+                if let Ok(t) = child.utf8_text(source.as_bytes()) {
+                    out.push(t.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 // Scala 2.13 + 3 reserved words (union; both dialects share most of these).
 static SCALA_RESERVED: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
     [
@@ -150,38 +179,142 @@ impl LanguageSupport for ScalaSupport {
         }
     }
 
-    // --- Hierarchy + metadata (Phase 2): stubs returning empty/None until implemented.
+    // --- Hierarchy + metadata (Phase 2).
 
-    fn get_extends(&self, _node: &Node, _source: &str) -> Option<String> {
-        None
+    fn get_extends(&self, node: &Node, source: &str) -> Option<String> {
+        let extend = node.child_by_field_name("extend")?;
+        extends_clause_types(extend, source)
+            .into_iter()
+            .next()
     }
 
-    fn get_implements(&self, _node: &Node, _source: &str) -> Vec<String> {
-        Vec::new()
+    fn get_implements(&self, node: &Node, source: &str) -> Vec<String> {
+        let Some(extend) = node.child_by_field_name("extend") else {
+            return Vec::new();
+        };
+        let mut types = extends_clause_types(extend, source);
+        if !types.is_empty() {
+            types.remove(0);
+        }
+        types
     }
 
-    fn get_modifiers(&self, _node: &Node, _source: &str) -> Vec<String> {
-        Vec::new()
+    fn get_modifiers(&self, node: &Node, source: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut c = node.walk();
+        for child in node.children(&mut c) {
+            match child.kind() {
+                "modifiers" => {
+                    let mut mc = child.walk();
+                    for m in child.children(&mut mc) {
+                        if let Ok(t) = m.utf8_text(source.as_bytes()) {
+                            let trimmed = t.trim();
+                            if !trimmed.is_empty() {
+                                out.push(trimmed.to_string());
+                            }
+                        }
+                    }
+                }
+                // `case`, `override`, `opaque`, `final`, `sealed`, `lazy`, `implicit`,
+                // `abstract`, `inline`, `transparent`, `open`, `infix` may also appear
+                // as direct keyword-token children outside the `modifiers` node.
+                "case" | "override" | "opaque" | "final" | "sealed" | "lazy"
+                | "implicit" | "abstract" | "inline" | "transparent" | "open" | "infix" => {
+                    out.push(child.kind().to_string());
+                }
+                _ => {}
+            }
+        }
+        out
     }
 
-    fn get_annotations(&self, _node: &Node, _source: &str) -> Vec<String> {
-        Vec::new()
+    fn get_annotations(&self, node: &Node, source: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut c = node.walk();
+        for child in node.children(&mut c) {
+            if child.kind() == "annotation" {
+                if let Ok(t) = child.utf8_text(source.as_bytes()) {
+                    out.push(t.to_string());
+                }
+            }
+        }
+        out
     }
 
-    fn get_documentation(&self, _node: &Node, _source: &str) -> Option<String> {
+    fn get_documentation(&self, node: &Node, source: &str) -> Option<String> {
+        // Scaladoc lives in a `block_comment` previous sibling that opens with `/**`.
+        let mut cursor = node.prev_sibling();
+        while let Some(sib) = cursor {
+            match sib.kind() {
+                "block_comment" => {
+                    let text = sib.utf8_text(source.as_bytes()).ok()?;
+                    if text.starts_with("/**") {
+                        return Some(text.to_string());
+                    }
+                    return None;
+                }
+                // Whitespace / line-comment siblings: keep walking back.
+                "line_comment" | "comment" => cursor = sib.prev_sibling(),
+                _ => return None,
+            }
+        }
         None
     }
 
     fn get_parameters(
         &self,
-        _node: &Node,
-        _source: &str,
+        node: &Node,
+        source: &str,
     ) -> Option<Vec<ParameterResult>> {
-        None
+        let kind = self.get_kind(node)?;
+        if !matches!(kind, NodeKind::Function | NodeKind::Class | NodeKind::Enum | NodeKind::Interface)
+        {
+            return None;
+        }
+        // Functions use `parameters`; classes/traits/enums use `class_parameters`.
+        let mut c = node.walk();
+        let mut params: Vec<ParameterResult> = Vec::new();
+        for child in node.children(&mut c) {
+            if child.kind() == "parameters" || child.kind() == "class_parameters" {
+                let mut pc = child.walk();
+                for p in child.children(&mut pc) {
+                    if p.kind() == "parameter" || p.kind() == "class_parameter" {
+                        let name = p
+                            .child_by_field_name("name")
+                            .and_then(|n| n.utf8_text(source.as_bytes()).ok())
+                            .map(|s| s.to_string())
+                            .unwrap_or_default();
+                        let ty = p
+                            .child_by_field_name("type")
+                            .and_then(|n| n.utf8_text(source.as_bytes()).ok())
+                            .map(|s| s.to_string());
+                        let default = p
+                            .child_by_field_name("default_value")
+                            .and_then(|n| n.utf8_text(source.as_bytes()).ok())
+                            .map(|s| s.trim_matches('"').to_string());
+                        params.push((name, ty, default));
+                    }
+                }
+            }
+        }
+        if params.is_empty() {
+            // function_definition with empty `()` still has a parameters node — return Some(vec![]).
+            // function_definition without any parens (e.g. `def x: Int = 1`) returns Some(vec![]).
+            return Some(Vec::new());
+        }
+        Some(params)
     }
 
-    fn get_return(&self, _node: &Node, _source: &str) -> Option<String> {
-        None
+    fn get_return(&self, node: &Node, source: &str) -> Option<String> {
+        match self.get_kind(node)? {
+            NodeKind::Function => node
+                .child_by_field_name("return_type")
+                .and_then(|n| n.utf8_text(source.as_bytes()).ok().map(|s| s.to_string())),
+            NodeKind::Field => node
+                .child_by_field_name("type")
+                .and_then(|n| n.utf8_text(source.as_bytes()).ok().map(|s| s.to_string())),
+            _ => None,
+        }
     }
 
     fn get_imports(&self, tree: &Tree, source: &str) -> Vec<String> {
