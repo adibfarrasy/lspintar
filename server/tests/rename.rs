@@ -531,11 +531,10 @@ fn write_temp(content: &str, ext: &str) -> (std::path::PathBuf, tempfile::NamedT
 /// without hand-counting.
 fn find_byte_position(content: &str, line_marker: &str, needle: &str) -> Option<(usize, usize)> {
     for (idx, line) in content.lines().enumerate() {
-        if let Some(_) = line.find(line_marker) {
-            if let Some(col) = line.find(needle) {
+        if line.find(line_marker).is_some()
+            && let Some(col) = line.find(needle) {
                 return Some((idx, col));
             }
-        }
     }
     None
 }

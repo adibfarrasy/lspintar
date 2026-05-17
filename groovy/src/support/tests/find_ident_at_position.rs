@@ -18,7 +18,7 @@ fn test_simple_identifier() {
             }
         }
         "#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "bar;");
     let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
     assert_eq!(ident, Some(("bar".to_string(), None)));
@@ -35,7 +35,7 @@ fn test_method_invocation_with_qualifier() {
             }
         }
         "#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "baz");
     let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
     assert_eq!(ident, Some(("baz".to_string(), Some("bar".to_string()))));
@@ -52,7 +52,7 @@ fn test_field_access_with_qualifier() {
             }
         }
         "#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "name");
     let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
     assert_eq!(ident, Some(("name".to_string(), Some("bar".to_string()))));
@@ -68,7 +68,7 @@ fn test_identifier_in_argument_list() {
                 println(bar)
             }
         }"#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "bar)");
     let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
     assert_eq!(ident, Some(("bar".to_string(), None)));
@@ -83,7 +83,7 @@ fn test_identifier_in_variable_declarator() {
                 Bar myBar = someOtherVar
             }
         }"#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "someOtherVar");
     let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
     assert_eq!(ident, Some(("someOtherVar".to_string(), None)));
@@ -98,7 +98,7 @@ fn test_this_qualified_method_invocation() {
                 this.doSomething()
             }
         }"#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "doSomething");
     let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
     assert_eq!(
@@ -116,7 +116,7 @@ fn test_chained_method_invocation() {
                 user.getProfile().getName()
             }
         }"#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "getName");
     let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
     assert_eq!(
@@ -134,7 +134,7 @@ fn test_static_method_invocation() {
                 UserService.createUser()
             }
         }"#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "createUser");
     let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
     assert_eq!(
@@ -152,7 +152,7 @@ fn test_chained_field_access() {
                 user.profile.name
             }
         }"#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "name");
     let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
     assert_eq!(
@@ -170,7 +170,7 @@ fn test_method_parameter_identifier() {
                 user;
             }
         }"#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "user;");
     let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
     assert_eq!(ident, Some(("user".to_string(), None)));
@@ -188,7 +188,7 @@ fn test_closure_parameter_identifier() {
                 }
             }
         }"#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "item)");
     let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
     assert_eq!(ident, Some(("item".to_string(), None)));
@@ -203,7 +203,7 @@ fn test_constructor_type_in_new_expression() {
                 def list = new ArrayList<String>()
             }
         }"#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "ArrayList");
     let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
     assert_eq!(ident, Some(("ArrayList".to_string(), None)));
@@ -218,7 +218,7 @@ fn test_type_argument_in_generics() {
                 List<MyClass> list
             }
         }"#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "MyClass");
     let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
     assert_eq!(ident, Some(("MyClass".to_string(), None)));
@@ -233,7 +233,7 @@ fn test_nested_type_arguments_in_generics() {
                 Map<String, UserProfile> map
             }
         }"#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "UserProfile");
     let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
     assert_eq!(ident, Some(("UserProfile".to_string(), None)));
@@ -248,7 +248,7 @@ fn test_cast_expression_type() {
                 def result = (MyClass) obj
             }
         }"#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "MyClass");
     let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
     assert_eq!(ident, Some(("MyClass".to_string(), None)));
@@ -262,7 +262,7 @@ fn test_import_statement_type() {
 
         class Foo {
         }"#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "Bar");
     let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
     assert_eq!(
@@ -280,7 +280,7 @@ fn test_nested_qualifier_in_chain() {
                 user.getProfile().name
             }
         }"#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
 
     // deepest qualifier
     let pos = find_position(content, "user");
@@ -313,7 +313,7 @@ fn test_simple_constructor_in_chain() {
                 new Class().process([key: 'value']).message
             }
         }"#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
 
     // constructor type
     let pos = find_position(content, "Class");
@@ -346,7 +346,7 @@ fn test_scoped_constructor_in_chain() {
                 new Outer.Inner().process([key: 'value']).message
             }
         }"#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
 
     // outer qualifier
     let pos = find_position(content, "Outer");
@@ -390,7 +390,7 @@ fn test_nested_method_calls() {
                 new MyClass().process(new HashMap()).message
             }
         }"#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "message");
     let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
     assert_eq!(
@@ -408,7 +408,7 @@ fn test_return_type_detection() {
                 return "hello"
             }
         }"#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "String");
     let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
     assert_eq!(ident, Some(("String".to_string(), None)));
@@ -424,7 +424,7 @@ fn test_annotation_on_class() {
                 return "hello"
             }
         }"#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "Controller");
     let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
     assert_eq!(ident, Some(("Controller".to_string(), None)));
@@ -440,7 +440,7 @@ fn test_annotation_on_method() {
                 return "hello"
             }
         }"#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "GetMapping");
     let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
     assert_eq!(ident, Some(("GetMapping".to_string(), None)));
@@ -454,7 +454,7 @@ fn test_annotation_on_field() {
             @Autowired
             String service
         }"#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "Autowired");
     let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
     assert_eq!(ident, Some(("Autowired".to_string(), None)));
@@ -470,7 +470,7 @@ fn test_annotation_with_parameters() {
                 return "hello"
             }
         }"#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "RequestMapping");
     let ident = support.find_ident_at_position(&parsed.0, &parsed.1, &pos);
     assert_eq!(ident, Some(("RequestMapping".to_string(), None)));

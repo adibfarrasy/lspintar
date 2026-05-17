@@ -23,16 +23,14 @@ pub fn read_signature_attr(
         if name_idx == 0 || name_idx > pool.len() {
             continue;
         }
-        if let ConstantInfo::Utf8(u) = &pool[name_idx - 1] {
-            if u.utf8_string == "Signature" && attr.info.len() >= 2 {
+        if let ConstantInfo::Utf8(u) = &pool[name_idx - 1]
+            && u.utf8_string == "Signature" && attr.info.len() >= 2 {
                 let sig_idx = u16::from_be_bytes([attr.info[0], attr.info[1]]) as usize;
-                if sig_idx > 0 && sig_idx <= pool.len() {
-                    if let ConstantInfo::Utf8(s) = &pool[sig_idx - 1] {
+                if sig_idx > 0 && sig_idx <= pool.len()
+                    && let ConstantInfo::Utf8(s) = &pool[sig_idx - 1] {
                         return Some(s.utf8_string.clone());
                     }
-                }
             }
-        }
     }
     None
 }

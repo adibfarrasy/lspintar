@@ -19,7 +19,7 @@ fn test_find_variable_type() {
             }
         }
         "#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "bar.");
     let var_type = support.find_variable_type(&parsed.0, &parsed.1, "bar", &pos);
     assert_eq!(var_type, Some("Bar".to_string()));
@@ -36,7 +36,7 @@ fn test_find_variable_type_with_generics() {
             }
         }
         "#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "items.add");
     let var_type = support.find_variable_type(&parsed.0, &parsed.1, "items", &pos);
     assert_eq!(var_type, Some("List<String>".to_string()));
@@ -52,7 +52,7 @@ fn test_find_parameter_type() {
             }
         }
         "#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "user.getName");
     let var_type = support.find_variable_type(&parsed.0, &parsed.1, "user", &pos);
     assert_eq!(var_type, Some("User".to_string()));
@@ -69,7 +69,7 @@ fn test_find_field_type() {
             }
         }
         "#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "name.toLowerCase");
     let var_type = support.find_variable_type(&parsed.0, &parsed.1, "name", &pos);
     assert_eq!(var_type, Some("String".to_string()));
@@ -86,7 +86,7 @@ fn test_var_infer_constructor() {
             }
         }
         "#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "x.doSomething");
     let var_type = support.find_variable_type(&parsed.0, &parsed.1, "x", &pos);
     assert_eq!(var_type, Some("Bar".to_string()));
@@ -103,7 +103,7 @@ fn test_var_infer_generic_constructor() {
             }
         }
         "#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "items.add");
     let var_type = support.find_variable_type(&parsed.0, &parsed.1, "items", &pos);
     assert_eq!(var_type, Some("ArrayList<String>".to_string()));
@@ -120,7 +120,7 @@ fn test_var_infer_string_literal() {
             }
         }
         "#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "s.toUpperCase");
     let var_type = support.find_variable_type(&parsed.0, &parsed.1, "s", &pos);
     assert_eq!(var_type, Some("String".to_string()));
@@ -137,7 +137,7 @@ fn test_var_infer_integer_literal() {
             }
         }
         "#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "n.toString");
     let var_type = support.find_variable_type(&parsed.0, &parsed.1, "n", &pos);
     assert_eq!(var_type, Some("Integer".to_string()));
@@ -154,7 +154,7 @@ fn test_var_infer_boolean_literal() {
             }
         }
         "#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "b.toString");
     let var_type = support.find_variable_type(&parsed.0, &parsed.1, "b", &pos);
     assert_eq!(var_type, Some("Boolean".to_string()));
@@ -174,7 +174,7 @@ fn test_find_this_type_nested_class() {
             }
         }
         "#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "this.innerField");
     let var_type = support.find_variable_type(&parsed.0, &parsed.1, "this", &pos);
     assert_eq!(var_type, Some("Inner".to_string()));

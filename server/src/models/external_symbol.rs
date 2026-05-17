@@ -96,10 +96,10 @@ impl ExternalSymbol {
         let extract_dir = get_cache_dir().join(jar_hash.to_string());
 
         // NOTE: prefer sources over decompilation if available
-        if self.needs_decompilation {
-            if let Some(alt_jar) = &self.alt_jar_path {
-                if let Ok(file) = File::open(alt_jar) {
-                    if let Ok(mut archive) = ZipArchive::new(file) {
+        if self.needs_decompilation
+            && let Some(alt_jar) = &self.alt_jar_path
+                && let Ok(file) = File::open(alt_jar)
+                    && let Ok(mut archive) = ZipArchive::new(file) {
                         let stem = PathBuf::from(&self.source_file_path).with_extension("");
                         let stem_str = stem.to_string_lossy();
                         let entry_name = (0..archive.len()).find_map(|i| {
@@ -112,8 +112,8 @@ impl ExternalSymbol {
                                 None
                             }
                         });
-                        if let Some(entry_name) = entry_name {
-                            if let Ok(mut entry) = archive.by_name(&entry_name) {
+                        if let Some(entry_name) = entry_name
+                            && let Ok(mut entry) = archive.by_name(&entry_name) {
                                 let src_outpath = extract_dir.join(&entry_name);
                                 if let Some(p) = src_outpath.parent() {
                                     fs::create_dir_all(p)?;
@@ -122,11 +122,7 @@ impl ExternalSymbol {
                                 copy(&mut entry, &mut outfile)?;
                                 return Ok(src_outpath);
                             }
-                        }
                     }
-                }
-            }
-        }
 
         let outpath = if self.needs_decompilation {
             extract_dir

@@ -39,7 +39,7 @@ fn test_extract_call_arguments_all_expression_types() {
         }
     "#;
 
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "myMethod(");
     let args = support.extract_call_arguments(&parsed.0, &parsed.1, &pos);
 
@@ -69,7 +69,7 @@ fn test_extract_call_arguments_closure_method_invocation() {
     let support = GroovySupport::new();
     let content = r#"obj.method { it.toString() }"#;
 
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "{ it");
     let args = support.extract_call_arguments(&parsed.0, &parsed.1, &pos);
 

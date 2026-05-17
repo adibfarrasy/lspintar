@@ -73,19 +73,16 @@ fn collect_refs(
     // If this node is a declaration node other than the original, and it
     // introduces a binding with the same name, skip its entire subtree
     // (shadow).
-    if decl_node_kinds.contains(&node.kind()) && node.id() != original_binding.id() {
-        if declares_name(node, bytes, name) {
+    if decl_node_kinds.contains(&node.kind()) && node.id() != original_binding.id()
+        && declares_name(node, bytes, name) {
             return;
         }
-    }
 
-    if node.kind() == "identifier" || node.kind() == "simple_identifier" {
-        if let Ok(text) = node.utf8_text(bytes) {
-            if text == name && !is_member_access_rhs(node) && !is_label_or_type_context(node) {
+    if (node.kind() == "identifier" || node.kind() == "simple_identifier")
+        && let Ok(text) = node.utf8_text(bytes)
+            && text == name && !is_member_access_rhs(node) && !is_label_or_type_context(node) {
                 out.push(node_to_range(&node));
             }
-        }
-    }
 
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
@@ -101,25 +98,22 @@ fn declares_name(node: Node, bytes: &[u8], name: &str) -> bool {
     //   - a child `name` field (formal_parameter)
     //   - a descendant `variable_declarator.name`
     //   - an `identifier`/`simple_identifier` child
-    if let Some(n) = node.child_by_field_name("name") {
-        if n.utf8_text(bytes).map(|t| t == name).unwrap_or(false) {
+    if let Some(n) = node.child_by_field_name("name")
+        && n.utf8_text(bytes).map(|t| t == name).unwrap_or(false) {
             return true;
         }
-    }
     // Fallback: first identifier child at any depth within declarators.
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        if child.kind() == "identifier" || child.kind() == "simple_identifier" {
-            if child.utf8_text(bytes).map(|t| t == name).unwrap_or(false) {
+        if (child.kind() == "identifier" || child.kind() == "simple_identifier")
+            && child.utf8_text(bytes).map(|t| t == name).unwrap_or(false) {
                 return true;
             }
-        }
         if child.kind() == "variable_declarator" || child.kind() == "variable_declaration" {
-            if let Some(n) = child.child_by_field_name("name") {
-                if n.utf8_text(bytes).map(|t| t == name).unwrap_or(false) {
+            if let Some(n) = child.child_by_field_name("name")
+                && n.utf8_text(bytes).map(|t| t == name).unwrap_or(false) {
                     return true;
                 }
-            }
             // variable_declarator without a `name` field: check first ident
             let mut inner = child.walk();
             for ic in child.children(&mut inner) {

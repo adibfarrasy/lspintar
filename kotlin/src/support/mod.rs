@@ -234,11 +234,10 @@ impl KotlinSupport {
                     "property_declaration"
                     | "class_parameter"
                     | "parameter"
-                    | "variable_declaration" => {
-                        if !process_node(child, content) {
+                    | "variable_declaration"
+                        if !process_node(child, content) => {
                             return;
                         }
-                    }
                     "statements" | "function_body" | "lambda_literal" | "parameters"
                     | "lambda_parameters" => {
                         stack.push(child);
@@ -545,11 +544,10 @@ impl KotlinSupport {
             "decimal_integer_literal" => Some("Int".to_string()),
             "long_literal" => Some("Long".to_string()),
             "real_literal" => {
-                if let Ok(text) = value_node.utf8_text(content.as_bytes()) {
-                    if text.to_lowercase().ends_with('f') {
+                if let Ok(text) = value_node.utf8_text(content.as_bytes())
+                    && text.to_lowercase().ends_with('f') {
                         return Some("Float".to_string());
                     }
-                }
                 Some("Double".to_string())
             }
             "boolean_literal" => Some("Boolean".to_string()),
@@ -876,7 +874,7 @@ fn collect_duplicate_imports(
                 .trim()
                 .to_string();
             let range = node_to_range(&node);
-            if seen.contains_key(&fqn) {
+            if seen.insert(fqn.clone(), range).is_some() {
                 diagnostics.push(tower_lsp::lsp_types::Diagnostic {
                     range,
                     severity: Some(tower_lsp::lsp_types::DiagnosticSeverity::WARNING),
@@ -887,8 +885,6 @@ fn collect_duplicate_imports(
                     message: format!("Duplicate import: {fqn}"),
                     ..Default::default()
                 });
-            } else {
-                seen.insert(fqn, range);
             }
         });
 }
@@ -1034,13 +1030,11 @@ fn extract_param_types(func_node: tree_sitter::Node, bytes: &[u8]) -> Vec<String
             let mut param_types = Vec::new();
             let mut pc = child.walk();
             for param in child.children(&mut pc) {
-                if param.kind() == "parameter" {
-                    if let Some(type_node) = param.child_by_field_name("type") {
-                        if let Ok(t) = type_node.utf8_text(bytes) {
+                if param.kind() == "parameter"
+                    && let Some(type_node) = param.child_by_field_name("type")
+                        && let Ok(t) = type_node.utf8_text(bytes) {
                             param_types.push(t.to_string());
                         }
-                    }
-                }
             }
             return param_types;
         }
@@ -1063,7 +1057,7 @@ fn check_body_for_dup_sigs(
         let Ok(name) = name_node.utf8_text(bytes) else { continue; };
         let param_types = extract_param_types(child, bytes);
         let sig = format!("{}({})", name, param_types.join(","));
-        if seen.contains_key(&sig) {
+        if seen.insert(sig.clone(), ()).is_some() {
             diagnostics.push(tower_lsp::lsp_types::Diagnostic {
                 range: node_to_range(&name_node),
                 severity: Some(tower_lsp::lsp_types::DiagnosticSeverity::ERROR),
@@ -1074,8 +1068,6 @@ fn check_body_for_dup_sigs(
                 message: format!("Duplicate method signature: '{sig}'"),
                 ..Default::default()
             });
-        } else {
-            seen.insert(sig, ());
         }
     }
 }
@@ -1650,11 +1642,10 @@ impl LanguageSupport for KotlinSupport {
         cursor
             .matches(&DECLARED_TYPES_QUERY, tree.root_node(), bytes)
             .for_each(|m| {
-                if let Some(cap) = m.captures.first() {
-                    if let Ok(text) = cap.node.utf8_text(bytes) {
+                if let Some(cap) = m.captures.first()
+                    && let Ok(text) = cap.node.utf8_text(bytes) {
                         names.push(text.to_string());
                     }
-                }
             });
 
         names
@@ -2000,11 +1991,10 @@ fn kotlin_process_statements_stmt(
                 let mut c = stmt.walk();
                 for child in stmt.children(&mut c) {
                     if child.kind() == "variable_declaration" {
-                        if let Some(name_node) = child.child_by_field_name("name") {
-                            if let Ok(name) = name_node.utf8_text(bytes) {
+                        if let Some(name_node) = child.child_by_field_name("name")
+                            && let Ok(name) = name_node.utf8_text(bytes) {
                                 var_name = Some(name.to_string());
                             }
-                        }
                         break;
                     }
                 }
@@ -2035,15 +2025,14 @@ fn kotlin_process_statements_stmt(
                     .filter(|n| n.kind() == "identifier")
                     .and_then(|n| n.utf8_text(bytes).ok())
                     .map(|s| s.to_string());
-                if let Some(name) = lhs_name {
-                    if uninit.contains(&name) {
+                if let Some(name) = lhs_name
+                    && uninit.contains(&name) {
                         if let Some(rhs) = stmt.child(2) {
                             kotlin_scan_reads(rhs, bytes, uninit, diagnostics);
                         }
                         uninit.remove(&name);
                         return;
                     }
-                }
             }
             kotlin_scan_reads(stmt, bytes, uninit, diagnostics);
         }
@@ -2069,18 +2058,17 @@ fn kotlin_scan_reads(
                 .and_then(|op| op.utf8_text(bytes).ok())
                 .map(|op| op == "=")
                 .unwrap_or(false);
-            if !is_pure {
-                if let Some(lhs) = node.child(0) {
+            if !is_pure
+                && let Some(lhs) = node.child(0) {
                     kotlin_scan_reads(lhs, bytes, uninit, diagnostics);
                 }
-            }
             if let Some(rhs) = node.child(2) {
                 kotlin_scan_reads(rhs, bytes, uninit, diagnostics);
             }
         }
         "identifier" => {
-            if let Ok(name) = node.utf8_text(bytes) {
-                if uninit.contains(name) {
+            if let Ok(name) = node.utf8_text(bytes)
+                && uninit.contains(name) {
                     diagnostics.push(tower_lsp::lsp_types::Diagnostic {
                         range: node_to_range(&node),
                         severity: Some(tower_lsp::lsp_types::DiagnosticSeverity::ERROR),
@@ -2092,7 +2080,6 @@ fn kotlin_scan_reads(
                         ..Default::default()
                     });
                 }
-            }
         }
         _ => {
             let mut cursor = node.walk();
@@ -2149,14 +2136,13 @@ fn kotlin_null_stmt(
                 .unwrap_or(false);
 
             if is_nullable_decl {
-                if let Some(name_node) = var_decl.child_by_field_name("name") {
-                    if let Ok(name) = name_node.utf8_text(bytes) {
+                if let Some(name_node) = var_decl.child_by_field_name("name")
+                    && let Ok(name) = name_node.utf8_text(bytes) {
                         nullable.insert(name.to_string());
                     }
-                }
-            } else if let Some(type_n) = type_node {
-                if let Ok(type_text) = type_n.utf8_text(bytes) {
-                    if let Some(val) = value {
+            } else if let Some(type_n) = type_node
+                && let Ok(type_text) = type_n.utf8_text(bytes)
+                    && let Some(val) = value {
                         let val_kind = val.kind();
                         if val_kind == "null_literal" {
                             diagnostics.push(make_null_safety_diag(&val, type_text));
@@ -2167,8 +2153,6 @@ fn kotlin_null_stmt(
                             }
                         }
                     }
-                }
-            }
         }
         "function_declaration" => {
             // Check null returns inside this function
@@ -2193,7 +2177,7 @@ fn kotlin_check_null_jump_expr(
     diagnostics: &mut Vec<tower_lsp::lsp_types::Diagnostic>,
 ) {
     let first = node.child(0);
-    if first.and_then(|n| n.utf8_text(bytes).ok()).as_deref() != Some("return") {
+    if first.and_then(|n| n.utf8_text(bytes).ok()) != Some("return") {
         return;
     }
     let mut cursor = node.walk();
@@ -2265,10 +2249,10 @@ fn kotlin_find_null_returns<'a>(
     }
     if node.kind() == "jump_expression" {
         let first = node.child(0);
-        if first.and_then(|n| n.utf8_text(bytes).ok()).as_deref() == Some("return") {
+        if first.and_then(|n| n.utf8_text(bytes).ok()) == Some("return") {
             let mut cursor = node.walk();
-            if let Some(val) = node.children(&mut cursor).find(|n| n.is_named()) {
-                if val.kind() == "null_literal" {
+            if let Some(val) = node.children(&mut cursor).find(|n| n.is_named())
+                && val.kind() == "null_literal" {
                     diagnostics.push(tower_lsp::lsp_types::Diagnostic {
                         range: node_to_range(&val),
                         severity: Some(tower_lsp::lsp_types::DiagnosticSeverity::ERROR),
@@ -2282,7 +2266,6 @@ fn kotlin_find_null_returns<'a>(
                         ..Default::default()
                     });
                 }
-            }
         }
         return;
     }
@@ -2402,7 +2385,7 @@ fn check_kotlin_return_literal(
 ) {
     // "return" is an unnamed first child; skip break/continue
     let first = node.child(0);
-    if first.and_then(|n| n.utf8_text(bytes).ok()).as_deref() != Some("return") {
+    if first.and_then(|n| n.utf8_text(bytes).ok()) != Some("return") {
         return;
     }
 

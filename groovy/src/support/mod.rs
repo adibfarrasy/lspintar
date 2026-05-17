@@ -228,11 +228,10 @@ impl GroovySupport {
                 }
 
                 match child.kind() {
-                    "variable_declaration" | "field_declaration" | "parameter" => {
-                        if !process_node(child, content) {
+                    "variable_declaration" | "field_declaration" | "parameter"
+                        if !process_node(child, content) => {
                             return;
                         }
-                    }
                     "expression_statement"
                     | "assignment_expression"
                     | "object_creation_expression"
@@ -404,9 +403,7 @@ impl GroovySupport {
 
         // Body: last named non-closure_parameter child.
         let last_body = closure_children
-            .iter()
-            .filter(|n| n.is_named() && n.kind() != "closure_parameter")
-            .last()?;
+            .iter().rfind(|n| n.is_named() && n.kind() != "closure_parameter")?;
 
         // Unwrap expression_statement.
         let expr = if last_body.kind() == "expression_statement" {
@@ -652,7 +649,7 @@ fn collect_duplicate_imports(
                 .trim()
                 .to_string();
             let range = node_to_range(&node);
-            if seen.contains_key(&fqn) {
+            if seen.insert(fqn.clone(), range).is_some() {
                 diagnostics.push(tower_lsp::lsp_types::Diagnostic {
                     range,
                     severity: Some(tower_lsp::lsp_types::DiagnosticSeverity::WARNING),
@@ -663,8 +660,6 @@ fn collect_duplicate_imports(
                     message: format!("Duplicate import: {fqn}"),
                     ..Default::default()
                 });
-            } else {
-                seen.insert(fqn, range);
             }
         });
 }
@@ -768,9 +763,9 @@ fn collect_unchecked_casts(
     let bytes = source.as_bytes();
     let mut stack = vec![tree.root_node()];
     while let Some(node) = stack.pop() {
-        if node.kind() == "cast_expression" {
-            if let Some(type_node) = node.child_by_field_name("type") {
-                if type_node.kind() == "generic_type" {
+        if node.kind() == "cast_expression"
+            && let Some(type_node) = node.child_by_field_name("type")
+                && type_node.kind() == "generic_type" {
                     let type_text = type_node.utf8_text(bytes).unwrap_or("?");
                     diagnostics.push(tower_lsp::lsp_types::Diagnostic {
                         range: node_to_range(&type_node),
@@ -785,8 +780,6 @@ fn collect_unchecked_casts(
                         ..Default::default()
                     });
                 }
-            }
-        }
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             stack.push(child);
@@ -801,13 +794,11 @@ fn extract_param_types(func_node: tree_sitter::Node, bytes: &[u8]) -> Vec<String
             let mut param_types = Vec::new();
             let mut pc = child.walk();
             for param in child.children(&mut pc) {
-                if param.kind() == "parameter" {
-                    if let Some(type_node) = param.child_by_field_name("type") {
-                        if let Ok(t) = type_node.utf8_text(bytes) {
+                if param.kind() == "parameter"
+                    && let Some(type_node) = param.child_by_field_name("type")
+                        && let Ok(t) = type_node.utf8_text(bytes) {
                             param_types.push(t.to_string());
                         }
-                    }
-                }
             }
             return param_types;
         }
@@ -830,7 +821,7 @@ fn check_body_for_dup_sigs(
         let Ok(name) = name_node.utf8_text(bytes) else { continue; };
         let param_types = extract_param_types(child, bytes);
         let sig = format!("{}({})", name, param_types.join(","));
-        if seen.contains_key(&sig) {
+        if seen.insert(sig.clone(), ()).is_some() {
             diagnostics.push(tower_lsp::lsp_types::Diagnostic {
                 range: node_to_range(&name_node),
                 severity: Some(tower_lsp::lsp_types::DiagnosticSeverity::ERROR),
@@ -841,8 +832,6 @@ fn check_body_for_dup_sigs(
                 message: format!("Duplicate method signature: '{sig}'"),
                 ..Default::default()
             });
-        } else {
-            seen.insert(sig, ());
         }
     }
 }
@@ -1117,15 +1106,14 @@ impl LanguageSupport for GroovySupport {
                 // obj.method { closure } has no argument_list; treat the closure as the argument
                 let mut cursor = current.walk();
                 for child in current.children(&mut cursor) {
-                    if child.kind() == "closure" {
-                        if let Ok(closure_text) = child.utf8_text(content.as_bytes()) {
+                    if child.kind() == "closure"
+                        && let Ok(closure_text) = child.utf8_text(content.as_bytes()) {
                             let position = Position {
                                 line: child.start_position().row as u32,
                                 character: child.start_position().column as u32,
                             };
                             return Some(vec![(closure_text.to_string(), position)]);
                         }
-                    }
                 }
 
                 return Some(vec![]);
@@ -1359,11 +1347,10 @@ impl LanguageSupport for GroovySupport {
         cursor
             .matches(&DECLARED_TYPES_QUERY, tree.root_node(), bytes)
             .for_each(|m| {
-                if let Some(cap) = m.captures.first() {
-                    if let Ok(text) = cap.node.utf8_text(bytes) {
+                if let Some(cap) = m.captures.first()
+                    && let Ok(text) = cap.node.utf8_text(bytes) {
                         names.push(text.to_string());
                     }
-                }
             });
 
         names
@@ -1437,14 +1424,13 @@ impl LanguageSupport for GroovySupport {
         cursor
             .matches(&GET_OBJECT_CREATIONS_QUERY, tree.root_node(), bytes)
             .for_each(|m| {
-                if let Some(cap) = m.captures.first() {
-                    if let Ok(type_name) = cap.node.utf8_text(bytes) {
+                if let Some(cap) = m.captures.first()
+                    && let Ok(type_name) = cap.node.utf8_text(bytes) {
                         results.push(ObjectCreationData {
                             type_name: type_name.to_string(),
                             range: node_to_range(&cap.node),
                         });
                     }
-                }
             });
 
         results

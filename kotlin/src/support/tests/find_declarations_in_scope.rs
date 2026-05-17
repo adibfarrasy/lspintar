@@ -20,7 +20,7 @@ fn test_find_declarations_in_scope_local_vars() {
             }
         }
         "#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "bar.doSomething");
     let decls = support.find_declarations_in_scope(&parsed.0, &parsed.1, &pos);
     assert!(
@@ -47,7 +47,7 @@ fn test_find_declarations_in_scope_excludes_after_cursor() {
             }
         }
         "#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "bar.doSomething");
     let decls = support.find_declarations_in_scope(&parsed.0, &parsed.1, &pos);
     assert!(decls.iter().any(|(n, _)| n == "bar"));
@@ -64,7 +64,7 @@ fn test_find_declarations_in_scope_includes_parameters() {
             }
         }
         "#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "user.getName");
     let decls = support.find_declarations_in_scope(&parsed.0, &parsed.1, &pos);
     assert!(
@@ -90,7 +90,7 @@ fn test_find_declarations_in_scope_includes_fields() {
             }
         }
         "#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "name.toLowerCase");
     let decls = support.find_declarations_in_scope(&parsed.0, &parsed.1, &pos);
     assert!(
@@ -111,7 +111,7 @@ fn test_find_declarations_in_scope_inferred_type() {
             }
         }
         "#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "bar.doSomething");
     let decls = support.find_declarations_in_scope(&parsed.0, &parsed.1, &pos);
     assert!(

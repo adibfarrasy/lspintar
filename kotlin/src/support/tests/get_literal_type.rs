@@ -31,7 +31,7 @@ fn test_detect_literal_type() {
             }
         }
     "#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let test_cases = vec![
         ("123", Some("Int".to_string())),
         ("123L", Some("Long".to_string())),

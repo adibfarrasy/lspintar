@@ -49,13 +49,14 @@ impl TestServer {
         let db_path = temp_dir.path().join("test.db");
         let db_url = format!("sqlite:{}", db_path.display());
         let repo = Arc::new(Repository::new(&db_url).await.unwrap());
-        let (service, _socket) = LspService::new(|client| Backend::new(client));
+        let (service, _socket) = LspService::new(Backend::new);
         let backend = service.inner().clone();
         backend.repo.set(repo).ok();
 
-        let mut init_params = InitializeParams::default();
-        init_params.root_uri =
-            Some(Url::from_file_path(&dest_root).expect("cannot parse root URI"));
+        let init_params = InitializeParams {
+            root_uri: Some(Url::from_file_path(&dest_root).expect("cannot parse root URI")),
+            ..Default::default()
+        };
 
         backend.initialize(init_params).await.unwrap();
         backend.initialized(InitializedParams {}).await;

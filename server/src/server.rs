@@ -882,9 +882,9 @@ impl Backend {
                 // `bindings` already carries receiver + call-site; apply_lambda_return_binding
                 // will not override any variable already present (functional param is lowest
                 // priority, enforcing receiver > call-site > functional).
-                if is_last_step {
-                    if let Some(body_info) = lambda_body_info {
-                        if let Some(improved) = Box::pin(self.apply_lambda_return_binding(
+                if is_last_step
+                    && let Some(body_info) = lambda_body_info
+                        && let Some(improved) = Box::pin(self.apply_lambda_return_binding(
                             &substituted,
                             &bindings,
                             meta,
@@ -901,8 +901,6 @@ impl Backend {
                         {
                             substituted = improved;
                         }
-                    }
-                }
 
                 // Split the substituted type into name + new args for next iteration
                 let (ret_name, ret_args) = parse_type_ref(&substituted);
@@ -1079,16 +1077,14 @@ impl Backend {
         let Some(repo) = self.repo.get() else {
             return vec![];
         };
-        if let Ok(Some(sym)) = repo.find_symbol_by_fqn(type_fqn).await {
-            if let Some(params) = sym.metadata.0.type_params {
+        if let Ok(Some(sym)) = repo.find_symbol_by_fqn(type_fqn).await
+            && let Some(params) = sym.metadata.0.type_params {
                 return params;
             }
-        }
-        if let Ok(Some(sym)) = repo.find_external_symbol_by_fqn(type_fqn).await {
-            if let Some(params) = sym.metadata.0.type_params {
+        if let Ok(Some(sym)) = repo.find_external_symbol_by_fqn(type_fqn).await
+            && let Some(params) = sym.metadata.0.type_params {
                 return params;
             }
-        }
         vec![]
     }
 
@@ -1110,6 +1106,7 @@ impl Backend {
             .unwrap_or_default()
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn complete_type_member_chain(
         &self,
         qualifier: &str,
@@ -1492,7 +1489,7 @@ impl Backend {
         let removed: Vec<PathBuf> = previous_jars.difference(&current_jars).cloned().collect();
         let added: Vec<(Option<PathBuf>, Option<PathBuf>)> = current
             .iter()
-            .filter(|(b, _)| b.as_ref().map_or(false, |p| !previous_jars.contains(p)))
+            .filter(|(b, _)| b.as_ref().is_some_and(|p| !previous_jars.contains(p)))
             .cloned()
             .collect();
 
@@ -1520,11 +1517,10 @@ impl Backend {
                 .await;
         }
 
-        if let Ok(json) = serde_json::to_string(&current) {
-            if let Err(e) = tokio::fs::write(&manifest_path, json).await {
+        if let Ok(json) = serde_json::to_string(&current)
+            && let Err(e) = tokio::fs::write(&manifest_path, json).await {
                 lsp_error!("Failed to update manifest file: {e}");
             }
-        }
 
         let build_tool_guard = self.build_tool.read().await;
         if let Some(bt) = build_tool_guard.as_ref().cloned() {
@@ -1611,10 +1607,10 @@ impl Backend {
             .ok()
             .flatten()
             .map(|s| s.symbol_type == "Interface")
-            .or_else(|| {
+            .or({
                 None // external lookup requires async, handled below
             })
-            .unwrap_or_else(|| {
+            .unwrap_or({
                 false // default: not an interface unless confirmed
             });
 
@@ -1860,15 +1856,15 @@ impl Backend {
         lang: &dyn lsp_core::language_support::LanguageSupport,
     ) -> Vec<Diagnostic> {
 
-        let mut diagnostics = lang.collect_diagnostics(&tree, &content);
+        let mut diagnostics = lang.collect_diagnostics(tree, content);
 
         // Semantic check: unresolved symbols
-        let type_refs = lang.get_type_references(&tree, &content);
-        if !type_refs.is_empty() {
-            if let Some(repo) = self.repo.get() {
-                let imports = lang.get_imports(&tree, &content);
-                let package = lang.get_package_name(&tree, &content);
-                let local_types = lang.get_declared_type_names(&tree, &content);
+        let type_refs = lang.get_type_references(tree, content);
+        if !type_refs.is_empty()
+            && let Some(repo) = self.repo.get() {
+                let imports = lang.get_imports(tree, content);
+                let package = lang.get_package_name(tree, content);
+                let local_types = lang.get_declared_type_names(tree, content);
 
                 for (name, range) in type_refs {
                     if is_type_ref_skippable(&name, &local_types) {
@@ -1907,13 +1903,12 @@ impl Backend {
                     }
                 }
             }
-        }
 
         // Semantic check: unimplemented abstract methods
-        let class_decls = lang.get_class_declarations(&tree, &content);
+        let class_decls = lang.get_class_declarations(tree, content);
         if !class_decls.is_empty() {
-            let imports = lang.get_imports(&tree, &content);
-            let package = lang.get_package_name(&tree, &content);
+            let imports = lang.get_imports(tree, content);
+            let package = lang.get_package_name(tree, content);
 
             for class_data in class_decls {
                 if class_data.is_abstract {
@@ -1977,11 +1972,11 @@ impl Backend {
         }
 
         // Semantic check: abstract_class_instantiated
-        let object_creations = lang.get_object_creations(&tree, &content);
-        if !object_creations.is_empty() {
-            if self.repo.get().is_some() {
-                let imports = lang.get_imports(&tree, &content);
-                let package = lang.get_package_name(&tree, &content);
+        let object_creations = lang.get_object_creations(tree, content);
+        if !object_creations.is_empty()
+            && self.repo.get().is_some() {
+                let imports = lang.get_imports(tree, content);
+                let package = lang.get_package_name(tree, content);
 
                 for creation in object_creations {
                     let Some(fqn) = self
@@ -2008,19 +2003,18 @@ impl Backend {
                     }
                 }
             }
-        }
 
         // Semantic checks: method_not_found, inaccessible_member, static_member_via_instance
-        let member_accesses = lang.get_member_accesses(&tree, &content);
-        if !member_accesses.is_empty() {
-            if let Some(_repo) = self.repo.get() {
-                let imports = lang.get_imports(&tree, &content);
-                let package = lang.get_package_name(&tree, &content);
+        let member_accesses = lang.get_member_accesses(tree, content);
+        if !member_accesses.is_empty()
+            && let Some(_repo) = self.repo.get() {
+                let imports = lang.get_imports(tree, content);
+                let package = lang.get_package_name(tree, content);
 
                 for access in member_accesses {
                     let receiver_pos = access.receiver_range.start;
                     let Some(raw_type) =
-                        lang.find_variable_type(&tree, &content, &access.receiver_name, &receiver_pos)
+                        lang.find_variable_type(tree, content, &access.receiver_name, &receiver_pos)
                     else {
                         continue;
                     };
@@ -2115,15 +2109,14 @@ impl Backend {
                     }
                 }
             }
-        }
 
         // Semantic check: wrong_type_argument_count
-        let generic_usages = lang.get_generic_type_usages(&tree, &content);
-        if !generic_usages.is_empty() {
-            if let Some(repo) = self.repo.get() {
-                let imports = lang.get_imports(&tree, &content);
-                let package = lang.get_package_name(&tree, &content);
-                let local_types = lang.get_declared_type_names(&tree, &content);
+        let generic_usages = lang.get_generic_type_usages(tree, content);
+        if !generic_usages.is_empty()
+            && let Some(repo) = self.repo.get() {
+                let imports = lang.get_imports(tree, content);
+                let package = lang.get_package_name(tree, content);
+                let local_types = lang.get_declared_type_names(tree, content);
 
                 for usage in generic_usages {
                     if is_type_ref_skippable(&usage.type_name, &local_types) {
@@ -2142,7 +2135,7 @@ impl Backend {
                         .ok()
                         .flatten()
                         .and_then(|s| s.metadata.0.type_params)
-                        .or_else(|| {
+                        .or({
                             // will be resolved below for external symbols
                             None
                         });
@@ -2180,13 +2173,12 @@ impl Backend {
                     }
                 }
             }
-        }
 
         // Semantic check: override_incompatible_signature
-        let override_methods = lang.get_override_methods(&tree, &content);
+        let override_methods = lang.get_override_methods(tree, content);
         if !override_methods.is_empty() {
-            let imports = lang.get_imports(&tree, &content);
-            let package = lang.get_package_name(&tree, &content);
+            let imports = lang.get_imports(tree, content);
+            let package = lang.get_package_name(tree, content);
 
             for method in override_methods {
                 let Some(class_fqn) = self
@@ -2234,11 +2226,11 @@ impl Backend {
         }
 
         // Semantic check: narrowing_conversion (Java/Groovy — Kotlin skip is justified)
-        let narrowing_candidates = lang.get_narrowing_candidates(&tree, &content);
+        let narrowing_candidates = lang.get_narrowing_candidates(tree, content);
         for candidate in narrowing_candidates {
             let lookup_pos = candidate.range.start;
             let Some(rhs_type_raw) =
-                lang.find_variable_type(&tree, &content, &candidate.rhs_name, &lookup_pos)
+                lang.find_variable_type(tree, content, &candidate.rhs_name, &lookup_pos)
             else {
                 continue;
             };
@@ -2259,16 +2251,16 @@ impl Backend {
         }
 
         // Semantic check: wrong_argument_types (Java/Groovy/Kotlin)
-        let call_sites = lang.get_method_call_sites(&tree, &content);
-        if !call_sites.is_empty() {
-            if let Some(repo) = self.repo.get() {
-                let imports = lang.get_imports(&tree, &content);
-                let package = lang.get_package_name(&tree, &content);
+        let call_sites = lang.get_method_call_sites(tree, content);
+        if !call_sites.is_empty()
+            && let Some(repo) = self.repo.get() {
+                let imports = lang.get_imports(tree, content);
+                let package = lang.get_package_name(tree, content);
 
                 for site in call_sites {
                     let recv_pos = site.receiver_range.start;
                     let Some(raw_recv_type) =
-                        lang.find_variable_type(&tree, &content, &site.receiver_name, &recv_pos)
+                        lang.find_variable_type(tree, content, &site.receiver_name, &recv_pos)
                     else {
                         continue;
                     };
@@ -2339,8 +2331,8 @@ impl Backend {
                             .or_else(|| {
                                 if arg.node_kind == "identifier" {
                                     lang.find_variable_type(
-                                        &tree,
-                                        &content,
+                                        tree,
+                                        content,
                                         &arg.text,
                                         &arg.range.start,
                                     )
@@ -2405,7 +2397,6 @@ impl Backend {
                     }
                 }
             }
-        }
 
         diagnostics
     }
@@ -2442,7 +2433,7 @@ impl LanguageServer for Backend {
             if self.repo.get().is_none() {
                 let (dir_fragment, file_name) = DB_PATH_FRAGMENT
                     .split_once('/')
-                    .expect(&format!("Failed to split {DB_PATH_FRAGMENT} directory"));
+                    .unwrap_or_else(|| panic!("Failed to split {DB_PATH_FRAGMENT} directory"));
 
                 let lspintar_dir = root.join(dir_fragment);
                 std::fs::DirBuilder::new()
@@ -2728,21 +2719,19 @@ impl LanguageServer for Backend {
 
                 // Record the current VCS revision so the next IncrementalOpen knows
                 // which files changed since this full reindex.
-                if let Ok(rev) = vcs.get_current_revision() {
-                    if let Err(e) =
+                if let Ok(rev) = vcs.get_current_revision()
+                    && let Err(e) =
                         tokio::fs::write(root.join(VCS_REVISION_PATH_FRAGMENT), &rev).await
                     {
                         lsp_error!("Failed to write {VCS_REVISION_PATH_FRAGMENT}: {e}");
                     }
-                }
             } else {
                 // IncrementalOpen: load the persisted classpath manifest into memory.
                 let classpath_path = root.join(CLASSPATH_MANIFEST_PATH_FRAGMENT);
-                if let Ok(bytes) = tokio::fs::read(&classpath_path).await {
-                    if let Ok(entries) = serde_json::from_slice(&bytes) {
+                if let Ok(bytes) = tokio::fs::read(&classpath_path).await
+                    && let Ok(entries) = serde_json::from_slice(&bytes) {
                         *self.subproject_classpath.write().await = entries;
                     }
-                }
 
                 // Re-index only source files that changed since the last stored VCS revision.
                 let stored_rev = tokio::fs::read_to_string(root.join(VCS_REVISION_PATH_FRAGMENT))
@@ -2751,9 +2740,9 @@ impl LanguageServer for Backend {
                     .map(|s| s.trim().to_string())
                     .filter(|s| !s.is_empty());
 
-                if let Some(stored) = stored_rev {
-                    if let Ok(current) = vcs.get_current_revision() {
-                        if stored != current {
+                if let Some(stored) = stored_rev
+                    && let Ok(current) = vcs.get_current_revision()
+                        && stored != current {
                             match vcs.get_changed_files(&stored, &current, &root) {
                                 Ok(changed) => {
                                     let supported_exts: std::collections::HashSet<&str> =
@@ -2793,19 +2782,16 @@ impl LanguageServer for Backend {
                                 lsp_error!("Failed to update {VCS_REVISION_PATH_FRAGMENT}: {e}");
                             }
                         }
-                    }
-                }
             }
 
             *indexer_lock.write().await = Some(indexer);
             *vcs_handler_lock.write().await = Some(vcs);
             *workspace_root_lock.write().await = Some(root.clone());
 
-            if let Some(vcs) = self.vcs_handler.read().await.as_ref() {
-                if let Ok(rev) = vcs.get_current_revision() {
+            if let Some(vcs) = self.vcs_handler.read().await.as_ref()
+                && let Ok(rev) = vcs.get_current_revision() {
                     *self.last_known_revision.write().await = Some(rev);
                 }
-            }
 
             if let Err(e) = tokio::fs::write(root.join(INDEX_PATH_FRAGMENT), APP_VERSION).await {
                 lsp_error!("Failed to write {INDEX_PATH_FRAGMENT}: {e}");
@@ -2838,7 +2824,7 @@ impl LanguageServer for Backend {
 
         let locations: Vec<Location> = stream::iter(symbols)
             .then(|s| async move {
-                let indexer = indexer.clone();
+                let indexer = indexer;
                 match s {
                     ResolvedSymbol::External(sym) => {
                         let enriched = sym.with_sources(indexer).await;
@@ -3316,13 +3302,12 @@ impl LanguageServer for Backend {
 
                     if before_ok && after_ok {
                         // Skip matches inside comments.
-                        if let Some((ref tree, _)) = parsed_tree {
-                            if position_in_comment(tree, line_idx, abs) {
+                        if let Some((ref tree, _)) = parsed_tree
+                            && position_in_comment(tree, line_idx, abs) {
                                 search_start = abs + 1;
                                 if search_start >= line.len() { break; }
                                 continue;
                             }
-                        }
                         let start = Position {
                             line: line_idx as u32,
                             character: abs as u32,
@@ -3372,11 +3357,10 @@ impl LanguageServer for Backend {
         // finished publishing.  Otherwise our 300 ms-debounced writes contend
         // with the bulk indexer's DELETE/INSERT batch on the same SQLite file
         // and surface as "database is locked" errors.
-        if self.index_ready.load(Ordering::Acquire) {
-            if let Ok(path) = uri.to_file_path() {
+        if self.index_ready.load(Ordering::Acquire)
+            && let Ok(path) = uri.to_file_path() {
                 let _ = self.debounce_tx.send(path).await;
             }
-        }
         let _ = self.diag_debounce_tx.send(uri).await;
     }
 
@@ -3418,26 +3402,23 @@ impl LanguageServer for Backend {
                 };
                 let old_rev = self.last_known_revision.read().await.clone();
 
-                if let Some(old) = old_rev {
-                    if old != new_rev {
-                        if let Ok(changed) = vcs.get_changed_files(&old, &new_rev, &root) {
+                if let Some(old) = old_rev
+                    && old != new_rev
+                        && let Ok(changed) = vcs.get_changed_files(&old, &new_rev, &root) {
                             for p in changed {
                                 let _ = self.debounce_tx.send(p).await;
                             }
                         }
-                    }
-                }
 
                 *self.last_known_revision.write().await = Some(new_rev);
             } else {
                 let build_tool_guard = self.build_tool.read().await;
-                if let Some(build_tool) = build_tool_guard.as_ref() {
-                    if build_tool.is_build_file(&path) {
+                if let Some(build_tool) = build_tool_guard.as_ref()
+                    && build_tool.is_build_file(&path) {
                         drop(build_tool_guard);
                         self.handle_build_file_changed(&root).await;
                         continue;
                     }
-                }
 
                 // Skip files currently open in the editor — did_save already re-indexes them.
                 if !self.documents.contains_key(&change.uri.to_string()) {

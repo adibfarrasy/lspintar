@@ -12,7 +12,7 @@ use super::*;
 fn test_get_ident_range() {
     let support = GroovySupport::new();
     let content = "class MyClass {}";
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let class_node = find_node_by_kind(parsed.0.root_node(), "class_declaration").unwrap();
 
     let support = GroovySupport::new();
@@ -37,7 +37,7 @@ fn test_get_ident_range() {
 fn test_get_package_name() {
     let support = GroovySupport::new();
     let content = "package com.example.app\n\nclass Foo {}";
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
 
     let node_name = support.get_package_name(&parsed.0, &parsed.1);
     assert_eq!(node_name, Some("com.example.app".to_string()));
@@ -47,37 +47,37 @@ fn test_get_package_name() {
 fn test_get_type() {
     let support = GroovySupport::new();
     let content = "package com.example.app\n\nclass Foo {}";
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let node = find_node_by_kind(parsed.0.root_node(), "class_declaration").unwrap();
     let kind = support.get_kind(&node);
     assert_eq!(kind, Some(NodeKind::Class));
 
     let content = "package com.example.app\n\ninterface Foo {}";
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let node = find_node_by_kind(parsed.0.root_node(), "interface_declaration").unwrap();
     let kind = support.get_kind(&node);
     assert_eq!(kind, Some(NodeKind::Interface));
 
     let content = "package com.example.app\n\nenum Color { RED, GREEN, BLUE }";
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let node = find_node_by_kind(parsed.0.root_node(), "enum_declaration").unwrap();
     let kind = support.get_kind(&node);
     assert_eq!(kind, Some(NodeKind::Enum));
 
     let content = "def myFunction() { return 42 }";
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let node = find_node_by_kind(parsed.0.root_node(), "function_declaration").unwrap();
     let kind = support.get_kind(&node);
     assert_eq!(kind, Some(NodeKind::Function));
 
     let content = "package com.example.app\n\nclass Foo { String bar }";
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let node = find_node_by_kind(parsed.0.root_node(), "field_declaration").unwrap();
     let kind = support.get_kind(&node);
     assert_eq!(kind, Some(NodeKind::Field));
 
     let content = "package com.example.app\n\nclass Foo { List<String> items }";
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let node = find_node_by_kind(parsed.0.root_node(), "field_declaration").unwrap();
     let kind = support.get_kind(&node);
     assert_eq!(kind, Some(NodeKind::Field));
@@ -88,37 +88,37 @@ fn test_get_short_name() {
     let support = GroovySupport::new();
 
     let content = "package com.example.app\n\nclass Foo {}";
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let node = find_node_by_kind(parsed.0.root_node(), "class_declaration").unwrap();
     let short_name = support.get_short_name(&node, &parsed.1);
     assert_eq!(short_name, Some("Foo".to_string()));
 
     let content = "package com.example.app\n\ninterface Foo {}";
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let node = find_node_by_kind(parsed.0.root_node(), "interface_declaration").unwrap();
     let short_name = support.get_short_name(&node, &parsed.1);
     assert_eq!(short_name, Some("Foo".to_string()));
 
     let content = "package com.example.app\n\nenum Color { RED, GREEN, BLUE }";
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let node = find_node_by_kind(parsed.0.root_node(), "enum_declaration").unwrap();
     let short_name = support.get_short_name(&node, &parsed.1);
     assert_eq!(short_name, Some("Color".to_string()));
 
     let content = "def myFunction() { return 42 }";
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let node = find_node_by_kind(parsed.0.root_node(), "function_declaration").unwrap();
     let short_name = support.get_short_name(&node, &parsed.1);
     assert_eq!(short_name, Some("myFunction".to_string()));
 
     let content = "package com.example.app\n\nclass Foo { String bar }";
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let node = find_node_by_kind(parsed.0.root_node(), "field_declaration").unwrap();
     let node_name = support.get_short_name(&node, &parsed.1);
     assert_eq!(node_name, Some("bar".to_string()));
 
     let content = "def 'my string method'() { return 42 }";
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let node = find_node_by_kind(parsed.0.root_node(), "function_declaration").unwrap();
     let short_name = support.get_short_name(&node, &parsed.1);
     assert_eq!(short_name, Some("my string method".to_string()));
@@ -128,7 +128,7 @@ fn test_get_short_name() {
 fn test_get_extends() {
     let support = GroovySupport::new();
     let content = "package com.example.app\n\nclass Foo extends Bar {}";
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
 
     let node = find_node_by_kind(parsed.0.root_node(), "superclass").unwrap();
     let node_name = support.get_extends(&node, &parsed.1);
@@ -139,7 +139,7 @@ fn test_get_extends() {
 fn test_get_implements() {
     let support = GroovySupport::new();
     let content = "package com.example.app\n\nclass Foo implements Bar, Baz {}";
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
 
     let node = find_node_by_kind(parsed.0.root_node(), "super_interfaces").unwrap();
     let node_names = support.get_implements(&node, &parsed.1);
@@ -151,27 +151,27 @@ fn test_get_modifiers() {
     let support = GroovySupport::new();
 
     let content = "public abstract class Foo {}";
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let node = find_node_by_kind(parsed.0.root_node(), "class_declaration").unwrap();
     let modifiers = support.get_modifiers(&node, &parsed.1);
     assert_eq!(modifiers, vec!["public", "abstract"]);
 
     let content = "class Bar { private static final void test() {} }";
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let class_node = find_node_by_kind(parsed.0.root_node(), "class_declaration").unwrap();
     let method_node = find_node_by_kind(class_node, "function_declaration").unwrap();
     let modifiers = support.get_modifiers(&method_node, &parsed.1);
     assert_eq!(modifiers, vec!["private", "static", "final"]);
 
     let content = "class Baz { public static String name }";
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let class_node = find_node_by_kind(parsed.0.root_node(), "class_declaration").unwrap();
     let field_node = find_node_by_kind(class_node, "field_declaration").unwrap();
     let modifiers = support.get_modifiers(&field_node, &parsed.1);
     assert_eq!(modifiers, vec!["public", "static"]);
 
     let content = "class Qux {}";
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let node = find_node_by_kind(parsed.0.root_node(), "class_declaration").unwrap();
     let modifiers = support.get_modifiers(&node, &parsed.1);
     assert!(modifiers.is_empty());
@@ -182,27 +182,27 @@ fn test_get_annotations() {
     let support = GroovySupport::new();
 
     let content = "@Component\n@Service\nclass Foo {}";
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let node = find_node_by_kind(parsed.0.root_node(), "class_declaration").unwrap();
     let annotations = support.get_annotations(&node, &parsed.1);
     assert_eq!(annotations, vec!["Component", "Service"]);
 
     let content = "class Bar {\n    @Override\n    @Deprecated\n    void test() {}\n}";
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let class_node = find_node_by_kind(parsed.0.root_node(), "class_declaration").unwrap();
     let method_node = find_node_by_kind(class_node, "function_declaration").unwrap();
     let annotations = support.get_annotations(&method_node, &parsed.1);
     assert_eq!(annotations, vec!["Override", "Deprecated"]);
 
     let content = "class Baz {\n    @Autowired\n    String name\n}";
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let class_node = find_node_by_kind(parsed.0.root_node(), "class_declaration").unwrap();
     let field_node = find_node_by_kind(class_node, "field_declaration").unwrap();
     let annotations = support.get_annotations(&field_node, &parsed.1);
     assert_eq!(annotations, vec!["Autowired"]);
 
     let content = "class Qux {}";
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let node = find_node_by_kind(parsed.0.root_node(), "class_declaration").unwrap();
     let annotations = support.get_annotations(&node, &parsed.1);
     assert!(annotations.is_empty());
@@ -219,7 +219,7 @@ fn test_get_documentation() {
          */
         class Foo {}
         "#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
 
     let node = find_node_by_kind(parsed.0.root_node(), "class_declaration").unwrap();
     let docs = support.get_documentation(&node, &parsed.1).unwrap();
@@ -233,14 +233,14 @@ fn test_get_documentation() {
             void test() {}
         }
         "#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let class_node = find_node_by_kind(parsed.0.root_node(), "class_declaration").unwrap();
     let method_node = find_node_by_kind(class_node, "function_declaration").unwrap();
     let docs = support.get_documentation(&method_node, &parsed.1).unwrap();
     assert!(docs.contains("Test method"));
 
     let content = "class Baz {}";
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let node = find_node_by_kind(parsed.0.root_node(), "class_declaration").unwrap();
     let docs = support.get_documentation(&node, &parsed.1);
     assert!(docs.is_none());
@@ -251,7 +251,7 @@ fn test_get_parameters() {
     let support = GroovySupport::new();
 
     let content = "void myFunction(String arg1 = 'test', int arg2) { };";
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let node = find_node_by_kind(parsed.0.root_node(), "function_declaration").unwrap();
     let arguments = support.get_parameters(&node, &parsed.1).unwrap();
     assert_eq!(
@@ -272,19 +272,19 @@ fn test_get_return() {
     let support = GroovySupport::new();
 
     let content = "Foo myFunction(String arg1 = 'test', int arg2) { };";
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let node = find_node_by_kind(parsed.0.root_node(), "function_declaration").unwrap();
     let ret = support.get_return(&node, &parsed.1);
     assert_eq!(ret, Some("Foo".to_string()));
 
     let content = "void myFunction(String arg1 = 'test', int arg2) { };";
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let node = find_node_by_kind(parsed.0.root_node(), "function_declaration").unwrap();
     let ret = support.get_return(&node, &parsed.1);
     assert_eq!(ret, None);
 
     let content = "class UserService { private String myVar }";
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let node = find_node_by_kind(parsed.0.root_node(), "field_declaration").unwrap();
     let ret = support.get_return(&node, &parsed.1);
     assert_eq!(ret, Some("String".to_string()));

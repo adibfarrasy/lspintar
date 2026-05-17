@@ -229,11 +229,10 @@ impl JavaSupport {
                 }
 
                 match child.kind() {
-                    "variable_declaration" | "field_declaration" | "parameter" => {
-                        if !process_node(child, content) {
+                    "variable_declaration" | "field_declaration" | "parameter"
+                        if !process_node(child, content) => {
                             return;
                         }
-                    }
                     "expression_statement"
                     | "assignment_expression"
                     | "object_creation_expression"
@@ -464,9 +463,9 @@ fn collect_unchecked_casts(
     let bytes = source.as_bytes();
     let mut stack = vec![tree.root_node()];
     while let Some(node) = stack.pop() {
-        if node.kind() == "cast_expression" {
-            if let Some(type_node) = node.child_by_field_name("type") {
-                if type_node.kind() == "generic_type" {
+        if node.kind() == "cast_expression"
+            && let Some(type_node) = node.child_by_field_name("type")
+                && type_node.kind() == "generic_type" {
                     let type_text = type_node.utf8_text(bytes).unwrap_or("?");
                     diagnostics.push(tower_lsp::lsp_types::Diagnostic {
                         range: node_to_range(&type_node),
@@ -481,8 +480,6 @@ fn collect_unchecked_casts(
                         ..Default::default()
                     });
                 }
-            }
-        }
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             stack.push(child);
@@ -497,13 +494,11 @@ fn extract_param_types(func_node: tree_sitter::Node, bytes: &[u8]) -> Vec<String
             let mut param_types = Vec::new();
             let mut pc = child.walk();
             for param in child.children(&mut pc) {
-                if param.kind() == "parameter" {
-                    if let Some(type_node) = param.child_by_field_name("type") {
-                        if let Ok(t) = type_node.utf8_text(bytes) {
+                if param.kind() == "parameter"
+                    && let Some(type_node) = param.child_by_field_name("type")
+                        && let Ok(t) = type_node.utf8_text(bytes) {
                             param_types.push(t.to_string());
                         }
-                    }
-                }
             }
             return param_types;
         }
@@ -526,7 +521,7 @@ fn check_body_for_dup_sigs(
         let Ok(name) = name_node.utf8_text(bytes) else { continue; };
         let param_types = extract_param_types(child, bytes);
         let sig = format!("{}({})", name, param_types.join(","));
-        if seen.contains_key(&sig) {
+        if seen.insert(sig.clone(), ()).is_some() {
             diagnostics.push(tower_lsp::lsp_types::Diagnostic {
                 range: node_to_range(&name_node),
                 severity: Some(tower_lsp::lsp_types::DiagnosticSeverity::ERROR),
@@ -537,8 +532,6 @@ fn check_body_for_dup_sigs(
                 message: format!("Duplicate method signature: '{sig}'"),
                 ..Default::default()
             });
-        } else {
-            seen.insert(sig, ());
         }
     }
 }
@@ -1259,11 +1252,10 @@ impl LanguageSupport for JavaSupport {
         cursor
             .matches(&DECLARED_TYPES_QUERY, tree.root_node(), bytes)
             .for_each(|m| {
-                if let Some(cap) = m.captures.first() {
-                    if let Ok(text) = cap.node.utf8_text(bytes) {
+                if let Some(cap) = m.captures.first()
+                    && let Ok(text) = cap.node.utf8_text(bytes) {
                         names.push(text.to_string());
                     }
-                }
             });
 
         names
@@ -1341,14 +1333,13 @@ impl LanguageSupport for JavaSupport {
             .matches(&GET_OBJECT_CREATIONS_QUERY, tree.root_node(), bytes)
             .for_each(|m| {
                 // The query has a single @type_name capture regardless of which branch matched.
-                if let Some(cap) = m.captures.first() {
-                    if let Ok(type_name) = cap.node.utf8_text(bytes) {
+                if let Some(cap) = m.captures.first()
+                    && let Ok(type_name) = cap.node.utf8_text(bytes) {
                         results.push(ObjectCreationData {
                             type_name: type_name.to_string(),
                             range: node_to_range(&cap.node),
                         });
                     }
-                }
             });
 
         results
@@ -1658,8 +1649,8 @@ fn java_process_block_stmt(
         "variable_declaration" => {
             if let Some(declarator) = stmt.child_by_field_name("declarator") {
                 let has_value = declarator.child_by_field_name("value").is_some();
-                if let Some(name_node) = declarator.child_by_field_name("name") {
-                    if let Ok(name) = name_node.utf8_text(bytes) {
+                if let Some(name_node) = declarator.child_by_field_name("name")
+                    && let Ok(name) = name_node.utf8_text(bytes) {
                         if has_value {
                             if let Some(val) = declarator.child_by_field_name("value") {
                                 java_scan_reads(val, bytes, uninit, diagnostics);
@@ -1669,7 +1660,6 @@ fn java_process_block_stmt(
                             uninit.insert(name.to_string());
                         }
                     }
-                }
             }
         }
         "expression_statement" => {
@@ -1681,21 +1671,17 @@ fn java_process_block_stmt(
                         .and_then(|op| op.utf8_text(bytes).ok())
                         .map(|op| op == "=")
                         .unwrap_or(false);
-                    if is_pure {
-                        if let Some(lhs) = inner.child_by_field_name("left") {
-                            if lhs.kind() == "identifier" {
-                                if let Ok(name) = lhs.utf8_text(bytes) {
-                                    if uninit.contains(name) {
+                    if is_pure
+                        && let Some(lhs) = inner.child_by_field_name("left")
+                            && lhs.kind() == "identifier"
+                                && let Ok(name) = lhs.utf8_text(bytes)
+                                    && uninit.contains(name) {
                                         if let Some(rhs) = inner.child_by_field_name("right") {
                                             java_scan_reads(rhs, bytes, uninit, diagnostics);
                                         }
                                         uninit.remove(name);
                                         return;
                                     }
-                                }
-                            }
-                        }
-                    }
                 }
                 java_scan_reads(stmt, bytes, uninit, diagnostics);
             }
@@ -1735,8 +1721,8 @@ fn java_scan_reads(
             }
         }
         "identifier" => {
-            if let Ok(name) = node.utf8_text(bytes) {
-                if uninit.contains(name) {
+            if let Ok(name) = node.utf8_text(bytes)
+                && uninit.contains(name) {
                     diagnostics.push(tower_lsp::lsp_types::Diagnostic {
                         range: node_to_range(&node),
                         severity: Some(tower_lsp::lsp_types::DiagnosticSeverity::ERROR),
@@ -1748,7 +1734,6 @@ fn java_scan_reads(
                         ..Default::default()
                     });
                 }
-            }
         }
         _ => {
             let mut cursor = node.walk();
@@ -1782,13 +1767,10 @@ fn java_is_literal_type_mismatch(type_kind: &str, type_text: &str, value_kind: &
         // float / double
         "floating_point_type" => is_bool_lit || is_string_lit,
         "boolean_type" => is_int_lit || is_float_lit || is_string_lit || is_char_lit,
-        "type_identifier" => {
-            if type_text == "String" {
+        "type_identifier"
+            if type_text == "String" => {
                 is_int_lit || is_float_lit || is_bool_lit || is_char_lit
-            } else {
-                false
             }
-        }
         _ => false,
     }
 }

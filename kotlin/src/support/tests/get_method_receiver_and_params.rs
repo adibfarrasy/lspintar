@@ -16,7 +16,7 @@ fn test_get_method_receiver_type_interface() {
             fun doSomething()
         }
         "#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "doSomething");
     let receiver_type =
         support.get_method_receiver_and_params(parsed.0.root_node(), &parsed.1, &pos);
@@ -33,7 +33,7 @@ fn test_get_method_receiver_type_class() {
             }
         }
         "#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "doSomething");
     let receiver_type =
         support.get_method_receiver_and_params(parsed.0.root_node(), &parsed.1, &pos);
@@ -49,7 +49,7 @@ fn test_get_method_receiver_type_with_parameters() {
             }
         }
         "#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "doSomething");
     let receiver_type =
         support.get_method_receiver_and_params(parsed.0.root_node(), &parsed.1, &pos);
@@ -72,7 +72,7 @@ fn test_get_method_receiver_type_enum() {
             }
         }
         "#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "display");
     let receiver_type =
         support.get_method_receiver_and_params(parsed.0.root_node(), &parsed.1, &pos);
@@ -88,7 +88,7 @@ fn test_get_method_receiver_type_with_generics() {
             }
         }
         "#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "process");
     let receiver_type =
         support.get_method_receiver_and_params(parsed.0.root_node(), &parsed.1, &pos);
@@ -112,7 +112,7 @@ fn test_get_method_receiver_type_nested_class() {
             }
         }
         "#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "innerMethod");
     let receiver_type =
         support.get_method_receiver_and_params(parsed.0.root_node(), &parsed.1, &pos);
@@ -128,7 +128,7 @@ fn test_get_method_receiver_type_multiple_methods() {
             fun second(x: Int) {}
         }
         "#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
 
     let pos = find_position(content, "first");
     let receiver_type =
@@ -153,7 +153,7 @@ fn test_get_method_receiver_type_object_declaration() {
             }
         }
         "#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "doSomething");
     let receiver_type =
         support.get_method_receiver_and_params(parsed.0.root_node(), &parsed.1, &pos);
@@ -168,7 +168,7 @@ fn test_get_method_receiver_type_data_class() {
             fun greet() = "Hello, $name"
         }
         "#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "greet");
     let receiver_type =
         support.get_method_receiver_and_params(parsed.0.root_node(), &parsed.1, &pos);
@@ -184,7 +184,7 @@ fn test_get_method_receiver_type_with_nullable_types() {
             }
         }
         "#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "process");
     let receiver_type =
         support.get_method_receiver_and_params(parsed.0.root_node(), &parsed.1, &pos);
@@ -207,7 +207,7 @@ fn test_get_method_receiver_type_with_default_parameters() {
             }
         }
         "#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "greet");
     let receiver_type =
         support.get_method_receiver_and_params(parsed.0.root_node(), &parsed.1, &pos);
@@ -226,7 +226,7 @@ fn test_get_method_receiver_type_extension_function() {
             }
         }
         "#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "customExtension");
     let receiver_type =
         support.get_method_receiver_and_params(parsed.0.root_node(), &parsed.1, &pos);

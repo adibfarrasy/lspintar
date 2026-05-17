@@ -29,9 +29,7 @@ pub fn build_hover_parts(
 
     let node_kind = NodeKind::from_string(symbol_type);
     let modifiers_str = modifiers
-        .iter()
-        .cloned()
-        .filter(|m| !HOVER_MODIFIER_FILTER.contains(&m.as_str()))
+        .iter().filter(|&m| !HOVER_MODIFIER_FILTER.contains(&m.as_str())).cloned()
         .collect::<Vec<_>>()
         .join(" ");
     let mut signature_line = String::new();
@@ -106,13 +104,12 @@ pub fn build_hover_parts(
         }
     }
 
-    if file_type == "kotlin".to_string() {
-        if let Some(ret) = &metadata.return_type {
+    if file_type == "kotlin"
+        && let Some(ret) = &metadata.return_type {
             signature_line.push_str(": ");
             signature_line.push_str(ret);
             signature_line.push(' ');
         }
-    }
 
     parts.push(signature_line);
 

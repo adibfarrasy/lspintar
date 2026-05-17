@@ -189,8 +189,8 @@ impl Backend {
         // name equals the class short_name) so that `new Foo(..)` call sites
         // that happen to resolve to a constructor symbol still count.
         let mut extra_fqns: Vec<String> = Vec::new();
-        if let Some(repo) = self.repo.get() {
-            if let Ok(children) = repo
+        if let Some(repo) = self.repo.get()
+            && let Ok(children) = repo
                 .find_symbols_by_parent_name(&target.fully_qualified_name)
                 .await
             {
@@ -200,7 +200,6 @@ impl Backend {
                     }
                 }
             }
-        }
 
         let mut all_fqns = target_fqns;
         all_fqns.extend(extra_fqns);
@@ -297,8 +296,7 @@ impl Backend {
         if let Some(short_name) = hierarchy_types
             .iter()
             .find_map(|fqn| fqn.rsplit('.').next().map(String::from))
-        {
-            if let Ok(subs) = repo.find_super_impls_by_short_name(&short_name).await {
+            && let Ok(subs) = repo.find_super_impls_by_short_name(&short_name).await {
                 for s in subs {
                     if !visited_types.contains(&s.fully_qualified_name) {
                         visited_types.insert(s.fully_qualified_name.clone());
@@ -306,7 +304,6 @@ impl Backend {
                     }
                 }
             }
-        }
 
         let mut peers: Vec<Symbol> = Vec::new();
         for t in &hierarchy_types {
@@ -344,9 +341,9 @@ impl Backend {
         // Kotlin JVM-visible accessors).  Only collected for JVM languages
         // that surface them as Function symbols under the same parent.
         let mut accessor_syms: Vec<(Symbol, AccessorKind)> = Vec::new();
-        if let Some(parent_fqn) = target.parent_name.clone() {
-            if let Some(repo) = self.repo.get() {
-                if let Ok(siblings) = repo.find_symbols_by_parent_name(&parent_fqn).await {
+        if let Some(parent_fqn) = target.parent_name.clone()
+            && let Some(repo) = self.repo.get()
+                && let Ok(siblings) = repo.find_symbols_by_parent_name(&parent_fqn).await {
                     for s in siblings {
                         if s.symbol_type != "Function" {
                             continue;
@@ -356,8 +353,6 @@ impl Backend {
                         }
                     }
                 }
-            }
-        }
 
         for (s, _) in &accessor_syms {
             fqns.push(s.fully_qualified_name.clone());

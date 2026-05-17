@@ -38,7 +38,7 @@ fn test_extract_call_arguments_all_expression_types() {
             }
         }
     "#;
-    let parsed = support.parse_str(&content).expect("cannot parse content");
+    let parsed = support.parse_str(content).expect("cannot parse content");
     let pos = find_position(content, "myMethod(");
     let args = support.extract_call_arguments(&parsed.0, &parsed.1, &pos);
     assert!(args.is_some());

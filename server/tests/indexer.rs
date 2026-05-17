@@ -25,7 +25,7 @@ async fn index_groovy_class() {
     let mut indexer = Indexer::new(Arc::clone(&repo));
     indexer.register_language("groovy", Arc::new(GroovySupport::new()));
     indexer
-        .index_workspace(&path, |_, _| {}, |_, _| {})
+        .index_workspace(path, |_, _| {}, |_, _| {})
         .await
         .expect("Indexing failed");
 
@@ -84,7 +84,7 @@ async fn index_groovy_gradle_single_workspace() {
     let mut indexer = Indexer::new(Arc::clone(&repo));
     indexer.register_language("groovy", Arc::new(GroovySupport::new()));
     indexer
-        .index_workspace(&path, |_, _| {}, |_, _| {})
+        .index_workspace(path, |_, _| {}, |_, _| {})
         .await
         .expect("Indexing failed");
 
@@ -286,7 +286,7 @@ async fn index_groovy_static_final_field() {
     let mut indexer = Indexer::new(Arc::clone(&repo));
     indexer.register_language("groovy", Arc::new(GroovySupport::new()));
     indexer
-        .index_workspace(&path, |_, _| {}, |_, _| {})
+        .index_workspace(path, |_, _| {}, |_, _| {})
         .await
         .expect("Indexing failed");
 
@@ -319,7 +319,7 @@ async fn index_groovy_static_method() {
     let mut indexer = Indexer::new(Arc::clone(&repo));
     indexer.register_language("groovy", Arc::new(GroovySupport::new()));
     indexer
-        .index_workspace(&path, |_, _| {}, |_, _| {})
+        .index_workspace(path, |_, _| {}, |_, _| {})
         .await
         .expect("Indexing failed");
 
@@ -345,7 +345,7 @@ async fn index_groovy_generic_nested_class() {
     let mut indexer = Indexer::new(Arc::clone(&repo));
     indexer.register_language("groovy", Arc::new(GroovySupport::new()));
     indexer
-        .index_workspace(&path, |_, _| {}, |_, _| {})
+        .index_workspace(path, |_, _| {}, |_, _| {})
         .await
         .expect("Indexing failed");
 
@@ -374,7 +374,7 @@ async fn index_groovy_enum_nested_in_class() {
     let mut indexer = Indexer::new(Arc::clone(&repo));
     indexer.register_language("groovy", Arc::new(GroovySupport::new()));
     indexer
-        .index_workspace(&path, |_, _| {}, |_, _| {})
+        .index_workspace(path, |_, _| {}, |_, _| {})
         .await
         .expect("Indexing failed");
 
@@ -404,7 +404,7 @@ async fn index_groovy_class_multi_project() {
     let mut indexer = Indexer::new(Arc::clone(&repo));
     indexer.register_language("groovy", Arc::new(GroovySupport::new()));
     indexer
-        .index_workspace(&path, |_, _| {}, |_, _| {})
+        .index_workspace(path, |_, _| {}, |_, _| {})
         .await
         .expect("Indexing failed");
 
@@ -463,7 +463,7 @@ async fn index_groovy_method() {
     let mut indexer = Indexer::new(Arc::clone(&repo));
     indexer.register_language("groovy", Arc::new(GroovySupport::new()));
     indexer
-        .index_workspace(&path, |_, _| {}, |_, _| {})
+        .index_workspace(path, |_, _| {}, |_, _| {})
         .await
         .expect("Indexing failed");
 
@@ -522,7 +522,7 @@ async fn index_groovy_nested_class() {
     let mut indexer = Indexer::new(Arc::clone(&repo));
     indexer.register_language("groovy", Arc::new(GroovySupport::new()));
     indexer
-        .index_workspace(&path, |_, _| {}, |_, _| {})
+        .index_workspace(path, |_, _| {}, |_, _| {})
         .await
         .expect("Indexing failed");
 
@@ -581,7 +581,7 @@ async fn index_groovy_field() {
     let mut indexer = Indexer::new(Arc::clone(&repo));
     indexer.register_language("groovy", Arc::new(GroovySupport::new()));
     indexer
-        .index_workspace(&path, |_, _| {}, |_, _| {})
+        .index_workspace(path, |_, _| {}, |_, _| {})
         .await
         .expect("Indexing failed");
 
@@ -640,7 +640,7 @@ async fn index_groovy_inheritance() {
     let mut indexer = Indexer::new(Arc::clone(&repo));
     indexer.register_language("groovy", Arc::new(GroovySupport::new()));
     indexer
-        .index_workspace(&path, |_, _| {}, |_, _| {})
+        .index_workspace(path, |_, _| {}, |_, _| {})
         .await
         .expect("Indexing failed");
 
@@ -745,7 +745,7 @@ async fn index_kotlin_class_with_lateinit_var_property() {
     let mut indexer = Indexer::new(Arc::clone(&repo));
     indexer.register_language("kt", Arc::new(KotlinSupport::new()));
     indexer
-        .index_workspace(&path, |_, _| {}, |_, _| {})
+        .index_workspace(path, |_, _| {}, |_, _| {})
         .await
         .expect("Indexing failed");
 
@@ -776,7 +776,7 @@ async fn index_kotlin_data_class() {
     let mut indexer = Indexer::new(Arc::clone(&repo));
     indexer.register_language("kt", Arc::new(KotlinSupport::new()));
     indexer
-        .index_workspace(&path, |_, _| {}, |_, _| {})
+        .index_workspace(path, |_, _| {}, |_, _| {})
         .await
         .expect("Indexing failed");
 
@@ -900,7 +900,7 @@ async fn index_external_dep_source_jar() {
     let path = Path::new("tests/fixtures/groovy-gradle-single");
 
     let gradle_handler = GradleHandler;
-    let dep_jars = gradle_handler.get_dependency_paths(&path).unwrap();
+    let dep_jars = gradle_handler.get_dependency_paths(path).unwrap();
 
     let jar_path = dep_jars
         .iter()
@@ -987,7 +987,7 @@ async fn index_external_dep_jar() {
     let path = Path::new("tests/fixtures/groovy-gradle-single");
 
     let gradle_handler = GradleHandler;
-    let dep_jars = gradle_handler.get_dependency_paths(&path).unwrap();
+    let dep_jars = gradle_handler.get_dependency_paths(path).unwrap();
 
     let jar_path = dep_jars
         .iter()
@@ -1071,7 +1071,7 @@ async fn index_jdk_dep_source_jar() {
 
     let gradle_handler = GradleHandler;
     let dep_jar = gradle_handler
-        .get_jdk_dependency_path(&path)
+        .get_jdk_dependency_path(path)
         .expect("Failed to get JDK dependency path");
 
     assert!(
@@ -1149,7 +1149,7 @@ async fn index_external_annotation_dep_jar() {
     let path = Path::new("tests/fixtures/polyglot-spring");
 
     let gradle_handler = GradleHandler;
-    let dep_jars = gradle_handler.get_dependency_paths(&path).unwrap();
+    let dep_jars = gradle_handler.get_dependency_paths(path).unwrap();
 
     let jar_path = dep_jars
         .iter()

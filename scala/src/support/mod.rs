@@ -164,23 +164,20 @@ fn scan_node_for_declaration(
     for child in node.children(&mut cursor) {
         match child.kind() {
             "val_definition" | "var_definition" => {
-                if let Some(name_node) = child.child_by_field_name("pattern") {
-                    if name_node.kind() == "identifier"
+                if let Some(name_node) = child.child_by_field_name("pattern")
+                    && name_node.kind() == "identifier"
                         && name_node.utf8_text(content.as_bytes()).ok() == Some(var_name)
-                    {
-                        if pos_ok(name_node, before) {
+                        && pos_ok(name_node, before) {
                             let ty = child
                                 .child_by_field_name("type")
                                 .and_then(|n| n.utf8_text(content.as_bytes()).ok())
                                 .map(|s| s.to_string());
                             return Some((ty, node_start_position(name_node)));
                         }
-                    }
-                }
             }
             "val_declaration" | "var_declaration" => {
-                if let Some(name_node) = child.child_by_field_name("name") {
-                    if name_node.utf8_text(content.as_bytes()).ok() == Some(var_name)
+                if let Some(name_node) = child.child_by_field_name("name")
+                    && name_node.utf8_text(content.as_bytes()).ok() == Some(var_name)
                         && pos_ok(name_node, before)
                     {
                         let ty = child
@@ -189,18 +186,16 @@ fn scan_node_for_declaration(
                             .map(|s| s.to_string());
                         return Some((ty, node_start_position(name_node)));
                     }
-                }
             }
             "parameter" | "class_parameter" => {
-                if let Some(name_node) = child.child_by_field_name("name") {
-                    if name_node.utf8_text(content.as_bytes()).ok() == Some(var_name) {
+                if let Some(name_node) = child.child_by_field_name("name")
+                    && name_node.utf8_text(content.as_bytes()).ok() == Some(var_name) {
                         let ty = child
                             .child_by_field_name("type")
                             .and_then(|n| n.utf8_text(content.as_bytes()).ok())
                             .map(|s| s.to_string());
                         return Some((ty, node_start_position(name_node)));
                     }
-                }
             }
             "parameters" | "class_parameters" => {
                 if let Some(found) = scan_node_for_declaration(child, content, var_name, before) {
@@ -211,11 +206,10 @@ fn scan_node_for_declaration(
                 // `for { x <- xs }` — first named identifier binds.
                 let mut ec = child.walk();
                 let id = child.children(&mut ec).find(|c| c.kind() == "identifier");
-                if let Some(id_node) = id {
-                    if id_node.utf8_text(content.as_bytes()).ok() == Some(var_name) {
+                if let Some(id_node) = id
+                    && id_node.utf8_text(content.as_bytes()).ok() == Some(var_name) {
                         return Some((None, node_start_position(id_node)));
                     }
-                }
             }
             "case_clause" => {
                 // `case y: Int =>` — pattern binds `y` with type `Int`.
@@ -226,15 +220,14 @@ fn scan_node_for_declaration(
                         let kids: Vec<Node> = pat.children(&mut tpc).filter(|n| n.is_named()).collect();
                         let id = kids.iter().find(|n| n.kind() == "identifier");
                         let ty = kids.iter().find(|n| n.kind() == "type_identifier" || n.kind() == "generic_type");
-                        if let (Some(id_n), Some(ty_n)) = (id, ty) {
-                            if id_n.utf8_text(content.as_bytes()).ok() == Some(var_name) {
+                        if let (Some(id_n), Some(ty_n)) = (id, ty)
+                            && id_n.utf8_text(content.as_bytes()).ok() == Some(var_name) {
                                 let ty_text = ty_n
                                     .utf8_text(content.as_bytes())
                                     .ok()
                                     .map(|s| s.to_string());
                                 return Some((ty_text, node_start_position(*id_n)));
                             }
-                        }
                     }
                 }
             }
@@ -281,18 +274,16 @@ fn collect_scope_declarations(
     for child in scope.children(&mut cursor) {
         match child.kind() {
             "val_definition" | "var_definition" => {
-                if let Some(name_node) = child.child_by_field_name("pattern") {
-                    if name_node.kind() == "identifier" && pos_ok(name_node, Some(position)) {
+                if let Some(name_node) = child.child_by_field_name("pattern")
+                    && name_node.kind() == "identifier" && pos_ok(name_node, Some(position)) {
                         push_unique(name_node, content, child.child_by_field_name("type"), out, seen);
                     }
-                }
             }
             "val_declaration" | "var_declaration" => {
-                if let Some(name_node) = child.child_by_field_name("name") {
-                    if pos_ok(name_node, Some(position)) {
+                if let Some(name_node) = child.child_by_field_name("name")
+                    && pos_ok(name_node, Some(position)) {
                         push_unique(name_node, content, child.child_by_field_name("type"), out, seen);
                     }
-                }
             }
             "parameter" | "class_parameter" => {
                 if let Some(name_node) = child.child_by_field_name("name") {
@@ -390,38 +381,33 @@ fn scope_shadows(scope: Node, source: &str, name: &str) -> bool {
         };
         match child.kind() {
             "val_definition" | "var_definition" => {
-                if let Some(p) = child.child_by_field_name("pattern") {
-                    if p.kind() == "identifier" && id_match(p) {
+                if let Some(p) = child.child_by_field_name("pattern")
+                    && p.kind() == "identifier" && id_match(p) {
                         return true;
                     }
-                }
             }
             "val_declaration" | "var_declaration" => {
-                if let Some(n) = child.child_by_field_name("name") {
-                    if id_match(n) {
+                if let Some(n) = child.child_by_field_name("name")
+                    && id_match(n) {
                         return true;
                     }
-                }
             }
             "parameter" | "class_parameter" => {
-                if let Some(n) = child.child_by_field_name("name") {
-                    if id_match(n) {
+                if let Some(n) = child.child_by_field_name("name")
+                    && id_match(n) {
                         return true;
                     }
-                }
             }
-            "parameters" | "class_parameters" => {
-                if scope_shadows(child, source, name) {
+            "parameters" | "class_parameters"
+                if scope_shadows(child, source, name) => {
                     return true;
                 }
-            }
             "enumerator" => {
                 let mut ec = child.walk();
-                if let Some(id) = child.children(&mut ec).find(|c| c.kind() == "identifier") {
-                    if id_match(id) {
+                if let Some(id) = child.children(&mut ec).find(|c| c.kind() == "identifier")
+                    && id_match(id) {
                         return true;
                     }
-                }
             }
             _ => {}
         }
@@ -822,11 +808,10 @@ impl LanguageSupport for ScalaSupport {
         let mut out = Vec::new();
         let mut c = node.walk();
         for child in node.children(&mut c) {
-            if child.kind() == "annotation" {
-                if let Ok(t) = child.utf8_text(source.as_bytes()) {
+            if child.kind() == "annotation"
+                && let Ok(t) = child.utf8_text(source.as_bytes()) {
                     out.push(t.to_string());
                 }
-            }
         }
         out
     }
@@ -1163,11 +1148,10 @@ impl LanguageSupport for ScalaSupport {
     fn get_type_references(&self, tree: &Tree, source: &str) -> Vec<(String, Range)> {
         let mut out = Vec::new();
         walk_named(tree.root_node(), &mut |n| {
-            if n.kind() == "type_identifier" {
-                if let Ok(t) = n.utf8_text(source.as_bytes()) {
+            if n.kind() == "type_identifier"
+                && let Ok(t) = n.utf8_text(source.as_bytes()) {
                     out.push((t.to_string(), node_to_range(n)));
                 }
-            }
         });
         out
     }
@@ -1181,11 +1165,10 @@ impl LanguageSupport for ScalaSupport {
                 "type_definition" => n.child_by_field_name("name"),
                 _ => None,
             };
-            if let Some(name_node) = name_node {
-                if let Ok(t) = name_node.utf8_text(source.as_bytes()) {
+            if let Some(name_node) = name_node
+                && let Ok(t) = name_node.utf8_text(source.as_bytes()) {
                     out.push(t.to_string());
                 }
-            }
         });
         out
     }
@@ -1224,11 +1207,10 @@ impl LanguageSupport for ScalaSupport {
             if let Some(body) = n.child_by_field_name("body") {
                 let mut c = body.walk();
                 for child in body.children(&mut c) {
-                    if matches!(child.kind(), "function_definition" | "function_declaration") {
-                        if let (Some(mname), params) = method_sig_components(child, source) {
+                    if matches!(child.kind(), "function_definition" | "function_declaration")
+                        && let (Some(mname), params) = method_sig_components(child, source) {
                             defined_methods.push(MethodSig::new(mname, params));
                         }
-                    }
                 }
             }
             out.push(ClassDeclarationData {

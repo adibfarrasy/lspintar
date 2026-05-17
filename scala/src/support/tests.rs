@@ -616,11 +616,10 @@ fn enum_grouped_cases_each_indexed() {
         }
         let mut cc = child.walk();
         for cd in child.children(&mut cc) {
-            if cd.kind() == "simple_enum_case" {
-                if let Some(n) = s.get_short_name(&cd, &content) {
+            if cd.kind() == "simple_enum_case"
+                && let Some(n) = s.get_short_name(&cd, &content) {
                     names.push(n);
                 }
-            }
         }
     }
     assert_eq!(names, vec!["North", "South", "East", "West"]);

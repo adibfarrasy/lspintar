@@ -546,8 +546,8 @@ impl Indexer {
 
         // Record superclass (skip java.lang.Object — its methods are already in the
         // reachable set and every class points to it, adding noise).
-        if class.super_class != 0 {
-            if let Ok(super_name) = get_class_name(&class.const_pool, class.super_class) {
+        if class.super_class != 0
+            && let Ok(super_name) = get_class_name(&class.const_pool, class.super_class) {
                 let super_fqn = super_name.replace('/', ".");
                 if super_fqn != "java.lang.Object" {
                     let super_short = super_fqn
@@ -563,7 +563,6 @@ impl Indexer {
                     });
                 }
             }
-        }
 
         // Record implemented interfaces.
         for iface_idx in &class.interfaces {
