@@ -132,8 +132,9 @@ impl Repository {
         tracing::info!("find_symbols_by_prefix");
         let fqn_pat = format!("{}%", prefix.to_lowercase());
         let short_pat = format!("{}%", capitalize_prefix(prefix));
+        // See find_external_symbols_by_prefix for the rationale on ORDER BY.
         let mut by_fqn = sqlx::query_as::<_, Symbol>(
-            "SELECT * FROM symbols WHERE fully_qualified_name LIKE ? AND symbol_type NOT IN ('Function', 'Field') LIMIT 100",
+            "SELECT * FROM symbols WHERE fully_qualified_name LIKE ? AND symbol_type NOT IN ('Function', 'Field') ORDER BY length(short_name), short_name LIMIT 100",
         )
         .bind(&fqn_pat)
         .fetch_all(&self.pool)
@@ -143,7 +144,7 @@ impl Repository {
             by_fqn.iter().map(|s| s.fully_qualified_name.clone()).collect();
 
         let by_short = sqlx::query_as::<_, Symbol>(
-            "SELECT * FROM symbols WHERE short_name LIKE ? AND symbol_type NOT IN ('Function', 'Field') LIMIT 100",
+            "SELECT * FROM symbols WHERE short_name LIKE ? AND symbol_type NOT IN ('Function', 'Field') ORDER BY length(short_name), short_name LIMIT 100",
         )
         .bind(&short_pat)
         .fetch_all(&self.pool)
@@ -381,8 +382,12 @@ impl Repository {
         tracing::info!("find_external_symbols_by_prefix");
         let fqn_pat = format!("{}%", prefix.to_lowercase());
         let short_pat = format!("{}%", capitalize_prefix(prefix));
+        // ORDER BY length(short_name) prefers exact-prefix hits over longer
+        // variants when LIMIT truncates the result set.  Without this,
+        // `StringUtils` could be displaced by `StringUtilsAbbreviationTest`
+        // etc. when there are >100 prefix matches in the indexed JARs.
         let mut by_fqn = sqlx::query_as::<_, ExternalSymbol>(
-            "SELECT * FROM external_symbols WHERE fully_qualified_name LIKE ? AND symbol_type NOT IN ('Function', 'Field') LIMIT 100",
+            "SELECT * FROM external_symbols WHERE fully_qualified_name LIKE ? AND symbol_type NOT IN ('Function', 'Field') ORDER BY length(short_name), short_name LIMIT 100",
         )
         .bind(&fqn_pat)
         .fetch_all(&self.pool)
@@ -392,7 +397,7 @@ impl Repository {
             by_fqn.iter().map(|s| s.fully_qualified_name.clone()).collect();
 
         let by_short = sqlx::query_as::<_, ExternalSymbol>(
-            "SELECT * FROM external_symbols WHERE short_name LIKE ? AND symbol_type NOT IN ('Function', 'Field') LIMIT 100",
+            "SELECT * FROM external_symbols WHERE short_name LIKE ? AND symbol_type NOT IN ('Function', 'Field') ORDER BY length(short_name), short_name LIMIT 100",
         )
         .bind(&short_pat)
         .fetch_all(&self.pool)

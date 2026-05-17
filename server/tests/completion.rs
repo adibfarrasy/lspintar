@@ -58,12 +58,18 @@ async fn completion_prefix_with_import() {
     };
 
     let result = server.backend.completion(params).await.unwrap();
-    assert!(result.is_some());
+    assert!(result.is_some(), "completion returned None — index missing entries?");
 
     match result.unwrap() {
         CompletionResponse::Array(items) => {
             assert!(!items.is_empty());
-            assert!(items.iter().any(|i| i.label == "StringUtils"));
+            let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+            assert!(
+                items.iter().any(|i| i.label == "StringUtils"),
+                "StringUtils missing from completion. Got {} items: {:?}",
+                items.len(),
+                labels
+            );
         }
         _ => panic!("Invalid completion response"),
     }
