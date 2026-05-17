@@ -1,6 +1,8 @@
 use lsp_core::{
     language_support::{
-        IdentResult, LanguageSupport, ParameterResult, ParseResult,
+        CallArgData, ClassDeclarationData, GenericTypeUsage, IdentResult, LanguageSupport,
+        MemberAccessData, MethodCallSiteData, MethodSig, ObjectCreationData,
+        OverrideMethodData, ParameterResult, ParseResult,
     },
     languages::Language,
     node_kind::NodeKind,
@@ -291,6 +293,188 @@ fn push_unique(
         let ty = type_node.and_then(|n| n.utf8_text(content.as_bytes()).ok().map(|s| s.to_string()));
         out.push((name.to_string(), ty));
     }
+}
+
+fn node_to_range(n: Node) -> Range {
+    Range {
+        start: Position {
+            line: n.start_position().row as u32,
+            character: n.start_position().column as u32,
+        },
+        end: Position {
+            line: n.end_position().row as u32,
+            character: n.end_position().column as u32,
+        },
+    }
+}
+
+/// Walk every named node in the subtree rooted at `start`, applying `f` to each.
+fn walk_named<F: FnMut(Node)>(start: Node, f: &mut F) {
+    if start.is_named() {
+        f(start);
+    }
+    let mut cursor = start.walk();
+    for child in start.children(&mut cursor) {
+        walk_named(child, f);
+    }
+}
+
+/// Walk class/object/trait/enum definitions and apply `f` to every direct
+/// method (`function_definition` / `function_declaration`) in their body.
+fn walk_class_methods<F: FnMut(&str, Node)>(start: Node, source: &str, f: &mut F) {
+    walk_named(start, &mut |n| {
+        let is_class_like = matches!(
+            n.kind(),
+            "class_definition" | "object_definition" | "trait_definition" | "enum_definition"
+        );
+        if !is_class_like {
+            return;
+        }
+        let Some(name_node) = n.child_by_field_name("name") else { return };
+        let Ok(class_name) = name_node.utf8_text(source.as_bytes()) else { return };
+        let Some(body) = n.child_by_field_name("body") else { return };
+        let mut c = body.walk();
+        for child in body.children(&mut c) {
+            if matches!(child.kind(), "function_definition" | "function_declaration") {
+                f(class_name, child);
+            }
+        }
+    });
+}
+
+/// True when `node`'s `modifiers` block (or a sibling keyword token) contains
+/// the literal modifier text `name`.
+fn modifier_present(node: Node, source: &str, name: &str) -> bool {
+    let mut c = node.walk();
+    for child in node.children(&mut c) {
+        match child.kind() {
+            "modifiers" => {
+                let mut mc = child.walk();
+                for m in child.children(&mut mc) {
+                    let text = m.utf8_text(source.as_bytes()).unwrap_or("").trim();
+                    if text == name || m.kind() == name {
+                        return true;
+                    }
+                }
+            }
+            k if k == name => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
+/// Reduce a possibly-qualified type node (`type_identifier`,
+/// `generic_type`, `stable_type_identifier`) to its short type name and the
+/// range of the identifier token where diagnostics should be anchored.
+fn short_type_name_and_range(n: Node, source: &str) -> (String, Range) {
+    match n.kind() {
+        "type_identifier" => {
+            let text = n
+                .utf8_text(source.as_bytes())
+                .map(|s| s.to_string())
+                .unwrap_or_default();
+            (text, node_to_range(n))
+        }
+        "generic_type" => {
+            if let Some(head) = n
+                .child_by_field_name("type")
+                .or_else(|| first_child_with_kind(n, "type_identifier"))
+                .or_else(|| first_child_with_kind(n, "stable_type_identifier"))
+            {
+                return short_type_name_and_range(head, source);
+            }
+            (String::new(), node_to_range(n))
+        }
+        "stable_type_identifier" => {
+            // Children: stable_identifier (qualifier), `.`, type_identifier.  The
+            // trailing type_identifier is the short name.
+            let mut c = n.walk();
+            let mut last_id: Option<Node> = None;
+            for child in n.children(&mut c) {
+                if child.kind() == "type_identifier" {
+                    last_id = Some(child);
+                }
+            }
+            if let Some(id) = last_id {
+                return (
+                    id.utf8_text(source.as_bytes())
+                        .map(|s| s.to_string())
+                        .unwrap_or_default(),
+                    node_to_range(id),
+                );
+            }
+            (String::new(), node_to_range(n))
+        }
+        _ => {
+            let text = n
+                .utf8_text(source.as_bytes())
+                .map(|s| s.to_string())
+                .unwrap_or_default();
+            (text, node_to_range(n))
+        }
+    }
+}
+
+/// For a `function_definition` or `function_declaration`, return its short
+/// name (`Some`) and the textual parameter types (one per positional param,
+/// flattened across multiple parameter lists).
+fn method_sig_components(func: Node, source: &str) -> (Option<String>, Vec<String>) {
+    let name = func
+        .child_by_field_name("name")
+        .and_then(|n| n.utf8_text(source.as_bytes()).ok().map(|s| s.to_string()));
+    let mut params = Vec::new();
+    let mut c = func.walk();
+    for child in func.children(&mut c) {
+        if child.kind() == "parameters" {
+            let mut pc = child.walk();
+            for p in child.children(&mut pc) {
+                if p.kind() == "parameter" || p.kind() == "class_parameter" {
+                    let ty = p
+                        .child_by_field_name("type")
+                        .and_then(|n| n.utf8_text(source.as_bytes()).ok().map(|s| s.to_string()))
+                        .unwrap_or_default();
+                    params.push(ty);
+                }
+            }
+        }
+    }
+    (name, params)
+}
+
+/// For a `call_expression` whose function is `<receiver>.<method>` and whose
+/// receiver is a simple `identifier`, return the four pieces needed for both
+/// `get_member_accesses` and `get_method_call_sites`.
+fn extract_simple_member_access(
+    call: Node,
+    source: &str,
+) -> Option<(String, Range, String, Range)> {
+    let fn_node = call.child_by_field_name("function").or_else(|| {
+        let mut c = call.walk();
+        call.children(&mut c)
+            .find(|n| n.is_named() && n.kind() != "arguments")
+    })?;
+    if fn_node.kind() != "field_expression" {
+        return None;
+    }
+    let mut c = fn_node.walk();
+    let kids: Vec<Node> = fn_node.children(&mut c).filter(|n| n.is_named()).collect();
+    if kids.len() < 2 {
+        return None;
+    }
+    let receiver = kids.first()?;
+    let member = kids.last()?;
+    if receiver.kind() != "identifier" {
+        return None;
+    }
+    let receiver_text = receiver.utf8_text(source.as_bytes()).ok()?.to_string();
+    let member_text = member.utf8_text(source.as_bytes()).ok()?.to_string();
+    Some((
+        receiver_text,
+        node_to_range(*receiver),
+        member_text,
+        node_to_range(*member),
+    ))
 }
 
 /// Extract every parent type written under an `extends_clause`, in source order.
@@ -792,5 +976,249 @@ impl LanguageSupport for ScalaSupport {
 
     fn reserved_keywords(&self) -> &'static HashSet<&'static str> {
         &SCALA_RESERVED
+    }
+
+    // --- Phase 4: diagnostics data ---
+
+    fn get_type_references(&self, tree: &Tree, source: &str) -> Vec<(String, Range)> {
+        let mut out = Vec::new();
+        walk_named(tree.root_node(), &mut |n| {
+            if n.kind() == "type_identifier" {
+                if let Ok(t) = n.utf8_text(source.as_bytes()) {
+                    out.push((t.to_string(), node_to_range(n)));
+                }
+            }
+        });
+        out
+    }
+
+    fn get_declared_type_names(&self, tree: &Tree, source: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        walk_named(tree.root_node(), &mut |n| {
+            let name_node = match n.kind() {
+                "class_definition" | "object_definition" | "trait_definition"
+                | "enum_definition" => n.child_by_field_name("name"),
+                "type_definition" => n.child_by_field_name("name"),
+                _ => None,
+            };
+            if let Some(name_node) = name_node {
+                if let Ok(t) = name_node.utf8_text(source.as_bytes()) {
+                    out.push(t.to_string());
+                }
+            }
+        });
+        out
+    }
+
+    fn get_class_declarations(
+        &self,
+        tree: &Tree,
+        source: &str,
+    ) -> Vec<ClassDeclarationData> {
+        let mut out = Vec::new();
+        walk_named(tree.root_node(), &mut |n| {
+            let is_class_like = matches!(
+                n.kind(),
+                "class_definition" | "trait_definition" | "enum_definition"
+            );
+            if !is_class_like {
+                return;
+            }
+            let Some(name_node) = n.child_by_field_name("name") else {
+                return;
+            };
+            let Ok(name) = name_node.utf8_text(source.as_bytes()) else {
+                return;
+            };
+            let ident_range = node_to_range(name_node);
+            // Abstract when explicitly modified `abstract`, or for traits which
+            // are implicitly abstract.
+            let is_abstract = n.kind() == "trait_definition"
+                || modifier_present(n, source, "abstract");
+            let parents = n
+                .child_by_field_name("extend")
+                .map(|ext| extends_clause_types(ext, source))
+                .unwrap_or_default();
+            // Collect direct method signatures from the body.
+            let mut defined_methods = Vec::new();
+            if let Some(body) = n.child_by_field_name("body") {
+                let mut c = body.walk();
+                for child in body.children(&mut c) {
+                    if matches!(child.kind(), "function_definition" | "function_declaration") {
+                        if let (Some(mname), params) = method_sig_components(child, source) {
+                            defined_methods.push(MethodSig::new(mname, params));
+                        }
+                    }
+                }
+            }
+            out.push(ClassDeclarationData {
+                name: name.to_string(),
+                ident_range,
+                is_abstract,
+                parents,
+                defined_methods,
+            });
+        });
+        out
+    }
+
+    fn get_object_creations(
+        &self,
+        tree: &Tree,
+        source: &str,
+    ) -> Vec<ObjectCreationData> {
+        let mut out = Vec::new();
+        walk_named(tree.root_node(), &mut |n| {
+            if n.kind() != "instance_expression" {
+                return;
+            }
+            // First named child after `new` is the instantiated type.
+            let mut c = n.walk();
+            let typed = n
+                .children(&mut c)
+                .find(|child| child.is_named() && child.kind() != "arguments");
+            let Some(t) = typed else { return };
+            let (short, range) = short_type_name_and_range(t, source);
+            if !short.is_empty() {
+                out.push(ObjectCreationData { type_name: short, range });
+            }
+        });
+        out
+    }
+
+    fn get_member_accesses(
+        &self,
+        tree: &Tree,
+        source: &str,
+    ) -> Vec<MemberAccessData> {
+        let mut out = Vec::new();
+        walk_named(tree.root_node(), &mut |n| {
+            if n.kind() != "call_expression" {
+                return;
+            }
+            let Some((receiver_name, receiver_range, member_name, member_range)) =
+                extract_simple_member_access(n, source)
+            else {
+                return;
+            };
+            out.push(MemberAccessData {
+                receiver_name,
+                member_name,
+                member_range,
+                receiver_range,
+            });
+        });
+        out
+    }
+
+    fn get_generic_type_usages(
+        &self,
+        tree: &Tree,
+        source: &str,
+    ) -> Vec<GenericTypeUsage> {
+        let mut out = Vec::new();
+        walk_named(tree.root_node(), &mut |n| {
+            if n.kind() != "generic_type" {
+                return;
+            }
+            // Base type name: drill into the head (type_identifier or
+            // stable_type_identifier), keeping only the short name.
+            let head = n.child_by_field_name("type").or_else(|| {
+                let mut c = n.walk();
+                n.children(&mut c).find(|c| c.is_named() && c.kind() != "type_arguments")
+            });
+            let Some(head) = head else { return };
+            let (short, _) = short_type_name_and_range(head, source);
+            if short.is_empty() {
+                return;
+            }
+            let args = n
+                .child_by_field_name("type_arguments")
+                .or_else(|| first_child_with_kind(n, "type_arguments"));
+            let Some(args) = args else { return };
+            let mut c = args.walk();
+            let arg_count = args
+                .children(&mut c)
+                .filter(|c| c.is_named())
+                .count();
+            out.push(GenericTypeUsage {
+                type_name: short,
+                arg_count,
+                range: node_to_range(n),
+            });
+        });
+        out
+    }
+
+    fn get_override_methods(
+        &self,
+        tree: &Tree,
+        source: &str,
+    ) -> Vec<OverrideMethodData> {
+        let mut out = Vec::new();
+        walk_class_methods(tree.root_node(), source, &mut |class_name, func| {
+            if !modifier_present(func, source, "override") {
+                return;
+            }
+            let Some(name_node) = func.child_by_field_name("name") else { return };
+            let Ok(method_name) = name_node.utf8_text(source.as_bytes()) else { return };
+            let return_type = func
+                .child_by_field_name("return_type")
+                .and_then(|n| n.utf8_text(source.as_bytes()).ok().map(|s| s.to_string()));
+            out.push(OverrideMethodData {
+                containing_class: class_name.to_string(),
+                method_name: method_name.to_string(),
+                return_type,
+                range: node_to_range(name_node),
+            });
+        });
+        out
+    }
+
+    fn get_method_call_sites(
+        &self,
+        tree: &Tree,
+        source: &str,
+    ) -> Vec<MethodCallSiteData> {
+        let mut out = Vec::new();
+        walk_named(tree.root_node(), &mut |n| {
+            if n.kind() != "call_expression" {
+                return;
+            }
+            let Some((receiver_name, receiver_range, method_name, method_range)) =
+                extract_simple_member_access(n, source)
+            else {
+                return;
+            };
+            let args_node = n
+                .child_by_field_name("arguments")
+                .or_else(|| first_child_with_kind(n, "arguments"));
+            let mut args = Vec::new();
+            if let Some(args_node) = args_node {
+                let mut c = args_node.walk();
+                for child in args_node.children(&mut c) {
+                    if !child.is_named() {
+                        continue;
+                    }
+                    let text = child
+                        .utf8_text(source.as_bytes())
+                        .map(|s| s.to_string())
+                        .unwrap_or_default();
+                    args.push(CallArgData {
+                        node_kind: child.kind().to_string(),
+                        text,
+                        range: node_to_range(child),
+                    });
+                }
+            }
+            out.push(MethodCallSiteData {
+                receiver_name,
+                receiver_range,
+                method_name,
+                method_range,
+                args,
+            });
+        });
+        out
     }
 }

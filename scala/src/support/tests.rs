@@ -457,6 +457,119 @@ fn get_type_at_position_resolves_literal() {
     assert_eq!(support().get_type_at_position(node, &content, &p).as_deref(), Some("Int"));
 }
 
+// ---------- Phase 4: diagnostics data ----------
+
+#[test]
+fn get_type_references_collects_all_type_identifiers() {
+    let src = "class C extends A with B { val x: Int = 1; def f(p: String): Long = 0L }";
+    let (tree, content) = parse(src);
+    let refs = support().get_type_references(&tree, &content);
+    let names: Vec<String> = refs.iter().map(|(n, _)| n.clone()).collect();
+    for needed in ["A", "B", "Int", "String", "Long"] {
+        assert!(names.iter().any(|n| n == needed), "missing {needed}: {names:?}");
+    }
+}
+
+#[test]
+fn get_declared_type_names_lists_top_level_types() {
+    let src = "package p\nclass C\nobject O\ntrait T\nenum E { case X }\ntype Alias = Int";
+    let (tree, content) = parse(src);
+    let mut names = support().get_declared_type_names(&tree, &content);
+    names.sort();
+    assert_eq!(names, vec!["Alias", "C", "E", "O", "T"]);
+}
+
+#[test]
+fn get_class_declarations_marks_abstract_class_and_trait() {
+    let src = "abstract class A { def todo: Int }\ntrait T { def m: Int }\nclass C extends A with T { def m = 1 }";
+    let (tree, content) = parse(src);
+    let decls = support().get_class_declarations(&tree, &content);
+    let a = decls.iter().find(|d| d.name == "A").expect("A");
+    assert!(a.is_abstract);
+    assert!(a.parents.is_empty());
+    let t = decls.iter().find(|d| d.name == "T").expect("T");
+    assert!(t.is_abstract, "trait should be abstract");
+    let c = decls.iter().find(|d| d.name == "C").expect("C");
+    assert!(!c.is_abstract);
+    assert_eq!(c.parents, vec!["A", "T"]);
+    assert!(c.defined_methods.iter().any(|m| m.name == "m"));
+}
+
+#[test]
+fn get_object_creations_extracts_new_sites() {
+    let src = "object O { def use = { val a = new Foo(1); val b = new java.util.ArrayList[Int]() } }";
+    let (tree, content) = parse(src);
+    let news = support().get_object_creations(&tree, &content);
+    let names: Vec<&str> = news.iter().map(|n| n.type_name.as_str()).collect();
+    assert!(names.contains(&"Foo"), "Foo: {names:?}");
+    assert!(names.contains(&"ArrayList"), "ArrayList (qualified): {names:?}");
+}
+
+#[test]
+fn get_member_accesses_extracts_simple_receiver_calls() {
+    let src = "object O { def use = { obj.method(1); other.bar() } }";
+    let (tree, content) = parse(src);
+    let accesses = support().get_member_accesses(&tree, &content);
+    assert_eq!(accesses.len(), 2);
+    let pairs: Vec<(String, String)> = accesses
+        .iter()
+        .map(|a| (a.receiver_name.clone(), a.member_name.clone()))
+        .collect();
+    assert!(pairs.contains(&("obj".to_string(), "method".to_string())));
+    assert!(pairs.contains(&("other".to_string(), "bar".to_string())));
+}
+
+#[test]
+fn get_member_accesses_skips_non_simple_receivers() {
+    // Chained `a.b.c()` has a field_expression receiver — not a simple identifier.
+    let src = "object O { def use = a.b.c() }";
+    let (tree, content) = parse(src);
+    let accesses = support().get_member_accesses(&tree, &content);
+    assert!(
+        accesses.is_empty(),
+        "chained receiver should be skipped: {:?}",
+        accesses.iter().map(|a| (&a.receiver_name, &a.member_name)).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn get_generic_type_usages_counts_args() {
+    let src = "class C { val xs: List[Int] = Nil; val m: Map[String, Int] = ???; val n: Either[A, B] = ??? }";
+    let (tree, content) = parse(src);
+    let usages = support().get_generic_type_usages(&tree, &content);
+    let by_name: std::collections::HashMap<String, usize> =
+        usages.iter().map(|u| (u.type_name.clone(), u.arg_count)).collect();
+    assert_eq!(by_name.get("List"), Some(&1));
+    assert_eq!(by_name.get("Map"), Some(&2));
+    assert_eq!(by_name.get("Either"), Some(&2));
+}
+
+#[test]
+fn get_override_methods_captures_override_def() {
+    let src = "trait T { def f(x: Int): String }\nclass C extends T { override def f(x: Int): String = \"y\" }";
+    let (tree, content) = parse(src);
+    let overrides = support().get_override_methods(&tree, &content);
+    assert_eq!(overrides.len(), 1);
+    let o = &overrides[0];
+    assert_eq!(o.containing_class, "C");
+    assert_eq!(o.method_name, "f");
+    assert_eq!(o.return_type.as_deref(), Some("String"));
+}
+
+#[test]
+fn get_method_call_sites_records_args() {
+    let src = "object O { def use(x: Int): Unit = { obj.foo(x, \"y\", 42); () } }";
+    let (tree, content) = parse(src);
+    let sites = support().get_method_call_sites(&tree, &content);
+    let foo = sites.iter().find(|s| s.method_name == "foo").expect("foo call");
+    assert_eq!(foo.receiver_name, "obj");
+    assert_eq!(foo.args.len(), 3);
+    assert_eq!(foo.args[0].node_kind, "identifier");
+    assert_eq!(foo.args[0].text, "x");
+    assert_eq!(foo.args[1].node_kind, "string");
+    assert_eq!(foo.args[2].node_kind, "integer_literal");
+}
+
 #[test]
 fn reserved_keywords_blocked_in_is_valid_identifier() {
     let s = support();

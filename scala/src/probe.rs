@@ -127,4 +127,37 @@ mod probe {
             "object O { val r = scala.collection.immutable.List(1, 2) }",
         );
     }
+
+    #[test]
+    #[ignore]
+    fn probe_diagnostics_ast_shapes() {
+        run(
+            "new_instance",
+            "object O { def use = new Foo(1, 2) }",
+        );
+        run(
+            "new_with_type_args",
+            "object O { def use = new java.util.ArrayList[Int]() }",
+        );
+        run(
+            "abstract_class_with_abstract_method",
+            "abstract class A { def todo(x: Int): String; def done(): Int = 0 }",
+        );
+        run(
+            "trait_with_concrete",
+            "trait T { def f(x: Int): String = x.toString; def g(): Int }",
+        );
+        run(
+            "override_function",
+            "class C extends T { override def f(x: Int): String = \"hi\" }",
+        );
+        run(
+            "generic_usage_in_field",
+            "class C { val xs: List[Int] = Nil; val map: Map[String, Int] = Map.empty }",
+        );
+        run(
+            "import_aliases",
+            "import scala.collection.{ mutable, immutable => imm }\nimport java.util.{Map => JMap, List => JList}\nimport scala.collection.*\nclass A",
+        );
+    }
 }
