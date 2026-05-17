@@ -59,6 +59,22 @@ impl TestServer {
 
         backend.initialize(init_params).await.unwrap();
         backend.initialized(InitializedParams {}).await;
+
+        // `initialized` returns as soon as the indexing task is *spawned*; the
+        // repo is still being populated when this future resolves.  Block here
+        // until the server flips `index_ready` so subsequent test calls
+        // (completion, goto-def, etc.) see a fully-populated repository
+        // instead of racing against the indexer.  Caps at ~30s so a hung
+        // indexer surfaces as a timeout rather than a deadlock.
+        let deadline =
+            std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while !backend.index_ready_for_tests() {
+            if std::time::Instant::now() > deadline {
+                panic!("index never became ready within 30s");
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+
         Self {
             backend,
             root: dest_root,

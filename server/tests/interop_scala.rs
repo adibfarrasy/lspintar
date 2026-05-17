@@ -48,7 +48,7 @@ fn first_location(resp: GotoDefinitionResponse) -> Location {
 /// `var javaService: JavaService = _`.
 #[tokio::test]
 async fn interop_gtd_scala_to_java_class() {
-    let server = get_test_server("polyglot-spring").await;
+    let server = get_test_server("polyglot-scala").await;
     // Line 3:                          ↓ JavaService starts at col 17
     //     "  var javaService: JavaService = _"
     let params = goto_def(server.uri(SCALA_CONSUMER), 3, 22);
@@ -69,7 +69,7 @@ async fn interop_gtd_scala_to_java_class() {
 /// Scala consumer -> Kotlin service: cursor on `KotlinService` type.
 #[tokio::test]
 async fn interop_gtd_scala_to_kotlin_class() {
-    let server = get_test_server("polyglot-spring").await;
+    let server = get_test_server("polyglot-scala").await;
     // Line 4:  "  var kotlinService: KotlinService = _"
     let params = goto_def(server.uri(SCALA_CONSUMER), 4, 25);
     let result = server
@@ -89,7 +89,7 @@ async fn interop_gtd_scala_to_kotlin_class() {
 /// Scala consumer -> Groovy service: cursor on `GroovyService` type.
 #[tokio::test]
 async fn interop_gtd_scala_to_groovy_class() {
-    let server = get_test_server("polyglot-spring").await;
+    let server = get_test_server("polyglot-scala").await;
     // Line 5:  "  var groovyService: GroovyService = _"
     let params = goto_def(server.uri(SCALA_CONSUMER), 5, 25);
     let result = server
@@ -110,7 +110,7 @@ async fn interop_gtd_scala_to_groovy_class() {
 /// and exposed as a class symbol named `ScalaService`.
 #[tokio::test]
 async fn scala_service_is_indexed() {
-    let server = get_test_server("polyglot-spring").await;
+    let server = get_test_server("polyglot-scala").await;
     let repo = server.backend.repo.get().expect("repo not initialised");
     let sym = repo
         .find_symbol_by_fqn("com.example.ScalaService")

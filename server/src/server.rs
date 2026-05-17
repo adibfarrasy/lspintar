@@ -224,6 +224,15 @@ fn completion_rank(symbol: &ResolvedSymbol, current_package: Option<&str>) -> u8
 }
 
 impl Backend {
+    /// Returns true once the initial indexing pass has completed.
+    /// Exposed for integration tests so they can block until the workspace
+    /// repo is fully populated before issuing requests.  Marked `dead_code`
+    /// because the production binary never calls it — only the test util.
+    #[allow(dead_code)]
+    pub fn index_ready_for_tests(&self) -> bool {
+        self.index_ready.load(Ordering::Acquire)
+    }
+
     pub fn new(client: tower_lsp::Client) -> Self {
         lsp_logging::init_logging_service(client.clone());
 
