@@ -74,4 +74,57 @@ mod probe {
             "/** hi */\n@experimental\nobject Z { val a = 1 }",
         );
     }
+
+    #[test]
+    #[ignore]
+    fn probe_position_ast_shapes() {
+        run(
+            "call_expression",
+            "object O { def use = foo(1, \"x\", bar) }",
+        );
+        run(
+            "member_access_call",
+            "object O { def use = obj.method(1, 2) }",
+        );
+        run(
+            "field_access",
+            "object O { def use = obj.field }",
+        );
+        run(
+            "lambda_assigned_to_val",
+            "object O { val f = (x: Int) => x + 1 }",
+        );
+        run(
+            "var_assignment",
+            "object O { def use = { var x = 1; x = 2; x } }",
+        );
+        run(
+            "literals",
+            "object O { val a = 1; val b = 1L; val c = 1.0; val d = 1.0f; val e = true; val s = \"hi\"; val n = null; val c2 = 'x' }",
+        );
+        run(
+            "interpolated_string",
+            "object O { val n = s\"$x value\" }",
+        );
+        run(
+            "match_case",
+            "object O { def m(x: Any) = x match { case y: Int => y; case _ => 0 } }",
+        );
+        run(
+            "for_comp",
+            "object O { def m = for { x <- xs; y <- ys if x > 0 } yield x + y }",
+        );
+        run(
+            "infix_op",
+            "object O { val r = a plus b }",
+        );
+        run(
+            "this_super",
+            "class C extends B { def m = { this.x; super.f() } }",
+        );
+        run(
+            "qualified_id",
+            "object O { val r = scala.collection.immutable.List(1, 2) }",
+        );
+    }
 }

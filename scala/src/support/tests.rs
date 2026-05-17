@@ -312,6 +312,151 @@ fn get_return_for_val_declaration_picks_type_field() {
     assert_eq!(r.as_deref(), Some("Int"));
 }
 
+// ---------- Phase 3: position / type resolution ----------
+
+use tower_lsp::lsp_types::Position;
+
+/// Locate `needle` in `src` and return the Position of its first character.
+fn pos_of(src: &str, needle: &str) -> Position {
+    let byte = src.find(needle).unwrap_or_else(|| panic!("needle {needle:?} not found"));
+    let prefix = &src[..byte];
+    let line = prefix.matches('\n').count() as u32;
+    let last_nl = prefix.rfind('\n').map(|i| i + 1).unwrap_or(0);
+    let col = (byte - last_nl) as u32;
+    Position { line, character: col }
+}
+
+#[test]
+fn get_literal_type_basic_kinds() {
+    let src = "object O { val a = 1; val b = 1.0; val c = true; val d = \"hi\"; val e = 'x' }";
+    let (tree, content) = parse(src);
+    let s = support();
+    assert_eq!(s.get_literal_type(&tree, &content, &pos_of(src, "1;")).as_deref(), Some("Int"));
+    assert_eq!(s.get_literal_type(&tree, &content, &pos_of(src, "1.0")).as_deref(), Some("Double"));
+    assert_eq!(s.get_literal_type(&tree, &content, &pos_of(src, "true")).as_deref(), Some("Boolean"));
+    assert_eq!(s.get_literal_type(&tree, &content, &pos_of(src, "\"hi\"")).as_deref(), Some("String"));
+    assert_eq!(s.get_literal_type(&tree, &content, &pos_of(src, "'x'")).as_deref(), Some("Char"));
+}
+
+#[test]
+fn find_ident_at_position_returns_simple_name() {
+    let src = "object O { def use = foo }";
+    let (tree, content) = parse(src);
+    let id = support().find_ident_at_position(&tree, &content, &pos_of(src, "foo"));
+    assert_eq!(id.as_ref().map(|(n, _)| n.as_str()), Some("foo"));
+    assert!(id.unwrap().1.is_none());
+}
+
+#[test]
+fn find_ident_at_position_returns_qualifier_for_field_access() {
+    let src = "object O { def use = obj.method }";
+    let (tree, content) = parse(src);
+    let id = support().find_ident_at_position(&tree, &content, &pos_of(src, "method"));
+    let (name, qual) = id.expect("ident");
+    assert_eq!(name, "method");
+    assert_eq!(qual.as_deref(), Some("obj"));
+}
+
+#[test]
+fn find_variable_declaration_locates_val_in_same_scope() {
+    let src = "object O { def use = { val x: Int = 1; x + 2 } }";
+    let (tree, content) = parse(src);
+    let decl = support().find_variable_declaration(&tree, &content, "x", &pos_of(src, "x +"));
+    let (ty, p) = decl.expect("decl");
+    assert_eq!(ty.as_deref(), Some("Int"));
+    // The decl position is the `x` of `val x: Int = 1`, not the use site.
+    assert!(p.character < pos_of(src, "x +").character);
+}
+
+#[test]
+fn find_variable_declaration_locates_parameter() {
+    let src = "object O { def use(arg: String): Int = { println(arg); 1 } }";
+    let (tree, content) = parse(src);
+    let decl = support().find_variable_declaration(&tree, &content, "arg", &pos_of(src, "println"));
+    let (ty, _) = decl.expect("param decl");
+    assert_eq!(ty.as_deref(), Some("String"));
+}
+
+#[test]
+fn find_variable_declaration_locates_class_parameter() {
+    let src = "class C(val x: Int) { def use = x + 1 }";
+    let (tree, content) = parse(src);
+    let decl = support().find_variable_declaration(&tree, &content, "x", &pos_of(src, "x + 1"));
+    let (ty, _) = decl.expect("class param decl");
+    assert_eq!(ty.as_deref(), Some("Int"));
+}
+
+#[test]
+fn find_variable_type_returns_declared_type() {
+    let src = "object O { val name: String = \"a\"; def use = name }";
+    let (tree, content) = parse(src);
+    let ty = support().find_variable_type(&tree, &content, "name", &pos_of(src, "= name"));
+    assert_eq!(ty.as_deref(), Some("String"));
+}
+
+#[test]
+fn find_declarations_in_scope_includes_local_and_param() {
+    let src = "object O { def use(p: Int): Unit = { val q: String = \"a\"; () } }";
+    let (tree, content) = parse(src);
+    let decls = support().find_declarations_in_scope(&tree, &content, &pos_of(src, "() }"));
+    let names: Vec<&str> = decls.iter().map(|(n, _)| n.as_str()).collect();
+    assert!(names.contains(&"p"), "param p missing: {names:?}");
+    assert!(names.contains(&"q"), "local q missing: {names:?}");
+    let q_ty = decls.iter().find(|(n, _)| n == "q").and_then(|(_, t)| t.clone());
+    assert_eq!(q_ty.as_deref(), Some("String"));
+}
+
+#[test]
+fn extract_call_arguments_returns_each_arg_with_position() {
+    let src = "object O { def use = foo(1, \"x\", bar) }";
+    let (tree, content) = parse(src);
+    let args = support().extract_call_arguments(&tree, &content, &pos_of(src, "foo"));
+    let args = args.expect("args");
+    let texts: Vec<&str> = args.iter().map(|(t, _)| t.as_str()).collect();
+    assert_eq!(texts, vec!["1", "\"x\"", "bar"]);
+}
+
+#[test]
+fn extract_call_arguments_handles_zero_args() {
+    let src = "object O { def use = foo() }";
+    let (tree, content) = parse(src);
+    let args = support().extract_call_arguments(&tree, &content, &pos_of(src, "foo"));
+    assert_eq!(args, Some(vec![]));
+}
+
+#[test]
+fn get_method_receiver_and_params_extracts_receiver_chain() {
+    let src = "object O { def use = obj.method(1, 2) }";
+    let (tree, content) = parse(src);
+    let root = tree.root_node();
+    let node = lsp_core::ts_helper::get_node_at_position(&tree, &content, &pos_of(src, "method"))
+        .unwrap_or(root);
+    let res = support().get_method_receiver_and_params(node, &content, &pos_of(src, "method"));
+    let (receiver, params) = res.expect("call site");
+    assert_eq!(receiver, "obj");
+    assert_eq!(params, vec!["1", "2"]);
+}
+
+#[test]
+fn get_type_at_position_resolves_local_val() {
+    let src = "object O { def use = { val x: String = \"a\"; x } }";
+    let (tree, content) = parse(src);
+    // Cursor sits on the trailing use-site `x` (after the val declaration).
+    let p = pos_of(src, "x } }");
+    let node = lsp_core::ts_helper::get_node_at_position(&tree, &content, &p).expect("node");
+    let ty = support().get_type_at_position(node, &content, &p);
+    assert_eq!(ty.as_deref(), Some("String"));
+}
+
+#[test]
+fn get_type_at_position_resolves_literal() {
+    let src = "object O { def use = 42 }";
+    let (tree, content) = parse(src);
+    let p = pos_of(src, "42");
+    let node = lsp_core::ts_helper::get_node_at_position(&tree, &content, &p).expect("node");
+    assert_eq!(support().get_type_at_position(node, &content, &p).as_deref(), Some("Int"));
+}
+
 #[test]
 fn reserved_keywords_blocked_in_is_valid_identifier() {
     let s = support();

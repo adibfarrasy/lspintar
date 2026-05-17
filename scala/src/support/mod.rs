@@ -4,7 +4,7 @@ use lsp_core::{
     },
     languages::Language,
     node_kind::NodeKind,
-    ts_helper::{self, collect_syntax_errors},
+    ts_helper::{self, collect_syntax_errors, get_node_at_position, node_contains_position},
 };
 use std::{cell::RefCell, collections::HashSet, fs, path::Path, sync::LazyLock};
 
@@ -34,6 +34,262 @@ impl Default for ScalaSupport {
 impl ScalaSupport {
     pub fn new() -> Self {
         Self
+    }
+}
+
+/// Walk `node` and its descendants and return the innermost named node whose
+/// span contains `position`.  If the start node is itself unnamed (e.g. a
+/// keyword token like `true`), walks up to its nearest named ancestor first.
+fn innermost_named_node<'a>(node: Node<'a>, position: &Position) -> Option<Node<'a>> {
+    if !node_contains_position(&node, position) {
+        return None;
+    }
+    let mut anchor = node;
+    while !anchor.is_named() {
+        anchor = anchor.parent()?;
+    }
+    Some(descend_to_named_leaf(anchor, position))
+}
+
+/// Recurse strictly downward from a named `anchor` to the innermost named
+/// descendant containing `position`.  Never climbs back up the tree, so it
+/// cannot loop on unnamed children.
+fn descend_to_named_leaf<'a>(anchor: Node<'a>, position: &Position) -> Node<'a> {
+    let mut best = anchor;
+    let mut cursor = anchor.walk();
+    for child in anchor.children(&mut cursor) {
+        if !child.is_named() {
+            continue;
+        }
+        if node_contains_position(&child, position) {
+            best = descend_to_named_leaf(child, position);
+        }
+    }
+    best
+}
+
+/// Classify a literal node into its canonical Scala primitive type name.
+/// Classification is by node kind alone — suffix-aware refinement (`L`, `f`)
+/// would require access to the source slice and is left to the caller.
+fn literal_type_for(node: &Node) -> Option<String> {
+    match node.kind() {
+        "integer_literal" => Some("Int".to_string()),
+        "floating_point_literal" => Some("Double".to_string()),
+        "boolean_literal" => Some("Boolean".to_string()),
+        "string" | "interpolated_string_expression" => Some("String".to_string()),
+        "character_literal" => Some("Char".to_string()),
+        "null_literal" => None,
+        _ => None,
+    }
+}
+
+fn nearest_ancestor<'a>(mut node: Node<'a>, kind: &str) -> Option<Node<'a>> {
+    loop {
+        if node.kind() == kind {
+            return Some(node);
+        }
+        node = node.parent()?;
+    }
+}
+
+fn first_child_with_kind<'a>(parent: Node<'a>, kind: &str) -> Option<Node<'a>> {
+    let mut c = parent.walk();
+    parent.children(&mut c).find(|n| n.kind() == kind)
+}
+
+/// Locate the in-scope declaration of `var_name` reachable from `position`.
+/// Walks outward from the position node, scanning each enclosing block /
+/// template body for matching `val`/`var`/`parameter`/`enumerator` /
+/// `case_clause` bindings.  Returns the declared type (when present) and
+/// the start position of the binding identifier.
+fn find_variable_declaration_impl(
+    tree: &Tree,
+    content: &str,
+    var_name: &str,
+    position: &Position,
+) -> Option<(Option<String>, Position)> {
+    let node = get_node_at_position(tree, content, position)?;
+    let mut cursor: Option<Node> = Some(node);
+    while let Some(n) = cursor {
+        if let Some(found) = scan_node_for_declaration(n, content, var_name, Some(position)) {
+            return Some(found);
+        }
+        cursor = n.parent();
+    }
+    // Fall back to scanning the whole tree (e.g. top-level vals in same file).
+    scan_node_for_declaration(tree.root_node(), content, var_name, None)
+}
+
+/// Scan `node`'s named children (and matched descendants) for a binding of
+/// `var_name`.  When `before` is `Some`, only bindings whose identifier
+/// starts at or before that position are returned (forward declarations
+/// inside the same scope are visible too).
+fn scan_node_for_declaration(
+    node: Node,
+    content: &str,
+    var_name: &str,
+    before: Option<&Position>,
+) -> Option<(Option<String>, Position)> {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        match child.kind() {
+            "val_definition" | "var_definition" => {
+                if let Some(name_node) = child.child_by_field_name("pattern") {
+                    if name_node.kind() == "identifier"
+                        && name_node.utf8_text(content.as_bytes()).ok() == Some(var_name)
+                    {
+                        if pos_ok(name_node, before) {
+                            let ty = child
+                                .child_by_field_name("type")
+                                .and_then(|n| n.utf8_text(content.as_bytes()).ok())
+                                .map(|s| s.to_string());
+                            return Some((ty, node_start_position(name_node)));
+                        }
+                    }
+                }
+            }
+            "val_declaration" | "var_declaration" => {
+                if let Some(name_node) = child.child_by_field_name("name") {
+                    if name_node.utf8_text(content.as_bytes()).ok() == Some(var_name)
+                        && pos_ok(name_node, before)
+                    {
+                        let ty = child
+                            .child_by_field_name("type")
+                            .and_then(|n| n.utf8_text(content.as_bytes()).ok())
+                            .map(|s| s.to_string());
+                        return Some((ty, node_start_position(name_node)));
+                    }
+                }
+            }
+            "parameter" | "class_parameter" => {
+                if let Some(name_node) = child.child_by_field_name("name") {
+                    if name_node.utf8_text(content.as_bytes()).ok() == Some(var_name) {
+                        let ty = child
+                            .child_by_field_name("type")
+                            .and_then(|n| n.utf8_text(content.as_bytes()).ok())
+                            .map(|s| s.to_string());
+                        return Some((ty, node_start_position(name_node)));
+                    }
+                }
+            }
+            "parameters" | "class_parameters" => {
+                if let Some(found) = scan_node_for_declaration(child, content, var_name, before) {
+                    return Some(found);
+                }
+            }
+            "enumerator" => {
+                // `for { x <- xs }` — first named identifier binds.
+                let mut ec = child.walk();
+                let id = child.children(&mut ec).find(|c| c.kind() == "identifier");
+                if let Some(id_node) = id {
+                    if id_node.utf8_text(content.as_bytes()).ok() == Some(var_name) {
+                        return Some((None, node_start_position(id_node)));
+                    }
+                }
+            }
+            "case_clause" => {
+                // `case y: Int =>` — pattern binds `y` with type `Int`.
+                let mut cc = child.walk();
+                for pat in child.children(&mut cc) {
+                    if pat.kind() == "typed_pattern" {
+                        let mut tpc = pat.walk();
+                        let kids: Vec<Node> = pat.children(&mut tpc).filter(|n| n.is_named()).collect();
+                        let id = kids.iter().find(|n| n.kind() == "identifier");
+                        let ty = kids.iter().find(|n| n.kind() == "type_identifier" || n.kind() == "generic_type");
+                        if let (Some(id_n), Some(ty_n)) = (id, ty) {
+                            if id_n.utf8_text(content.as_bytes()).ok() == Some(var_name) {
+                                let ty_text = ty_n
+                                    .utf8_text(content.as_bytes())
+                                    .ok()
+                                    .map(|s| s.to_string());
+                                return Some((ty_text, node_start_position(*id_n)));
+                            }
+                        }
+                    }
+                }
+            }
+            // Recurse into scope-introducing nodes.
+            "block" | "template_body" | "indented_block" | "function_definition"
+            | "function_declaration" | "match_expression" | "for_expression"
+            | "if_expression" | "while_expression" | "do_while_expression"
+            | "try_expression" | "case_block" | "lambda_expression"
+            | "extension_definition" => {
+                if let Some(found) = scan_node_for_declaration(child, content, var_name, before) {
+                    return Some(found);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn pos_ok(node: Node, before: Option<&Position>) -> bool {
+    let Some(p) = before else { return true; };
+    let np = node.start_position();
+    np.row < p.line as usize || (np.row == p.line as usize && np.column <= p.character as usize)
+}
+
+fn node_start_position(node: Node) -> Position {
+    Position {
+        line: node.start_position().row as u32,
+        character: node.start_position().column as u32,
+    }
+}
+
+/// Collect every visible val/var/parameter/enumerator binding under `scope`
+/// whose identifier start position is at or before `position`.  Used by
+/// `find_declarations_in_scope`.
+fn collect_scope_declarations(
+    scope: Node,
+    content: &str,
+    position: &Position,
+    out: &mut Vec<(String, Option<String>)>,
+    seen: &mut HashSet<String>,
+) {
+    let mut cursor = scope.walk();
+    for child in scope.children(&mut cursor) {
+        match child.kind() {
+            "val_definition" | "var_definition" => {
+                if let Some(name_node) = child.child_by_field_name("pattern") {
+                    if name_node.kind() == "identifier" && pos_ok(name_node, Some(position)) {
+                        push_unique(name_node, content, child.child_by_field_name("type"), out, seen);
+                    }
+                }
+            }
+            "val_declaration" | "var_declaration" => {
+                if let Some(name_node) = child.child_by_field_name("name") {
+                    if pos_ok(name_node, Some(position)) {
+                        push_unique(name_node, content, child.child_by_field_name("type"), out, seen);
+                    }
+                }
+            }
+            "parameter" | "class_parameter" => {
+                if let Some(name_node) = child.child_by_field_name("name") {
+                    push_unique(name_node, content, child.child_by_field_name("type"), out, seen);
+                }
+            }
+            "parameters" | "class_parameters" => {
+                collect_scope_declarations(child, content, position, out, seen);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn push_unique(
+    name_node: Node,
+    content: &str,
+    type_node: Option<Node>,
+    out: &mut Vec<(String, Option<String>)>,
+    seen: &mut HashSet<String>,
+) {
+    let Ok(name) = name_node.utf8_text(content.as_bytes()) else {
+        return;
+    };
+    if seen.insert(name.to_string()) {
+        let ty = type_node.and_then(|n| n.utf8_text(content.as_bytes()).ok().map(|s| s.to_string()));
+        out.push((name.to_string(), ty));
     }
 }
 
@@ -339,80 +595,193 @@ impl LanguageSupport for ScalaSupport {
         SCALA_IMPLICIT_IMPORTS.iter().map(|s| s.to_string()).collect()
     }
 
-    // --- Position / type resolution (Phase 3): all stubs.
+    // --- Position / type resolution (Phase 3).
 
     fn get_type_at_position(
         &self,
-        _node: Node,
-        _content: &str,
-        _position: &Position,
+        node: Node,
+        content: &str,
+        position: &Position,
     ) -> Option<String> {
+        // Tree built so we can reuse get_literal_type / find_variable_type.
+        let temp = self.parse_str(content)?;
+        let leaf = innermost_named_node(node, position)?;
+        // Literal → primitive type.
+        if let Some(t) = literal_type_for(&leaf) {
+            return Some(t);
+        }
+        // Identifier → walk up for context-specific resolution.
+        if leaf.kind() == "identifier" || leaf.kind() == "type_identifier" {
+            let name = leaf.utf8_text(content.as_bytes()).ok()?;
+            return self.find_variable_type(&temp.0, content, name, position);
+        }
         None
     }
 
     fn find_ident_at_position(
         &self,
-        _tree: &Tree,
-        _content: &str,
-        _position: &Position,
+        tree: &Tree,
+        content: &str,
+        position: &Position,
     ) -> Option<IdentResult> {
-        None
+        let node = get_node_at_position(tree, content, position)?;
+        let leaf = innermost_named_node(node, position)?;
+        if leaf.kind() != "identifier" && leaf.kind() != "type_identifier" {
+            return None;
+        }
+        let name = leaf.utf8_text(content.as_bytes()).ok()?.to_string();
+        // If parent is a field_expression and the leaf is the trailing name,
+        // emit the receiver chain as the qualifier.
+        let qualifier = leaf.parent().and_then(|p| {
+            if p.kind() != "field_expression" {
+                return None;
+            }
+            // field_expression children: <receiver> `.` <name>.  Identify the
+            // receiver as the first named child; only emit a qualifier when the
+            // selected leaf is the trailing identifier.
+            let mut c = p.walk();
+            let kids: Vec<Node> = p.children(&mut c).filter(|n| n.is_named()).collect();
+            if kids.len() < 2 {
+                return None;
+            }
+            let last = kids.last()?;
+            if last.id() != leaf.id() {
+                return None;
+            }
+            let receiver = kids.first()?;
+            receiver
+                .utf8_text(content.as_bytes())
+                .ok()
+                .map(|s| s.to_string())
+        });
+        Some((name, qualifier))
     }
 
     fn find_variable_type(
         &self,
-        _tree: &Tree,
-        _content: &str,
-        _var_name: &str,
-        _position: &Position,
+        tree: &Tree,
+        content: &str,
+        var_name: &str,
+        position: &Position,
     ) -> Option<String> {
-        None
+        find_variable_declaration_impl(tree, content, var_name, position)
+            .and_then(|(ty, _)| ty)
     }
 
     fn find_variable_declaration(
         &self,
-        _tree: &Tree,
-        _content: &str,
-        _var_name: &str,
-        _position: &Position,
+        tree: &Tree,
+        content: &str,
+        var_name: &str,
+        position: &Position,
     ) -> Option<(Option<String>, Position)> {
-        None
+        find_variable_declaration_impl(tree, content, var_name, position)
     }
 
     fn find_declarations_in_scope(
         &self,
-        _tree: &Tree,
-        _content: &str,
-        _position: &Position,
+        tree: &Tree,
+        content: &str,
+        position: &Position,
     ) -> Vec<(String, Option<String>)> {
-        Vec::new()
+        let Some(node) = get_node_at_position(tree, content, position) else {
+            return Vec::new();
+        };
+        let mut out: Vec<(String, Option<String>)> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut cursor = Some(node);
+        while let Some(n) = cursor {
+            collect_scope_declarations(n, content, position, &mut out, &mut seen);
+            cursor = n.parent();
+        }
+        out
     }
 
     fn extract_call_arguments(
         &self,
-        _tree: &Tree,
-        _content: &str,
-        _position: &Position,
+        tree: &Tree,
+        content: &str,
+        position: &Position,
     ) -> Option<Vec<(String, Position)>> {
-        None
+        let node = get_node_at_position(tree, content, position)?;
+        let call = nearest_ancestor(node, "call_expression")?;
+        let args_node = call
+            .child_by_field_name("arguments")
+            .or_else(|| first_child_with_kind(call, "arguments"))?;
+        let mut c = args_node.walk();
+        let mut out = Vec::new();
+        for child in args_node.children(&mut c) {
+            // Skip punctuation: `(`, `,`, `)`.
+            if !child.is_named() {
+                continue;
+            }
+            let text = child
+                .utf8_text(content.as_bytes())
+                .ok()
+                .map(|s| s.to_string())?;
+            let pos = Position {
+                line: child.start_position().row as u32,
+                character: child.start_position().column as u32,
+            };
+            out.push((text, pos));
+        }
+        Some(out)
     }
 
     fn get_literal_type(
         &self,
-        _tree: &Tree,
-        _content: &str,
-        _position: &Position,
+        tree: &Tree,
+        content: &str,
+        position: &Position,
     ) -> Option<String> {
-        None
+        let node = get_node_at_position(tree, content, position)?;
+        let leaf = innermost_named_node(node, position)?;
+        literal_type_for(&leaf)
     }
 
     fn get_method_receiver_and_params(
         &self,
-        _node: Node,
-        _content: &str,
-        _position: &Position,
+        node: Node,
+        content: &str,
+        position: &Position,
     ) -> Option<(String, Vec<String>)> {
-        None
+        let leaf = innermost_named_node(node, position)?;
+        let call = nearest_ancestor(leaf, "call_expression")?;
+        let fn_node = call.child_by_field_name("function").or_else(|| {
+            // Grammars without a `function` field: first named child is the callee.
+            let mut c = call.walk();
+            call.children(&mut c).find(|n| n.is_named() && n.kind() != "arguments")
+        })?;
+        let receiver = match fn_node.kind() {
+            "field_expression" => {
+                let mut c = fn_node.walk();
+                let kids: Vec<Node> = fn_node.children(&mut c).filter(|n| n.is_named()).collect();
+                kids.first()?
+                    .utf8_text(content.as_bytes())
+                    .ok()?
+                    .to_string()
+            }
+            _ => fn_node
+                .utf8_text(content.as_bytes())
+                .ok()?
+                .to_string(),
+        };
+        let args_node = call
+            .child_by_field_name("arguments")
+            .or_else(|| first_child_with_kind(call, "arguments"));
+        let mut params = Vec::new();
+        if let Some(args) = args_node {
+            let mut c = args.walk();
+            for child in args.children(&mut c) {
+                if !child.is_named() {
+                    continue;
+                }
+                if let Ok(t) = child.utf8_text(content.as_bytes()) {
+                    params.push(t.to_string());
+                }
+            }
+        }
+        Some((receiver, params))
     }
 
     fn collect_diagnostics(&self, tree: &Tree, source: &str) -> Vec<Diagnostic> {
