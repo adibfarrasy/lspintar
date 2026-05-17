@@ -570,6 +570,116 @@ fn get_method_call_sites_records_args() {
     assert_eq!(foo.args[2].node_kind, "integer_literal");
 }
 
+// ---------- Phase 5 polish: enum cases ----------
+
+#[test]
+fn enum_cases_classified_as_field_with_names() {
+    let src = "enum Color { case Red; case Green; case Blue }";
+    let (tree, content) = parse(src);
+    let s = support();
+    let root = tree.root_node();
+    let enum_node = first_child_with_kind(root, "enum_definition").expect("enum");
+    let body = first_child_with_kind(enum_node, "enum_body").expect("enum_body");
+    let mut case_names: Vec<String> = Vec::new();
+    let mut c = body.walk();
+    for child in body.children(&mut c) {
+        if child.kind() != "enum_case_definitions" {
+            continue;
+        }
+        let mut cc = child.walk();
+        for cd in child.children(&mut cc) {
+            if cd.kind() != "simple_enum_case" {
+                continue;
+            }
+            assert_eq!(s.get_kind(&cd), Some(NodeKind::Field));
+            if let Some(name) = s.get_short_name(&cd, &content) {
+                case_names.push(name);
+            }
+        }
+    }
+    assert_eq!(case_names, vec!["Red", "Green", "Blue"]);
+}
+
+#[test]
+fn enum_grouped_cases_each_indexed() {
+    let src = "enum Direction { case North, South, East, West }";
+    let (tree, content) = parse(src);
+    let s = support();
+    let root = tree.root_node();
+    let enum_node = first_child_with_kind(root, "enum_definition").expect("enum");
+    let body = first_child_with_kind(enum_node, "enum_body").expect("enum_body");
+    let mut names: Vec<String> = Vec::new();
+    let mut c = body.walk();
+    for child in body.children(&mut c) {
+        if child.kind() != "enum_case_definitions" {
+            continue;
+        }
+        let mut cc = child.walk();
+        for cd in child.children(&mut cc) {
+            if cd.kind() == "simple_enum_case" {
+                if let Some(n) = s.get_short_name(&cd, &content) {
+                    names.push(n);
+                }
+            }
+        }
+    }
+    assert_eq!(names, vec!["North", "South", "East", "West"]);
+}
+
+// ---------- Literal suffix refinement ----------
+
+#[test]
+fn literal_suffixes_refine_int_long_float_double() {
+    let src = "object O { val a = 1; val b = 1L; val c = 1.0f; val d = 1.0; val e = 1.0d }";
+    let (tree, content) = parse(src);
+    let s = support();
+    assert_eq!(s.get_literal_type(&tree, &content, &pos_of(src, "1;")).as_deref(), Some("Int"));
+    assert_eq!(s.get_literal_type(&tree, &content, &pos_of(src, "1L")).as_deref(), Some("Long"));
+    assert_eq!(s.get_literal_type(&tree, &content, &pos_of(src, "1.0f")).as_deref(), Some("Float"));
+    assert_eq!(s.get_literal_type(&tree, &content, &pos_of(src, "1.0;")).as_deref(), Some("Double"));
+    assert_eq!(s.get_literal_type(&tree, &content, &pos_of(src, "1.0d")).as_deref(), Some("Double"));
+}
+
+// ---------- find_local_references ----------
+
+#[test]
+fn find_local_references_collects_use_sites_for_val() {
+    let src = "object O { def use = { val x: Int = 1; x + x + 2 } }";
+    let (tree, content) = parse(src);
+    let decl_pos = pos_of(src, "x: Int");
+    let refs = support()
+        .find_local_references(&tree, &content, &decl_pos)
+        .expect("references");
+    // 1 declaration + 2 use sites of `x` in `x + x` = 3 occurrences.
+    assert_eq!(refs.len(), 3);
+}
+
+#[test]
+fn find_local_references_for_parameter() {
+    let src = "object O { def use(p: Int): Int = { val q = p * 2; p + q } }";
+    let (tree, content) = parse(src);
+    let decl_pos = pos_of(src, "p: Int");
+    let refs = support()
+        .find_local_references(&tree, &content, &decl_pos)
+        .expect("references");
+    // declaration + `p * 2` + `p + q` = 3 occurrences.
+    assert_eq!(refs.len(), 3);
+}
+
+#[test]
+fn find_local_references_excludes_shadowed_inner_binding() {
+    let src = "object O { def use(x: Int): Int = { val r = x + 1; { val x: Int = 99; x + 1 }; x } }";
+    let (tree, content) = parse(src);
+    let decl_pos = pos_of(src, "x: Int");
+    let refs = support()
+        .find_local_references(&tree, &content, &decl_pos)
+        .expect("references");
+    // outer x is referenced at: declaration, `x + 1` (first), and the
+    // trailing `x` after the shadowing block.  The inner `val x` and its
+    // `x + 1` use are skipped.
+    assert_eq!(refs.len(), 3);
+}
+
 #[test]
 fn reserved_keywords_blocked_in_is_valid_identifier() {
     let s = support();

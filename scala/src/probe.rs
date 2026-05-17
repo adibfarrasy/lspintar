@@ -160,4 +160,12 @@ mod probe {
             "import scala.collection.{ mutable, immutable => imm }\nimport java.util.{Map => JMap, List => JList}\nimport scala.collection.*\nclass A",
         );
     }
+
+    #[test]
+    #[ignore]
+    fn probe_phase5_ast_shapes() {
+        run("enum_with_cases", "enum Color { case Red; case Green; case Blue }");
+        run("enum_grouped_cases", "enum Direction { case North, South, East, West }");
+        run("literal_suffixes", "object O { val a = 1L; val b = 1.0f; val c = 1.0d; val d = 1; val e = 1.5 }");
+    }
 }

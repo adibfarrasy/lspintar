@@ -71,8 +71,9 @@ fn descend_to_named_leaf<'a>(anchor: Node<'a>, position: &Position) -> Node<'a> 
 }
 
 /// Classify a literal node into its canonical Scala primitive type name.
-/// Classification is by node kind alone — suffix-aware refinement (`L`, `f`)
-/// would require access to the source slice and is left to the caller.
+/// Kind alone — caller should prefer `literal_type_with_source` when source
+/// is available so suffix-tagged forms (`1L`, `1.0f`) refine to the precise
+/// primitive.
 fn literal_type_for(node: &Node) -> Option<String> {
     match node.kind() {
         "integer_literal" => Some("Int".to_string()),
@@ -82,6 +83,33 @@ fn literal_type_for(node: &Node) -> Option<String> {
         "character_literal" => Some("Char".to_string()),
         "null_literal" => None,
         _ => None,
+    }
+}
+
+/// Like [`literal_type_for`] but inspects the source text of `node` to
+/// refine integer / floating-point literals based on Scala's suffix
+/// conventions: `1L`/`1l` → Long, `1.0f`/`1.0F` → Float, `1.0d`/`1.0D` →
+/// Double (the default).  Falls back to the kind-only classification when
+/// no recognised suffix is present.
+fn literal_type_with_source(node: &Node, source: &str) -> Option<String> {
+    match node.kind() {
+        "integer_literal" => {
+            let text = node.utf8_text(source.as_bytes()).ok()?;
+            if text.ends_with('L') || text.ends_with('l') {
+                Some("Long".to_string())
+            } else {
+                Some("Int".to_string())
+            }
+        }
+        "floating_point_literal" => {
+            let text = node.utf8_text(source.as_bytes()).ok()?;
+            if text.ends_with('f') || text.ends_with('F') {
+                Some("Float".to_string())
+            } else {
+                Some("Double".to_string())
+            }
+        }
+        _ => literal_type_for(node),
     }
 }
 
@@ -293,6 +321,112 @@ fn push_unique(
         let ty = type_node.and_then(|n| n.utf8_text(content.as_bytes()).ok().map(|s| s.to_string()));
         out.push((name.to_string(), ty));
     }
+}
+
+/// Smallest enclosing block-like node where a local binding lives.
+fn enclosing_scope<'a>(node: Node<'a>) -> Option<Node<'a>> {
+    let mut cursor = node.parent();
+    while let Some(n) = cursor {
+        match n.kind() {
+            "block"
+            | "indented_block"
+            | "template_body"
+            | "function_definition"
+            | "function_declaration"
+            | "lambda_expression"
+            | "for_expression"
+            | "match_expression"
+            | "case_block"
+            | "case_clause"
+            | "extension_definition"
+            | "compilation_unit" => return Some(n),
+            _ => cursor = n.parent(),
+        }
+    }
+    None
+}
+
+/// Walk every identifier descendant of `scope` whose text equals `name`.
+/// Skips identifiers that live inside a nested scope which itself
+/// re-declares `name` (lexical shadowing).
+fn collect_local_refs(
+    node: Node,
+    root_scope_id: usize,
+    source: &str,
+    name: &str,
+    out: &mut Vec<Range>,
+) {
+    let introduces_scope = matches!(
+        node.kind(),
+        "block"
+            | "indented_block"
+            | "lambda_expression"
+            | "function_definition"
+            | "function_declaration"
+            | "case_clause"
+            | "for_expression"
+    );
+    if introduces_scope && node.id() != root_scope_id && scope_shadows(node, source, name) {
+        return;
+    }
+    if node.kind() == "identifier"
+        && node.utf8_text(source.as_bytes()).ok() == Some(name)
+    {
+        out.push(node_to_range(node));
+    }
+    let mut c = node.walk();
+    for child in node.children(&mut c) {
+        collect_local_refs(child, root_scope_id, source, name, out);
+    }
+}
+
+/// True when the direct children of `scope` introduce a binding named
+/// `name` (val/var/parameter/enumerator/case_clause typed_pattern).
+fn scope_shadows(scope: Node, source: &str, name: &str) -> bool {
+    let mut c = scope.walk();
+    for child in scope.children(&mut c) {
+        let id_match = |n: Node| -> bool {
+            n.utf8_text(source.as_bytes()).ok() == Some(name)
+        };
+        match child.kind() {
+            "val_definition" | "var_definition" => {
+                if let Some(p) = child.child_by_field_name("pattern") {
+                    if p.kind() == "identifier" && id_match(p) {
+                        return true;
+                    }
+                }
+            }
+            "val_declaration" | "var_declaration" => {
+                if let Some(n) = child.child_by_field_name("name") {
+                    if id_match(n) {
+                        return true;
+                    }
+                }
+            }
+            "parameter" | "class_parameter" => {
+                if let Some(n) = child.child_by_field_name("name") {
+                    if id_match(n) {
+                        return true;
+                    }
+                }
+            }
+            "parameters" | "class_parameters" => {
+                if scope_shadows(child, source, name) {
+                    return true;
+                }
+            }
+            "enumerator" => {
+                let mut ec = child.walk();
+                if let Some(id) = child.children(&mut ec).find(|c| c.kind() == "identifier") {
+                    if id_match(id) {
+                        return true;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 fn node_to_range(n: Node) -> Range {
@@ -574,6 +708,9 @@ impl LanguageSupport for ScalaSupport {
             | "given_definition" => node.child_by_field_name("name")?,
             "val_definition" | "var_definition" => node.child_by_field_name("pattern")?,
             "val_declaration" | "var_declaration" => node.child_by_field_name("name")?,
+            "simple_enum_case" => node
+                .children(&mut node.walk())
+                .find(|n| n.kind() == "identifier")?,
             _ => node
                 .children(&mut node.walk())
                 .find(|n| n.kind() == "identifier" || n.kind() == "type_identifier")?,
@@ -601,6 +738,10 @@ impl LanguageSupport for ScalaSupport {
             "class_definition" | "object_definition" => Some(NodeKind::Class),
             "trait_definition" => Some(NodeKind::Interface),
             "enum_definition" => Some(NodeKind::Enum),
+            // Scala 3 enum cases — each `case X` behaves like a public
+            // static final field on the enum companion.  Treat as Field
+            // so symbol search can find them.
+            "simple_enum_case" => Some(NodeKind::Field),
             "function_definition" | "function_declaration" => Some(NodeKind::Function),
             "val_definition" | "var_definition" | "val_declaration" | "var_declaration"
             | "given_definition" => Some(NodeKind::Field),
@@ -610,6 +751,15 @@ impl LanguageSupport for ScalaSupport {
     }
 
     fn get_short_name(&self, node: &Node, source: &str) -> Option<String> {
+        // Scala 3 enum cases bind a name via a bare `identifier` child
+        // (`simple_enum_case` -> `identifier "Red"`), not via any of the
+        // field-name patterns covered by GET_VAL_SHORT_NAME_QUERY.
+        if node.kind() == "simple_enum_case" {
+            let id = node
+                .children(&mut node.walk())
+                .find(|n| n.kind() == "identifier")?;
+            return id.utf8_text(source.as_bytes()).ok().map(|s| s.to_string());
+        }
         match self.get_kind(node) {
             Some(NodeKind::Field) => {
                 ts_helper::get_one(node, source, &GET_VAL_SHORT_NAME_QUERY)
@@ -790,8 +940,8 @@ impl LanguageSupport for ScalaSupport {
         // Tree built so we can reuse get_literal_type / find_variable_type.
         let temp = self.parse_str(content)?;
         let leaf = innermost_named_node(node, position)?;
-        // Literal → primitive type.
-        if let Some(t) = literal_type_for(&leaf) {
+        // Literal → primitive type (suffix-aware).
+        if let Some(t) = literal_type_with_source(&leaf, content) {
             return Some(t);
         }
         // Identifier → walk up for context-specific resolution.
@@ -920,7 +1070,7 @@ impl LanguageSupport for ScalaSupport {
     ) -> Option<String> {
         let node = get_node_at_position(tree, content, position)?;
         let leaf = innermost_named_node(node, position)?;
-        literal_type_for(&leaf)
+        literal_type_with_source(&leaf, content)
     }
 
     fn get_method_receiver_and_params(
@@ -976,6 +1126,36 @@ impl LanguageSupport for ScalaSupport {
 
     fn reserved_keywords(&self) -> &'static HashSet<&'static str> {
         &SCALA_RESERVED
+    }
+
+    fn find_local_references(
+        &self,
+        tree: &Tree,
+        content: &str,
+        decl_position: &Position,
+    ) -> Option<Vec<Range>> {
+        // Locate the declaration identifier at `decl_position`, then walk
+        // its enclosing scope collecting every `identifier` occurrence whose
+        // text matches.  Identifiers inside a nested scope that re-declares
+        // the same name are excluded (lexical shadowing).
+        let raw = get_node_at_position(tree, content, decl_position)?;
+        let decl_id = if raw.is_named() && raw.kind() == "identifier" {
+            raw
+        } else {
+            innermost_named_node(raw, decl_position)?
+        };
+        if decl_id.kind() != "identifier" {
+            return None;
+        }
+        let name = decl_id.utf8_text(content.as_bytes()).ok()?;
+        let scope = enclosing_scope(decl_id)?;
+        let scope_id = scope.id();
+        let mut out = Vec::new();
+        collect_local_refs(scope, scope_id, content, name, &mut out);
+        if out.is_empty() {
+            return None;
+        }
+        Some(out)
     }
 
     // --- Phase 4: diagnostics data ---
