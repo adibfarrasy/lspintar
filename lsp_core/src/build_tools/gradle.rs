@@ -1,11 +1,11 @@
 use anyhow::{Context, Result};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashSet,
     path::{Path, PathBuf},
     process::Command,
 };
 
-use crate::build_tools::{BuildToolHandler, SubprojectClasspath};
+use crate::build_tools::{BuildToolHandler, SubprojectClasspath, pair_jars_with_sources};
 
 pub struct GradleHandler;
 
@@ -89,55 +89,12 @@ impl BuildToolHandler for GradleHandler {
             anyhow::bail!("Gradle failed: {}", String::from_utf8_lossy(&output.stderr));
         }
 
-        let (source_jars, bytecode_jars): (Vec<PathBuf>, Vec<PathBuf>) =
-            String::from_utf8(output.stdout)?
-                .lines()
-                .map(|line| PathBuf::from(line.trim()))
-                .collect::<HashSet<_>>()
-                .into_iter()
-                .filter(|p| p.exists())
-                .partition(|p| p.to_string_lossy().contains("-sources.jar"));
-
-        if bytecode_jars.is_empty() && source_jars.is_empty() {
-            return Ok(vec![]);
-        }
-
-        let source_map: HashMap<String, PathBuf> = source_jars
-            .into_iter()
-            .filter_map(|path| {
-                path.file_stem()
-                    .and_then(|s| s.to_str())
-                    .map(|name| name.trim_end_matches("-sources").to_string())
-                    .map(|base_name| (base_name, path))
-            })
+        let jars: HashSet<PathBuf> = String::from_utf8(output.stdout)?
+            .lines()
+            .map(|line| PathBuf::from(line.trim()))
             .collect();
 
-        let bytecode_map: HashMap<String, PathBuf> = bytecode_jars
-            .into_iter()
-            .filter_map(|path| {
-                path.file_stem()
-                    .and_then(|s| s.to_str())
-                    .map(|name| name.to_string())
-                    .map(|base_name| (base_name, path))
-            })
-            .collect();
-
-        let mut pairs: Vec<(Option<PathBuf>, Option<PathBuf>)> = source_map
-            .iter()
-            .map(|(base_name, src)| {
-                let byte = bytecode_map.get(base_name).cloned();
-                (byte, Some(src.clone()))
-            })
-            .collect();
-
-        // bytecode-only jars (no source)
-        for (base_name, byte) in &bytecode_map {
-            if !source_map.contains_key(base_name) {
-                pairs.push((Some(byte.clone()), None));
-            }
-        }
-
-        Ok(pairs)
+        Ok(pair_jars_with_sources(jars))
     }
 
     fn get_jdk_dependency_path(&self, root: &Path) -> Result<Option<PathBuf>> {
