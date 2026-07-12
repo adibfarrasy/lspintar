@@ -42,7 +42,12 @@ fn build_classpath(root: &Path, module: Option<&str>) -> Result<Vec<PathBuf>> {
 
     let output = cmd.output().context("Failed to execute mvn")?;
     if !output.status.success() {
-        anyhow::bail!("Maven failed: {}", String::from_utf8_lossy(&output.stderr));
+        // Maven writes its `[ERROR]` lines to stdout even in `-q` mode.
+        anyhow::bail!(
+            "Maven failed: {}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     // A module with no dependencies leaves the file empty.

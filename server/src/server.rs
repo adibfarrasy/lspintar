@@ -2590,20 +2590,25 @@ impl LanguageServer for Backend {
                 lsp_progress!(&token_ws, "Resolving dependencies...", 0.0);
                 lsp_info!("Resolving dependencies...");
 
+                // Dependency resolution can fail (network, auth, missing artifacts) without
+                // making the server useless: fall back to indexing just the local source so
+                // navigation/completion within the project still works. Leave `deps_failed`
+                // set so the manifest write below is skipped and the next startup retries
+                // dependency resolution instead of treating this partial index as final.
+                let mut deps_failed = false;
                 let external_deps = match build_tool.get_dependency_paths(&root) {
                     Ok(deps) => deps,
                     Err(e) => {
-                        let message = format!("Failed to get dependencies: {e}");
-                        lsp_error!("{}", message);
-                        panic!("{}", message);
+                        lsp_error!("Failed to get dependencies, indexing local source only: {e}");
+                        deps_failed = true;
+                        Vec::new()
                     }
                 };
                 let jdk_sources = match build_tool.get_jdk_dependency_path(&root) {
                     Ok(deps) => deps,
                     Err(e) => {
-                        let message = format!("Failed to get JDK sources: {e}");
-                        lsp_error!("{}", message);
-                        panic!("{}", message);
+                        lsp_error!("Failed to get JDK sources: {e}");
+                        None
                     }
                 };
                 let mut jars: Vec<(Option<PathBuf>, Option<PathBuf>)> = external_deps;
@@ -2700,14 +2705,18 @@ impl LanguageServer for Backend {
                     )
                     .await;
 
-                let manifest_path = root.join(MANIFEST_PATH_FRAGMENT);
-                match serde_json::to_string(&jars_for_manifest) {
-                    Ok(json) => {
-                        if let Err(e) = tokio::fs::write(&manifest_path, json).await {
-                            lsp_error!("Failed to write manifest file: {e}");
+                if deps_failed {
+                    lsp_error!("Skipping manifest write so dependency resolution is retried on next start");
+                } else {
+                    let manifest_path = root.join(MANIFEST_PATH_FRAGMENT);
+                    match serde_json::to_string(&jars_for_manifest) {
+                        Ok(json) => {
+                            if let Err(e) = tokio::fs::write(&manifest_path, json).await {
+                                lsp_error!("Failed to write manifest file: {e}");
+                            }
                         }
+                        Err(e) => lsp_error!("Failed to serialize manifest file: {e}"),
                     }
-                    Err(e) => lsp_error!("Failed to serialize manifest file: {e}"),
                 }
 
                 self.write_classpath_manifest(&root, &build_tool).await;
