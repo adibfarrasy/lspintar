@@ -384,3 +384,32 @@ async fn gtd_resolve_chain_external() {
     assert_eq!(location.range.start.line, 536);
     assert_eq!(location.range.start.character, 25);
 }
+
+#[tokio::test]
+async fn gtd_bare_inherited_method() {
+    let server = get_test_server("groovy-gradle-multi").await;
+
+    let params = GotoDefinitionParams {
+        text_document_position_params: TextDocumentPositionParams {
+            text_document: TextDocumentIdentifier {
+                uri: server.uri("api/src/main/groovy/com/example/api/UserController.groovy"),
+            },
+            position: Position::new(20, 10),
+        },
+        work_done_progress_params: WorkDoneProgressParams::default(),
+        partial_result_params: PartialResultParams::default(),
+    };
+
+    let result = server.backend.goto_definition(params).await.unwrap();
+    assert!(result.is_some());
+
+    let location = Location::new(
+        server.uri("core/src/main/groovy/com/example/core/BaseService.groovy"),
+        Range {
+            start: Position { line: 11, character: 9 },
+            end: Position { line: 11, character: 12 },
+        },
+    );
+
+    assert_eq!(result.unwrap(), GotoDefinitionResponse::from(location));
+}

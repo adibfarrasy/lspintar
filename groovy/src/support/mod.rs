@@ -170,6 +170,22 @@ impl GroovySupport {
                 }
             });
 
+        // Fallback: bare identifier not covered by any of the specific query
+        // contexts above (e.g. an unqualified method call `log(...)` with no
+        // `object` field, or a bare field reference used as an expression
+        // operand like `return someField`). Treat it as an unqualified usage
+        // so callers can resolve it against the enclosing scope/class.
+        if result.is_none() {
+            let point = Point::new(position.line as usize, position.character as usize);
+            if let Some(node) = root.descendant_for_point_range(point, point)
+                && node.kind() == "identifier"
+                && node_contains_position(&node, position)
+                && let Ok(text) = node.utf8_text(content.as_bytes())
+            {
+                result = Some((text.to_string(), None));
+            }
+        }
+
         result
     }
 

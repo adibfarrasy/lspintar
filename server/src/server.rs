@@ -1384,6 +1384,27 @@ impl Backend {
                         }]);
                     }
 
+                    // Not a local var/param/same-file field: it may still be a
+                    // member (own or inherited) referenced without an explicit
+                    // `this.` qualifier, e.g. a bare `log(...)` call or a bare
+                    // field read. Try resolving it as an implicit `this` member
+                    // before falling back to treating it as a type/import name.
+                    let member_symbols = self
+                        .resolve_type_member_chain(
+                            "this",
+                            &ident,
+                            lang,
+                            &tree,
+                            &content,
+                            imports.clone(),
+                            &position,
+                            package_name.clone(),
+                        )
+                        .await;
+                    if !member_symbols.is_empty() {
+                        return Ok(member_symbols);
+                    }
+
                     let fqn = self
                         .resolve_fqn(&ident, imports, package_name)
                         .await
