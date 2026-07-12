@@ -263,7 +263,8 @@ impl Indexer {
                     let implements = lang.get_implements(&node, content);
 
                     if let Some(superclass_short_name) = lang.get_extends(&node, content) {
-                        let superclass_fqn = naive_resolve_fqn(&superclass_short_name, imports);
+                        let superclass_fqn =
+                            naive_resolve_fqn(&superclass_short_name, imports, package_name);
                         symbol_super_mappings.push(SymbolSuperMapping {
                             id: None,
                             symbol_fqn: fqn.clone(),
@@ -273,7 +274,8 @@ impl Indexer {
                     }
 
                     for interface_short_name in implements {
-                        let interface_fqn = naive_resolve_fqn(&interface_short_name, imports);
+                        let interface_fqn =
+                            naive_resolve_fqn(&interface_short_name, imports, package_name);
                         symbol_super_mappings.push(SymbolSuperMapping {
                             id: None,
                             symbol_fqn: fqn.clone(),

@@ -413,3 +413,46 @@ async fn gtd_bare_inherited_method() {
 
     assert_eq!(result.unwrap(), GotoDefinitionResponse::from(location));
 }
+
+/// A superclass in the same package as its subclass needs no import in Java.
+/// The indexer must still resolve it to a project symbol so inherited-member
+/// goto-def and the `method_not_found` diagnostic work correctly.
+#[tokio::test]
+async fn gtd_same_package_no_import_super() {
+    let server = get_test_server("java-maven-multi").await;
+    let uri = server.uri("app/src/main/java/com/example/app/Application.java");
+
+    let params = GotoDefinitionParams {
+        text_document_position_params: TextDocumentPositionParams {
+            text_document: TextDocumentIdentifier { uri: uri.clone() },
+            position: Position::new(10, 35),
+        },
+        work_done_progress_params: WorkDoneProgressParams::default(),
+        partial_result_params: PartialResultParams::default(),
+    };
+
+    let result = server.backend.goto_definition(params).await.unwrap();
+    assert!(result.is_some());
+
+    let location = Location::new(
+        server.uri("core/src/main/java/com/example/core/Base.java"),
+        Range {
+            start: Position { line: 3, character: 18 },
+            end: Position { line: 3, character: 23 },
+        },
+    );
+    assert_eq!(result.unwrap(), GotoDefinitionResponse::from(location));
+
+    let diags = server
+        .backend
+        .compute_diagnostics(&uri)
+        .await
+        .expect("compute_diagnostics returned None");
+    assert!(
+        !diags.iter().any(|d| d.code
+            == Some(tower_lsp::lsp_types::NumberOrString::String(
+                "method_not_found".to_string()
+            ))),
+        "unexpected method_not_found diagnostic: {diags:?}"
+    );
+}

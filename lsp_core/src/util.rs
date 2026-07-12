@@ -14,13 +14,23 @@ pub fn capitalize(s: &str) -> String {
     }
 }
 
-// Only find direct import match
-pub fn naive_resolve_fqn(name: &str, imports: &[String]) -> Option<String> {
+/// Resolves a short type name to an FQN using only local, index-time-available
+/// information: an explicit import, or same-package (no import needed in Java).
+///
+/// ponytail: wildcard imports aren't resolved here — verifying which class in a
+/// wildcard-imported package matches needs the symbol DB, which isn't populated
+/// yet during indexing. Falls back to None in that case (caller may re-resolve
+/// against the DB later, e.g. `Backend::resolve_fqn`).
+pub fn naive_resolve_fqn(name: &str, imports: &[String], package_name: &str) -> Option<String> {
     if let Some(import) = imports
         .iter()
         .find(|i| i.split('.').next_back() == Some(name))
     {
         return Some(import.clone());
+    }
+
+    if !package_name.is_empty() {
+        return Some(format!("{package_name}.{name}"));
     }
 
     None
@@ -317,19 +327,28 @@ mod tests {
     fn naive_resolve_fqn_matches_last_segment() {
         let imports = vec!["com.example.Foo".to_string(), "java.util.List".to_string()];
         assert_eq!(
-            naive_resolve_fqn("Foo", &imports),
+            naive_resolve_fqn("Foo", &imports, "com.other"),
             Some("com.example.Foo".to_string())
         );
         assert_eq!(
-            naive_resolve_fqn("List", &imports),
+            naive_resolve_fqn("List", &imports, "com.other"),
             Some("java.util.List".to_string())
         );
     }
 
     #[test]
-    fn naive_resolve_fqn_returns_none_when_missing() {
+    fn naive_resolve_fqn_falls_back_to_same_package_when_missing() {
         let imports = vec!["com.example.Foo".to_string()];
-        assert!(naive_resolve_fqn("Bar", &imports).is_none());
+        assert_eq!(
+            naive_resolve_fqn("Bar", &imports, "com.example"),
+            Some("com.example.Bar".to_string())
+        );
+    }
+
+    #[test]
+    fn naive_resolve_fqn_returns_none_without_import_or_package() {
+        let imports = vec!["com.example.Foo".to_string()];
+        assert!(naive_resolve_fqn("Bar", &imports, "").is_none());
     }
 
     #[test]
@@ -338,7 +357,7 @@ mod tests {
         // Pinning this so any future "all matches" change is intentional.
         let imports = vec!["com.a.Foo".to_string(), "com.b.Foo".to_string()];
         assert_eq!(
-            naive_resolve_fqn("Foo", &imports),
+            naive_resolve_fqn("Foo", &imports, "com.other"),
             Some("com.a.Foo".to_string())
         );
     }
