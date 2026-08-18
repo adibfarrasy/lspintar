@@ -4,11 +4,14 @@ pub mod no_build_tool;
 
 use std::{
     collections::HashMap,
+    io::Read,
     path::{Path, PathBuf},
+    process::{Command, Output, Stdio},
     sync::Arc,
+    time::{Duration, Instant},
 };
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::build_tools::{gradle::GradleHandler, maven::MavenHandler, no_build_tool::NoBuildTool};
@@ -31,6 +34,52 @@ impl SubprojectClasspath {
     pub fn contains_file(&self, file: &Path) -> bool {
         self.source_dirs.iter().any(|d| file.starts_with(d))
     }
+}
+
+/// Dead network mirrors, VPN-gated Artifactory hosts, or an interactive prompt
+/// with no TTY attached can make `mvn`/`gradle` hang forever. Bound every
+/// build-tool invocation so indexing falls back to local-source-only instead.
+pub const BUILD_TOOL_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Runs `cmd`, killing it and erroring out if it hasn't finished within `timeout`.
+pub fn run_with_timeout(cmd: &mut Command, timeout: Duration) -> Result<Output> {
+    let mut child = cmd
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("Failed to spawn command")?;
+
+    let mut stdout = child.stdout.take().expect("stdout was piped");
+    let mut stderr = child.stderr.take().expect("stderr was piped");
+    let stdout_thread = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stdout.read_to_end(&mut buf);
+        buf
+    });
+    let stderr_thread = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stderr.read_to_end(&mut buf);
+        buf
+    });
+
+    let start = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if start.elapsed() > timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            anyhow::bail!("Command timed out after {timeout:?}");
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+
+    Ok(Output {
+        status,
+        stdout: stdout_thread.join().unwrap_or_default(),
+        stderr: stderr_thread.join().unwrap_or_default(),
+    })
 }
 
 pub fn get_build_tool(root: &Path) -> Arc<dyn BuildToolHandler + Send + Sync> {
@@ -95,4 +144,25 @@ pub trait BuildToolHandler: Send + Sync {
     /// Returns the per-sub-project source-root → classpath JAR mapping.
     /// Returns an empty vec for single-project setups or when not applicable.
     fn get_subproject_classpath(&self, root: &Path) -> Result<Vec<SubprojectClasspath>>;
+}
+
+#[cfg(test)]
+mod timeout_tests {
+    use super::*;
+
+    #[test]
+    fn kills_command_that_exceeds_timeout() {
+        let mut cmd = Command::new("sleep");
+        cmd.arg("5");
+        let err = run_with_timeout(&mut cmd, Duration::from_millis(200)).unwrap_err();
+        assert!(err.to_string().contains("timed out"));
+    }
+
+    #[test]
+    fn returns_output_of_fast_command() {
+        let mut cmd = Command::new("echo");
+        cmd.arg("hi");
+        let output = run_with_timeout(&mut cmd, Duration::from_secs(5)).unwrap();
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "hi");
+    }
 }

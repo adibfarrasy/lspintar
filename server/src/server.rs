@@ -11,7 +11,6 @@ use lsp_core::{
     languages::Language,
     lsp_error, lsp_info, lsp_logging, lsp_progress, lsp_progress_begin, lsp_progress_end,
     util::{capitalize, extract_prefix, extract_receiver, get_import_text_edit},
-    vcs::{VcsHandler, get_vcs_handler},
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -35,7 +34,7 @@ use crate::{
     Indexer, Repository,
     constants::{
         APP_VERSION, CLASSPATH_MANIFEST_PATH_FRAGMENT, DB_PATH_FRAGMENT, FILE_CACHE_TTL_SECS,
-        INDEX_PATH_FRAGMENT, MANIFEST_PATH_FRAGMENT, VCS_REVISION_PATH_FRAGMENT,
+        FILE_HASHES_PATH_FRAGMENT, INDEX_PATH_FRAGMENT, MANIFEST_PATH_FRAGMENT,
     },
     enums::ResolvedSymbol,
     generic_resolution::{build_type_bindings, parse_type_ref, substitute_type_vars},
@@ -53,8 +52,10 @@ pub struct Backend {
     indexer: Arc<RwLock<Option<Indexer>>>,
     workspace_root: Arc<RwLock<Option<PathBuf>>>,
     pub(crate) languages: HashMap<String, Arc<dyn LanguageSupport + Send + Sync>>,
-    vcs_handler: Arc<RwLock<Option<Arc<dyn VcsHandler + Send + Sync>>>>,
-    last_known_revision: Arc<RwLock<Option<String>>>,
+    // Content hash per indexed source file, used to detect real changes
+    // independent of mtime/VCS revision (branch switches that leave a
+    // file's bytes untouched shouldn't trigger a reindex of it).
+    file_hashes: Arc<RwLock<HashMap<PathBuf, String>>>,
     build_tool: Arc<RwLock<Option<Arc<dyn BuildToolHandler + Send + Sync>>>>,
 
     // Optimizations
@@ -251,8 +252,7 @@ impl Backend {
             repo: OnceCell::new(),
             workspace_root: Arc::new(RwLock::new(None)),
             languages,
-            vcs_handler: Arc::new(RwLock::new(None)),
-            last_known_revision: Arc::new(RwLock::new(None)),
+            file_hashes: Arc::new(RwLock::new(HashMap::new())),
             build_tool: Arc::new(RwLock::new(None)),
             documents: DashMap::new(),
             debounce_tx,
@@ -1587,6 +1587,25 @@ impl Backend {
         }
     }
 
+    async fn load_file_hashes(&self, root: &Path) -> HashMap<PathBuf, String> {
+        match tokio::fs::read(root.join(FILE_HASHES_PATH_FRAGMENT)).await {
+            Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_default(),
+            Err(_) => HashMap::new(),
+        }
+    }
+
+    async fn save_file_hashes(&self, root: &Path, hashes: HashMap<PathBuf, String>) {
+        match serde_json::to_string(&hashes) {
+            Ok(json) => {
+                if let Err(e) = tokio::fs::write(root.join(FILE_HASHES_PATH_FRAGMENT), json).await {
+                    lsp_error!("Failed to write {FILE_HASHES_PATH_FRAGMENT}: {e}");
+                }
+            }
+            Err(e) => lsp_error!("Failed to serialize {FILE_HASHES_PATH_FRAGMENT}: {e}"),
+        }
+        *self.file_hashes.write().await = hashes;
+    }
+
     #[allow(unused)]
     fn needs_full_reindex(&self, root: &Path) -> bool {
         #[cfg(feature = "integration-test")]
@@ -2571,15 +2590,14 @@ impl LanguageServer for Backend {
             };
 
             let indexer_lock = Arc::clone(&self.indexer);
-            let vcs_handler_lock = Arc::clone(&self.vcs_handler);
             let workspace_root_lock = Arc::clone(&self.workspace_root);
             let languages: Vec<_> = self
                 .languages
                 .iter()
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect();
+            let supported_exts: HashSet<&str> = languages.iter().map(|(k, _)| k.as_str()).collect();
 
-            let vcs = get_vcs_handler(&root);
             let build_tool = get_build_tool(&root);
             *self.build_tool.write().await = Some(Arc::clone(&build_tool));
 
@@ -2747,14 +2765,10 @@ impl LanguageServer for Backend {
                     indexing_start.elapsed().as_secs_f64()
                 );
 
-                // Record the current VCS revision so the next IncrementalOpen knows
-                // which files changed since this full reindex.
-                if let Ok(rev) = vcs.get_current_revision()
-                    && let Err(e) =
-                        tokio::fs::write(root.join(VCS_REVISION_PATH_FRAGMENT), &rev).await
-                    {
-                        lsp_error!("Failed to write {VCS_REVISION_PATH_FRAGMENT}: {e}");
-                    }
+                // Hash every indexed source file so the next open can tell what
+                // actually changed by content, regardless of VCS state or branch.
+                let hashes = crate::indexer::scan_workspace_hashes(&root, &supported_exts).await;
+                self.save_file_hashes(&root, hashes).await;
             } else {
                 // IncrementalOpen: load the persisted classpath manifest into memory.
                 let classpath_path = root.join(CLASSPATH_MANIFEST_PATH_FRAGMENT);
@@ -2763,65 +2777,45 @@ impl LanguageServer for Backend {
                         *self.subproject_classpath.write().await = entries;
                     }
 
-                // Re-index only source files that changed since the last stored VCS revision.
-                let stored_rev = tokio::fs::read_to_string(root.join(VCS_REVISION_PATH_FRAGMENT))
-                    .await
-                    .ok()
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty());
+                // Re-index only source files whose content hash changed since the
+                // last stored snapshot. Content-addressed, so switching back to a
+                // branch we've already indexed reuses the existing index instead
+                // of re-diffing against a single revision pointer.
+                let stored_hashes = self.load_file_hashes(&root).await;
+                let current_hashes = crate::indexer::scan_workspace_hashes(&root, &supported_exts).await;
 
-                if let Some(stored) = stored_rev
-                    && let Ok(current) = vcs.get_current_revision()
-                        && stored != current {
-                            match vcs.get_changed_files(&stored, &current, &root) {
-                                Ok(changed) => {
-                                    let supported_exts: std::collections::HashSet<&str> =
-                                        languages.iter().map(|(k, _)| k.as_str()).collect();
-                                    let source_changes: Vec<PathBuf> = changed
-                                        .into_iter()
-                                        .filter(|p| {
-                                            p.extension()
-                                                .and_then(|e| e.to_str())
-                                                .map(|e| supported_exts.contains(e))
-                                                .unwrap_or(false)
-                                        })
-                                        .collect();
+                let changed: Vec<PathBuf> = current_hashes
+                    .iter()
+                    .filter(|(path, hash)| stored_hashes.get(*path) != Some(*hash))
+                    .map(|(path, _)| path.clone())
+                    .collect();
+                let deleted: Vec<PathBuf> = stored_hashes
+                    .keys()
+                    .filter(|path| !current_hashes.contains_key(*path))
+                    .cloned()
+                    .collect();
 
-                                    if !source_changes.is_empty() {
-                                        lsp_info!(
-                                            "IncrementalOpen: re-indexing {} changed file(s) since {}",
-                                            source_changes.len(),
-                                            &stored[..stored.len().min(8)]
-                                        );
-                                        for path in source_changes {
-                                            let _ = self.debounce_tx.send(path).await;
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    lsp_error!("Failed to get changed files for incremental open: {e}");
-                                }
-                            }
+                for path in &deleted {
+                    if let Err(e) = repo.delete_symbols_for_file(&path.to_string_lossy()).await {
+                        lsp_error!("Failed to remove symbols for {}: {e}", path.display());
+                    }
+                }
 
-                            if let Err(e) = tokio::fs::write(
-                                root.join(VCS_REVISION_PATH_FRAGMENT),
-                                &current,
-                            )
-                            .await
-                            {
-                                lsp_error!("Failed to update {VCS_REVISION_PATH_FRAGMENT}: {e}");
-                            }
-                        }
+                if !changed.is_empty() {
+                    lsp_info!(
+                        "IncrementalOpen: re-indexing {} changed file(s)",
+                        changed.len()
+                    );
+                    for path in changed {
+                        let _ = self.debounce_tx.send(path).await;
+                    }
+                }
+
+                self.save_file_hashes(&root, current_hashes).await;
             }
 
             *indexer_lock.write().await = Some(indexer);
-            *vcs_handler_lock.write().await = Some(vcs);
             *workspace_root_lock.write().await = Some(root.clone());
-
-            if let Some(vcs) = self.vcs_handler.read().await.as_ref()
-                && let Ok(rev) = vcs.get_current_revision() {
-                    *self.last_known_revision.write().await = Some(rev);
-                }
 
             if let Err(e) = tokio::fs::write(root.join(INDEX_PATH_FRAGMENT), APP_VERSION).await {
                 lsp_error!("Failed to write {INDEX_PATH_FRAGMENT}: {e}");
@@ -3405,10 +3399,8 @@ impl LanguageServer for Backend {
             return;
         };
 
-        let vcs_guard = self.vcs_handler.read().await;
-        let revision_file = vcs_guard
-            .as_ref()
-            .and_then(|vcs| vcs.get_revision_file(&root));
+        let mut hashes = self.file_hashes.read().await.clone();
+        let mut hashes_changed = false;
 
         for change in params.changes {
             let Ok(path) = change.uri.to_file_path() else {
@@ -3417,44 +3409,45 @@ impl LanguageServer for Backend {
 
             if change.typ == FileChangeType::DELETED {
                 self.documents.remove(&change.uri.to_string());
+                hashes_changed |= hashes.remove(&path).is_some();
                 let Some(repo) = self.repo.get() else {
                     continue;
                 };
                 if let Err(e) = repo.delete_symbols_for_file(&path.to_string_lossy()).await {
                     lsp_error!("Failed to remove symbols for {}: {e}", path.display());
                 }
-            } else if revision_file.as_deref() == Some(&path) {
-                let Some(vcs) = vcs_guard.as_ref() else {
-                    continue;
-                };
-                let Ok(new_rev) = vcs.get_current_revision() else {
-                    continue;
-                };
-                let old_rev = self.last_known_revision.read().await.clone();
-
-                if let Some(old) = old_rev
-                    && old != new_rev
-                        && let Ok(changed) = vcs.get_changed_files(&old, &new_rev, &root) {
-                            for p in changed {
-                                let _ = self.debounce_tx.send(p).await;
-                            }
-                        }
-
-                *self.last_known_revision.write().await = Some(new_rev);
-            } else {
-                let build_tool_guard = self.build_tool.read().await;
-                if let Some(build_tool) = build_tool_guard.as_ref()
-                    && build_tool.is_build_file(&path) {
-                        drop(build_tool_guard);
-                        self.handle_build_file_changed(&root).await;
-                        continue;
-                    }
-
-                // Skip files currently open in the editor — did_save already re-indexes them.
-                if !self.documents.contains_key(&change.uri.to_string()) {
-                    let _ = self.debounce_tx.send(path).await;
-                }
+                continue;
             }
+
+            let build_tool_guard = self.build_tool.read().await;
+            if let Some(build_tool) = build_tool_guard.as_ref()
+                && build_tool.is_build_file(&path) {
+                    drop(build_tool_guard);
+                    self.handle_build_file_changed(&root).await;
+                    continue;
+                }
+            drop(build_tool_guard);
+
+            // Skip files currently open in the editor — did_save already re-indexes them.
+            if self.documents.contains_key(&change.uri.to_string()) {
+                continue;
+            }
+
+            // Compare content hashes, not mtimes: a branch switch or touch that
+            // leaves a file's bytes unchanged shouldn't trigger a reindex of it.
+            let Ok(new_hash) = lsp_core::file_hash::hash_file(&path) else {
+                continue;
+            };
+            if hashes.get(&path) == Some(&new_hash) {
+                continue;
+            }
+            hashes.insert(path.clone(), new_hash);
+            hashes_changed = true;
+            let _ = self.debounce_tx.send(path).await;
+        }
+
+        if hashes_changed {
+            self.save_file_hashes(&root, hashes).await;
         }
     }
 }

@@ -5,7 +5,10 @@ use std::{
     process::Command,
 };
 
-use crate::build_tools::{BuildToolHandler, SubprojectClasspath, pair_jars_with_sources};
+use crate::build_tools::{
+    BUILD_TOOL_TIMEOUT, BuildToolHandler, SubprojectClasspath, pair_jars_with_sources,
+    run_with_timeout,
+};
 
 pub struct GradleHandler;
 
@@ -73,17 +76,17 @@ impl BuildToolHandler for GradleHandler {
         } else {
             "gradle"
         };
-        let output = Command::new(gradle_cmd)
-            .current_dir(root)
-            .args([
+        let output = run_with_timeout(
+            Command::new(gradle_cmd).current_dir(root).args([
                 "-I",
                 temp_init.to_str().unwrap(),
                 "lspClasspath",
                 "lspSources",
                 "-q",
-            ])
-            .output()
-            .context("Failed to execute gradle")?;
+            ]),
+            BUILD_TOOL_TIMEOUT,
+        )
+        .context("Failed to execute gradle")?;
 
         if !output.status.success() {
             anyhow::bail!("Gradle failed: {}", String::from_utf8_lossy(&output.stderr));
@@ -139,11 +142,13 @@ impl BuildToolHandler for GradleHandler {
             "gradle"
         };
 
-        let output = Command::new(gradle_cmd)
-            .current_dir(root)
-            .args(["-I", temp_init.to_str().unwrap(), "lspJdkSources", "-q"])
-            .output()
-            .context("Failed to execute gradle")?;
+        let output = run_with_timeout(
+            Command::new(gradle_cmd)
+                .current_dir(root)
+                .args(["-I", temp_init.to_str().unwrap(), "lspJdkSources", "-q"]),
+            BUILD_TOOL_TIMEOUT,
+        )
+        .context("Failed to execute gradle")?;
 
         if !output.status.success() {
             anyhow::bail!("Gradle failed: {}", String::from_utf8_lossy(&output.stderr));
@@ -213,16 +218,16 @@ impl BuildToolHandler for GradleHandler {
             "gradle"
         };
 
-        let output = Command::new(gradle_cmd)
-            .current_dir(root)
-            .args([
+        let output = run_with_timeout(
+            Command::new(gradle_cmd).current_dir(root).args([
                 "-I",
                 temp_init.to_str().unwrap(),
                 "lspSubprojectClasspath",
                 "-q",
-            ])
-            .output()
-            .context("Failed to execute gradle")?;
+            ]),
+            BUILD_TOOL_TIMEOUT,
+        )
+        .context("Failed to execute gradle")?;
 
         if !output.status.success() {
             anyhow::bail!("Gradle failed: {}", String::from_utf8_lossy(&output.stderr));

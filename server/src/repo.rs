@@ -2,15 +2,6 @@ use sqlx::{SqlitePool, sqlite::SqlitePoolOptions};
 
 use crate::models::{external_symbol::ExternalSymbol, symbol::Symbol};
 
-fn capitalize_prefix(prefix: &str) -> String {
-    let lower = prefix.to_lowercase();
-    let mut chars = lower.chars();
-    match chars.next() {
-        None => String::new(),
-        Some(first) => first.to_uppercase().to_string() + chars.as_str(),
-    }
-}
-
 #[derive(Debug)]
 pub struct Repository {
     pool: SqlitePool,
@@ -36,8 +27,7 @@ impl Repository {
         sqlx::query("PRAGMA journal_mode=WAL").execute(&pool).await?;
         sqlx::query("PRAGMA synchronous=NORMAL").execute(&pool).await?;
         sqlx::query("PRAGMA busy_timeout=5000").execute(&pool).await?;
-        // Enables index use for LIKE prefix queries. Queries use lower(prefix) for FQNs
-        // and capitalize(prefix) for short names to preserve case-insensitive matching.
+        // Enables index use for LIKE prefix queries and makes matching case-sensitive.
         sqlx::query("PRAGMA case_sensitive_like=ON").execute(&pool).await?;
 
         sqlx::migrate!("../migrations").run(&pool).await?;
@@ -130,13 +120,12 @@ impl Repository {
     #[tracing::instrument(skip(self))]
     pub async fn find_symbols_by_prefix(&self, prefix: &str) -> Result<Vec<Symbol>, sqlx::Error> {
         tracing::info!("find_symbols_by_prefix");
-        let fqn_pat = format!("{}%", prefix.to_lowercase());
-        let short_pat = format!("{}%", capitalize_prefix(prefix));
+        let pat = format!("{}%", prefix);
         // See find_external_symbols_by_prefix for the rationale on ORDER BY.
         let mut by_fqn = sqlx::query_as::<_, Symbol>(
             "SELECT * FROM symbols WHERE fully_qualified_name LIKE ? AND symbol_type NOT IN ('Function', 'Field') ORDER BY length(short_name), short_name LIMIT 100",
         )
-        .bind(&fqn_pat)
+        .bind(&pat)
         .fetch_all(&self.pool)
         .await?;
 
@@ -146,7 +135,7 @@ impl Repository {
         let by_short = sqlx::query_as::<_, Symbol>(
             "SELECT * FROM symbols WHERE short_name LIKE ? AND symbol_type NOT IN ('Function', 'Field') ORDER BY length(short_name), short_name LIMIT 100",
         )
-        .bind(&short_pat)
+        .bind(&pat)
         .fetch_all(&self.pool)
         .await?;
 
@@ -380,8 +369,7 @@ impl Repository {
         prefix: &str,
     ) -> Result<Vec<ExternalSymbol>, sqlx::Error> {
         tracing::info!("find_external_symbols_by_prefix");
-        let fqn_pat = format!("{}%", prefix.to_lowercase());
-        let short_pat = format!("{}%", capitalize_prefix(prefix));
+        let pat = format!("{}%", prefix);
         // ORDER BY length(short_name) prefers exact-prefix hits over longer
         // variants when LIMIT truncates the result set.  Without this,
         // `StringUtils` could be displaced by `StringUtilsAbbreviationTest`
@@ -389,7 +377,7 @@ impl Repository {
         let mut by_fqn = sqlx::query_as::<_, ExternalSymbol>(
             "SELECT * FROM external_symbols WHERE fully_qualified_name LIKE ? AND symbol_type NOT IN ('Function', 'Field') ORDER BY length(short_name), short_name LIMIT 100",
         )
-        .bind(&fqn_pat)
+        .bind(&pat)
         .fetch_all(&self.pool)
         .await?;
 
@@ -399,7 +387,7 @@ impl Repository {
         let by_short = sqlx::query_as::<_, ExternalSymbol>(
             "SELECT * FROM external_symbols WHERE short_name LIKE ? AND symbol_type NOT IN ('Function', 'Field') ORDER BY length(short_name), short_name LIMIT 100",
         )
-        .bind(&short_pat)
+        .bind(&pat)
         .fetch_all(&self.pool)
         .await?;
 
@@ -410,20 +398,52 @@ impl Repository {
 
     /// Like `find_external_symbols_by_prefix` but restricted to symbols from the given JARs.
     /// Falls back to the unfiltered query when `jar_paths` is empty.
+    ///
+    /// Filters by jar_path in SQL rather than fetching everything and filtering
+    /// in Rust: with a post-filter, the LIMIT 100 in `find_external_symbols_by_prefix`
+    /// truncates the candidate set *before* the jar filter runs, so results from the
+    /// project's actual classpath can get crowded out by matches from unrelated JARs.
     #[tracing::instrument(skip(self, jar_paths))]
     pub async fn find_external_symbols_by_prefix_and_jars(
         &self,
         prefix: &str,
         jar_paths: &[String],
     ) -> Result<Vec<ExternalSymbol>, sqlx::Error> {
-        let all = self.find_external_symbols_by_prefix(prefix).await?;
         if jar_paths.is_empty() {
-            return Ok(all);
+            return self.find_external_symbols_by_prefix(prefix).await;
         }
-        Ok(all
-            .into_iter()
-            .filter(|s| jar_paths.contains(&s.jar_path))
-            .collect())
+
+        let pat = format!("{}%", prefix);
+
+        let mut fqn_qb = sqlx::QueryBuilder::new(
+            "SELECT * FROM external_symbols WHERE fully_qualified_name LIKE ",
+        );
+        fqn_qb.push_bind(&pat);
+        fqn_qb.push(" AND symbol_type NOT IN ('Function', 'Field') AND jar_path IN (");
+        let mut sep = fqn_qb.separated(", ");
+        for jar in jar_paths {
+            sep.push_bind(jar);
+        }
+        fqn_qb.push(") ORDER BY length(short_name), short_name LIMIT 100");
+        let mut by_fqn = fqn_qb.build_query_as::<ExternalSymbol>().fetch_all(&self.pool).await?;
+
+        let seen: std::collections::HashSet<String> =
+            by_fqn.iter().map(|s| s.fully_qualified_name.clone()).collect();
+
+        let mut short_qb =
+            sqlx::QueryBuilder::new("SELECT * FROM external_symbols WHERE short_name LIKE ");
+        short_qb.push_bind(&pat);
+        short_qb.push(" AND symbol_type NOT IN ('Function', 'Field') AND jar_path IN (");
+        let mut sep = short_qb.separated(", ");
+        for jar in jar_paths {
+            sep.push_bind(jar);
+        }
+        short_qb.push(") ORDER BY length(short_name), short_name LIMIT 100");
+        let by_short = short_qb.build_query_as::<ExternalSymbol>().fetch_all(&self.pool).await?;
+
+        by_fqn.extend(by_short.into_iter().filter(|s| !seen.contains(&s.fully_qualified_name)));
+        by_fqn.truncate(200);
+        Ok(by_fqn)
     }
 
     pub async fn delete_symbols_for_file(&self, file_path: &str) -> Result<(), sqlx::Error> {

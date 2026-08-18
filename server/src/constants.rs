@@ -25,7 +25,7 @@ pub const MANIFEST_PATH_FRAGMENT: &str = ".lspintar/deps.manifest";
 pub const CLASSPATH_MANIFEST_PATH_FRAGMENT: &str = ".lspintar/classpath.manifest";
 pub const INDEX_PATH_FRAGMENT: &str = ".lspintar/index.version";
 pub const DB_PATH_FRAGMENT: &str = ".lspintar/index.db";
-pub const VCS_REVISION_PATH_FRAGMENT: &str = ".lspintar/vcs.revision";
+pub const FILE_HASHES_PATH_FRAGMENT: &str = ".lspintar/file_hashes.json";
 
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 

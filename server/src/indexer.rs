@@ -7,7 +7,7 @@ use futures::{StreamExt, stream};
 use java::JAVA_IMPLICIT_IMPORTS;
 use lsp_core::{language_support::LanguageSupport, node_kind::NodeKind, util::naive_resolve_fqn};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs::File,
     io::Read,
     panic,
@@ -901,6 +901,45 @@ fn field_access_to_modifiers(flags: FieldAccessFlags) -> Vec<String> {
         mods.push("final".to_string());
     }
     mods
+}
+
+/// Hashes every supported source file under `root`, so the caller can diff
+/// against a previously persisted map to find what actually changed —
+/// content-based, so branch switches that don't touch a file's bytes don't
+/// trigger a reindex of it.
+pub async fn scan_workspace_hashes(
+    root: &Path,
+    supported_exts: &HashSet<&str>,
+) -> HashMap<PathBuf, String> {
+    let files: Vec<PathBuf> = WalkDir::new(root)
+        .follow_links(true)
+        .into_iter()
+        .filter_entry(|e| !is_excluded(e))
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        .map(|e| e.into_path())
+        .filter(|p| {
+            p.extension()
+                .and_then(|e| e.to_str())
+                .map(|e| supported_exts.contains(e))
+                .unwrap_or(false)
+        })
+        .collect();
+
+    let hashes: Vec<Option<(PathBuf, String)>> = stream::iter(files)
+        .map(|path| async move {
+            tokio::task::spawn_blocking(move || {
+                lsp_core::file_hash::hash_file(&path).ok().map(|h| (path, h))
+            })
+            .await
+            .ok()
+            .flatten()
+        })
+        .buffer_unordered(num_cpus::get())
+        .collect()
+        .await;
+
+    hashes.into_iter().flatten().collect()
 }
 
 fn is_excluded(entry: &walkdir::DirEntry) -> bool {

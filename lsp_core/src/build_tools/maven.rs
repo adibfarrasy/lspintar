@@ -5,7 +5,10 @@ use std::{
     process::Command,
 };
 
-use crate::build_tools::{BuildToolHandler, SubprojectClasspath, pair_jars_with_sources};
+use crate::build_tools::{
+    BUILD_TOOL_TIMEOUT, BuildToolHandler, SubprojectClasspath, pair_jars_with_sources,
+    run_with_timeout,
+};
 
 pub struct MavenHandler;
 
@@ -40,7 +43,7 @@ fn build_classpath(root: &Path, module: Option<&str>) -> Result<Vec<PathBuf>> {
         }
     }
 
-    let output = cmd.output().context("Failed to execute mvn")?;
+    let output = run_with_timeout(&mut cmd, BUILD_TOOL_TIMEOUT).context("Failed to execute mvn")?;
     if !output.status.success() {
         // Maven writes its `[ERROR]` lines to stdout even in `-q` mode.
         anyhow::bail!(
@@ -76,10 +79,12 @@ impl BuildToolHandler for MavenHandler {
         // Pulls *-sources.jar into the local repo, next to each dependency jar.
         // Best-effort: dependencies without published sources make this fail,
         // and the bytecode jars are still worth returning.
-        let _ = Command::new(maven_cmd(root))
-            .current_dir(root)
-            .args(["-q", "dependency:sources"])
-            .output();
+        let _ = run_with_timeout(
+            Command::new(maven_cmd(root))
+                .current_dir(root)
+                .args(["-q", "dependency:sources"]),
+            BUILD_TOOL_TIMEOUT,
+        );
 
         let jars = build_classpath(root, None)?;
         let sources = jars.iter().filter_map(|jar| sibling_source_jar(jar));
@@ -92,11 +97,11 @@ impl BuildToolHandler for MavenHandler {
         let java_home = match std::env::var_os("JAVA_HOME") {
             Some(home) => PathBuf::from(home),
             None => {
-                let output = Command::new(maven_cmd(root))
-                    .current_dir(root)
-                    .arg("-version")
-                    .output()
-                    .context("Failed to execute mvn")?;
+                let output = run_with_timeout(
+                    Command::new(maven_cmd(root)).current_dir(root).arg("-version"),
+                    BUILD_TOOL_TIMEOUT,
+                )
+                .context("Failed to execute mvn")?;
 
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 match stdout
